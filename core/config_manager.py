@@ -29,3 +29,37 @@ class ConfigManager:
 
     def get_protein_part(self, protein_name: str) -> str:
         return self.get("Protein", protein_name.lower(), "")
+
+    def get_pipeline_by_protein(self, protein_name: str) -> Path:
+        protein_part = self.get_protein_part(protein_name)
+
+        if protein_part == "tail":
+            pipeline = self.get("CellProfiler", "tail_pipeline", "")
+        elif protein_part == "pna":
+            pipeline = self.get("CellProfiler", "pna_pipeline", "")
+        else:
+            pipeline = self.get("CellProfiler", "head_pipeline", "")
+
+        return Path(pipeline)
+
+    def get_powershell_exe(self) -> str:
+        return self.get("CellProfiler", "powershell_exe", "powershell.exe")
+
+    def get_source_project_dir(self) -> Path:
+        return Path(self.get("CellProfiler", "source_project_dir", r"F:\MvImageID"))
+
+    def get_venv_activate(self) -> Path:
+        return Path(self.get("CellProfiler", "venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1"))
+
+    def get_module_name(self) -> str:
+        return self.get("CellProfiler", "module_name", "MvImageID")
+
+    def get_plugins_directory(self) -> Path:
+        return Path(self.get("CellProfiler", "plugins_directory", ""))
+
+    def get_log_file(self) -> Path:
+        return Path(self.get("CellProfiler", "log_file", r"F:\MvImageID\run.log"))
+
+    def get_report_dir(self) -> Path:
+        report_dir = self.get("Workspace", "report_dir", "reports")
+        return Path(report_dir)
