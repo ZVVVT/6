@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -162,7 +160,10 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"当前选择病例：{case_no} - {patient_name}")
 
-        # 下一阶段会把这里替换成正式蛋白分析页面
+        old_widget = self.stack.widget(1)
+        self.stack.removeWidget(old_widget)
+        old_widget.deleteLater()
+
         self.page_analysis = self.create_placeholder_page(
             title="蛋白分析",
             message=(
@@ -172,12 +173,5 @@ class MainWindow(QMainWindow):
             )
         )
 
-        analysis_index = self.stack.indexOf(self.page_analysis)
-        if analysis_index == -1:
-            # 原来的蛋白分析页在 index=1，替换掉
-            old_widget = self.stack.widget(1)
-            self.stack.removeWidget(old_widget)
-            old_widget.deleteLater()
-            self.stack.insertWidget(1, self.page_analysis)
-
+        self.stack.insertWidget(1, self.page_analysis)
         self.switch_page(self.page_analysis, self.btn_analysis)

@@ -124,7 +124,6 @@ class Database:
         with self.connect() as conn:
             cursor = conn.cursor()
 
-            # 先删除关联结果，避免残留无效数据
             cursor.execute("""
             DELETE FROM field_results
             WHERE analysis_id IN (

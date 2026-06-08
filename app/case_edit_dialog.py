@@ -73,7 +73,6 @@ class CaseEditDialog(QDialog):
 
     def load_data(self):
         if not self.case_data:
-            # 新建病例时，自动生成一个默认病例编号
             now_text = datetime.now().strftime("%Y%m%d%H%M%S")
             self.case_no_edit.setText(f"CASE{now_text}")
             return
