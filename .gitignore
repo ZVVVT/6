@@ -1,0 +1,46 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 数据库和运行数据
+data/*.db
+data/*.sqlite
+
+# 工作目录和输出结果
+workspace/
+reports/
+cp_output/
+output/
+
+# 分析结果文件
+*.csv
+*.xlsx
+*.pdf
+
+# 图像数据
+*.tif
+*.tiff
+*.bmp
+*.jpg
+*.jpeg
+*.png
+
+# 允许上传 assets 里的图标
+!assets/*.png
+!assets/*.jpg
+!assets/*.ico
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

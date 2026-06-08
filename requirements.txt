@@ -1,0 +1,9 @@
+PySide6==6.4.3
+pandas
+openpyxl
+pillow
+reportlab
+pyinstaller
+tifffile
+numpy
+opencv-python
