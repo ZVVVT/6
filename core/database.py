@@ -69,6 +69,10 @@ class Database:
 
             conn.commit()
 
+    # -------------------------
+    # 病例管理
+    # -------------------------
+
     def create_case(self, case_no, patient_name, age, sample_no, test_date, remark):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -187,3 +191,188 @@ class Database:
                 """)
 
             return [dict(row) for row in cursor.fetchall()]
+
+    # -------------------------
+    # 蛋白分析结果
+    # -------------------------
+
+    def delete_protein_analysis(self, case_id, protein_name):
+        """
+        删除某个病例下某个蛋白的旧分析结果。
+        重新分析同一个蛋白时，先删旧结果，再写新结果，避免重复。
+        """
+        with self.connect() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+            DELETE FROM field_results
+            WHERE analysis_id IN (
+                SELECT id FROM protein_analysis
+                WHERE case_id = ? AND protein_name = ?
+            )
+            """, (case_id, protein_name))
+
+            cursor.execute("""
+            DELETE FROM protein_analysis
+            WHERE case_id = ? AND protein_name = ?
+            """, (case_id, protein_name))
+
+            conn.commit()
+
+    def save_protein_analysis(
+        self,
+        case_id,
+        protein_name,
+        protein_part,
+        image_folder,
+        output_folder,
+        total_fields,
+        total_sperm_count,
+        positive_count,
+        mean_intensity,
+        expression_rate,
+        status="完成"
+    ):
+        """
+        保存蛋白汇总结果。
+        同一个病例、同一个蛋白重复保存时，会覆盖旧结果。
+        """
+        self.delete_protein_analysis(case_id, protein_name)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO protein_analysis (
+                case_id,
+                protein_name,
+                protein_part,
+                image_folder,
+                output_folder,
+                total_fields,
+                total_sperm_count,
+                positive_count,
+                mean_intensity,
+                expression_rate,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                case_id,
+                protein_name,
+                protein_part,
+                image_folder,
+                output_folder,
+                total_fields,
+                total_sperm_count,
+                positive_count,
+                mean_intensity,
+                expression_rate,
+                status,
+                now
+            ))
+
+            conn.commit()
+            return cursor.lastrowid
+
+    def save_field_result(
+        self,
+        analysis_id,
+        field_no,
+        sperm_count,
+        positive_count,
+        mean_intensity,
+        expression_rate,
+        overlay_image_path="",
+        csv_path=""
+    ):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO field_results (
+                analysis_id,
+                field_no,
+                sperm_count,
+                positive_count,
+                mean_intensity,
+                expression_rate,
+                overlay_image_path,
+                csv_path
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                analysis_id,
+                field_no,
+                sperm_count,
+                positive_count,
+                mean_intensity,
+                expression_rate,
+                overlay_image_path,
+                csv_path
+            ))
+
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_protein_analysis_by_case(self, case_id):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT id,
+                   case_id,
+                   protein_name,
+                   protein_part,
+                   image_folder,
+                   output_folder,
+                   total_fields,
+                   total_sperm_count,
+                   positive_count,
+                   mean_intensity,
+                   expression_rate,
+                   status,
+                   created_at
+            FROM protein_analysis
+            WHERE case_id = ?
+            ORDER BY id DESC
+            """, (case_id,))
+
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_field_results(self, analysis_id):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT id,
+                   analysis_id,
+                   field_no,
+                   sperm_count,
+                   positive_count,
+                   mean_intensity,
+                   expression_rate,
+                   overlay_image_path,
+                   csv_path
+            FROM field_results
+            WHERE analysis_id = ?
+            ORDER BY id ASC
+            """, (analysis_id,))
+
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_case_report_path(self, case_id, report_path):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            UPDATE cases
+            SET report_path = ?,
+                updated_at = ?
+            WHERE id = ?
+            """, (
+                report_path,
+                now,
+                case_id
+            ))
+            conn.commit()

@@ -24,6 +24,7 @@ from app.result_viewer import ResultViewer
 from core.cellprofiler_runner import CellProfilerWorker
 from core.config_manager import ConfigManager
 from core.image_importer import ImageImporter
+from core.result_parser import ResultParser
 
 
 class AnalysisWindow(QWidget):
@@ -36,6 +37,7 @@ class AnalysisWindow(QWidget):
         self.imported_images = []
         self.cp_worker = None
         self.current_cp_output_dir = None
+        self.current_raw_image_folder = None
 
         self.init_ui()
 
@@ -200,6 +202,7 @@ class AnalysisWindow(QWidget):
 
         workspace_root = self.config.get_workspace_root()
         target_folder = workspace_root / case_no / "raw_images" / protein_name
+        self.current_raw_image_folder = target_folder
 
         try:
             importer = ImageImporter(self.config.get_image_rule())
@@ -397,10 +400,17 @@ class AnalysisWindow(QWidget):
             self.result_viewer.refresh_results()
 
         if success:
+            saved_ok, save_message = self.save_analysis_result_to_database()
+
+            if saved_ok:
+                self.append_log(save_message)
+            else:
+                self.append_log(f"结果入库失败：{save_message}")
+
             QMessageBox.information(
                 self,
                 "分析完成",
-                f"分析完成。\n用时：{elapsed:.2f} 秒\n\n输出目录：\n{self.current_cp_output_dir}"
+                f"分析完成。\n用时：{elapsed:.2f} 秒\n\n输出目录：\n{self.current_cp_output_dir}\n\n{save_message}"
             )
             self.append_log(f"输出目录：{self.current_cp_output_dir}")
         else:
@@ -409,6 +419,74 @@ class AnalysisWindow(QWidget):
                 "分析失败",
                 f"分析失败。\n用时：{elapsed:.2f} 秒\n\n请查看日志。"
             )
+
+    def save_analysis_result_to_database(self):
+        if not self.current_case:
+            return False, "当前病例为空。"
+
+        if not self.current_cp_output_dir:
+            return False, "当前输出目录为空。"
+
+        case_id = self.current_case.get("id")
+        if not case_id:
+            return False, "当前病例缺少数据库 ID。"
+
+        protein_name = self.protein_combo.currentText()
+        protein_part = self.config.get_protein_part(protein_name)
+
+        parser = ResultParser(str(self.current_cp_output_dir))
+        summary_result = parser.parse_image_summary()
+
+        if not summary_result.get("success"):
+            return False, summary_result.get("message", "解析结果失败。")
+
+        total = summary_result.get("total", {})
+        rows = summary_result.get("rows", [])
+        image_csv = summary_result.get("image_csv", "")
+
+        image_folder = str(self.current_raw_image_folder or "")
+        output_folder = str(self.current_cp_output_dir)
+
+        try:
+            analysis_id = self.database.save_protein_analysis(
+                case_id=case_id,
+                protein_name=protein_name,
+                protein_part=protein_part,
+                image_folder=image_folder,
+                output_folder=output_folder,
+                total_fields=total.get("field_count", 0),
+                total_sperm_count=total.get("sperm_count", 0),
+                positive_count=total.get("positive_count", 0),
+                mean_intensity=total.get("mean_intensity", 0),
+                expression_rate=total.get("expression_rate", 0),
+                status="完成",
+            )
+
+            for item in rows:
+                field_no = str(item.get("image_number", ""))
+
+                self.database.save_field_result(
+                    analysis_id=analysis_id,
+                    field_no=field_no,
+                    sperm_count=item.get("sperm_count", 0),
+                    positive_count=item.get("positive_count", 0),
+                    mean_intensity=item.get("mean_intensity", 0),
+                    expression_rate=item.get("expression_rate", 0),
+                    overlay_image_path="",
+                    csv_path=image_csv,
+                )
+
+        except Exception as e:
+            return False, f"保存数据库失败：{e}"
+
+        return True, (
+            "结果已保存到数据库："
+            f"视野数 {total.get('field_count', 0)}，"
+            f"精子总数 {total.get('sperm_count', 0)}，"
+            f"阳性/共定位数 {total.get('positive_count', 0)}，"
+            f"标定率 {total.get('expression_rate', 0)}%，"
+            f"荧光强度 {total.get('mean_intensity', 0)}。"
+        )
 
     def set_running_state(self, running: bool):
         self.btn_select_folder.setEnabled(not running)
