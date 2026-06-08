@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from app.analysis_window import AnalysisWindow
 from app.case_manager_window import CaseManagerWindow
+from app.report_window import ReportWindow
 from core.database import Database
 
 
@@ -88,15 +89,11 @@ class MainWindow(QMainWindow):
 
         self.page_cases = CaseManagerWindow(self.database)
         self.page_analysis = AnalysisWindow(self.database)
-
-        self.page_reports = self.create_placeholder_page(
-            title="报告管理",
-            message="后续用于查看、重新生成和打开 PDF 报告。"
-        )
+        self.page_reports = ReportWindow(self.database)
 
         self.page_settings = self.create_placeholder_page(
             title="系统设置",
-            message="后续用于配置 CellProfiler 路径、pipeline 路径、报告路径等。"
+            message="后续用于配置 CellProfiler/MvImageID 路径、pipeline 路径、报告路径等。"
         )
 
         self.stack.addWidget(self.page_cases)
@@ -157,6 +154,7 @@ class MainWindow(QMainWindow):
         patient_name = case_data.get("patient_name", "")
 
         self.page_analysis.set_case(case_data)
+        self.page_reports.set_case(case_data)
 
         self.statusBar().showMessage(f"当前选择病例：{case_no} - {patient_name}")
         self.switch_page(self.page_analysis, self.btn_analysis)

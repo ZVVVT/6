@@ -2,7 +2,7 @@ PySide6==6.4.3
 pandas
 openpyxl
 pillow
-reportlab
+reportlab==3.6.13
 pyinstaller
 tifffile
 numpy
