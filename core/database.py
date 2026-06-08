@@ -10,7 +10,9 @@ class Database:
         self.init_db()
 
     def connect(self):
-        return sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
 
     def init_db(self):
         with self.connect() as conn:
@@ -79,18 +81,110 @@ class Database:
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                case_no, patient_name, age, sample_no, test_date,
-                remark, now, now
+                case_no,
+                patient_name,
+                age,
+                sample_no,
+                test_date,
+                remark,
+                now,
+                now
             ))
             conn.commit()
             return cursor.lastrowid
 
-    def get_cases(self):
+    def update_case(self, case_id, case_no, patient_name, age, sample_no, test_date, remark):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         with self.connect() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-            SELECT id, case_no, patient_name, age, sample_no, test_date, created_at, report_path
+            UPDATE cases
+            SET case_no = ?,
+                patient_name = ?,
+                age = ?,
+                sample_no = ?,
+                test_date = ?,
+                remark = ?,
+                updated_at = ?
+            WHERE id = ?
+            """, (
+                case_no,
+                patient_name,
+                age,
+                sample_no,
+                test_date,
+                remark,
+                now,
+                case_id
+            ))
+            conn.commit()
+
+    def delete_case(self, case_id):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+
+            # 先删除关联结果，避免残留无效数据
+            cursor.execute("""
+            DELETE FROM field_results
+            WHERE analysis_id IN (
+                SELECT id FROM protein_analysis WHERE case_id = ?
+            )
+            """, (case_id,))
+
+            cursor.execute("""
+            DELETE FROM protein_analysis
+            WHERE case_id = ?
+            """, (case_id,))
+
+            cursor.execute("""
+            DELETE FROM cases
+            WHERE id = ?
+            """, (case_id,))
+
+            conn.commit()
+
+    def get_case(self, case_id):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT id, case_no, patient_name, age, sample_no, test_date,
+                   remark, created_at, updated_at, report_path
             FROM cases
-            ORDER BY id DESC
-            """)
-            return cursor.fetchall()
+            WHERE id = ?
+            """, (case_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_cases(self, keyword: str = ""):
+        keyword = (keyword or "").strip()
+
+        with self.connect() as conn:
+            cursor = conn.cursor()
+
+            if keyword:
+                like_keyword = f"%{keyword}%"
+                cursor.execute("""
+                SELECT id, case_no, patient_name, age, sample_no, test_date,
+                       created_at, updated_at, report_path
+                FROM cases
+                WHERE case_no LIKE ?
+                   OR patient_name LIKE ?
+                   OR sample_no LIKE ?
+                   OR test_date LIKE ?
+                ORDER BY id DESC
+                """, (
+                    like_keyword,
+                    like_keyword,
+                    like_keyword,
+                    like_keyword
+                ))
+            else:
+                cursor.execute("""
+                SELECT id, case_no, patient_name, age, sample_no, test_date,
+                       created_at, updated_at, report_path
+                FROM cases
+                ORDER BY id DESC
+                """)
+
+            return [dict(row) for row in cursor.fetchall()]
