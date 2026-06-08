@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
+from app.analysis_window import AnalysisWindow
 from app.case_manager_window import CaseManagerWindow
 from core.database import Database
 
@@ -86,12 +87,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
 
         self.page_cases = CaseManagerWindow(self.database)
-        self.page_cases.case_selected.connect(self.on_case_selected)
-
-        self.page_analysis = self.create_placeholder_page(
-            title="蛋白分析",
-            message="请先在病例管理中双击选择一个病例，然后进入蛋白分析流程。"
-        )
+        self.page_analysis = AnalysisWindow(self.database)
 
         self.page_reports = self.create_placeholder_page(
             title="报告管理",
@@ -107,6 +103,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_analysis)
         self.stack.addWidget(self.page_reports)
         self.stack.addWidget(self.page_settings)
+
+        self.page_cases.case_selected.connect(self.on_case_selected)
 
         self.btn_cases.clicked.connect(lambda: self.switch_page(self.page_cases, self.btn_cases))
         self.btn_analysis.clicked.connect(lambda: self.switch_page(self.page_analysis, self.btn_analysis))
@@ -158,20 +156,7 @@ class MainWindow(QMainWindow):
         case_no = case_data.get("case_no", "")
         patient_name = case_data.get("patient_name", "")
 
+        self.page_analysis.set_case(case_data)
+
         self.statusBar().showMessage(f"当前选择病例：{case_no} - {patient_name}")
-
-        old_widget = self.stack.widget(1)
-        self.stack.removeWidget(old_widget)
-        old_widget.deleteLater()
-
-        self.page_analysis = self.create_placeholder_page(
-            title="蛋白分析",
-            message=(
-                f"当前病例：{case_no}\n"
-                f"姓名：{patient_name}\n\n"
-                "下一步将在这里开发：图片导入、蛋白选择、CellProfiler 后台分析、结果展示。"
-            )
-        )
-
-        self.stack.insertWidget(1, self.page_analysis)
         self.switch_page(self.page_analysis, self.btn_analysis)
