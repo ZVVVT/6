@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from app.analysis_window import AnalysisWindow
 from app.case_manager_window import CaseManagerWindow
 from app.report_window import ReportWindow
+from app.settings_window import SettingsWindow
 from core.database import Database
 
 
@@ -90,11 +91,7 @@ class MainWindow(QMainWindow):
         self.page_cases = CaseManagerWindow(self.database)
         self.page_analysis = AnalysisWindow(self.database)
         self.page_reports = ReportWindow(self.database)
-
-        self.page_settings = self.create_placeholder_page(
-            title="系统设置",
-            message="后续用于配置 CellProfiler/MvImageID 路径、pipeline 路径、报告路径等。"
-        )
+        self.page_settings = SettingsWindow()
 
         self.stack.addWidget(self.page_cases)
         self.stack.addWidget(self.page_analysis)
@@ -115,26 +112,6 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("系统就绪")
         self.switch_page(self.page_cases, self.btn_cases)
-
-    def create_placeholder_page(self, title: str, message: str):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(30, 30, 30, 30)
-
-        title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
-
-        message_label = QLabel(message)
-        message_label.setStyleSheet("font-size: 14px; color: #666666;")
-        message_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        message_label.setWordWrap(True)
-
-        layout.addWidget(title_label)
-        layout.addSpacing(20)
-        layout.addWidget(message_label)
-        layout.addStretch()
-
-        return page
 
     def switch_page(self, page, active_button):
         self.stack.setCurrentWidget(page)
