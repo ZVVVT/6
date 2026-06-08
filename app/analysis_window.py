@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
+from app.result_viewer import ResultViewer
 from core.cellprofiler_runner import CellProfilerWorker
 from core.config_manager import ConfigManager
 from core.image_importer import ImageImporter
@@ -136,6 +137,9 @@ class AnalysisWindow(QWidget):
         self.log_edit.setMaximumHeight(180)
         self.log_edit.setPlaceholderText("运行日志")
         main_layout.addWidget(self.log_edit)
+        self.result_viewer = ResultViewer()
+        self.result_viewer.setMinimumHeight(260)
+        main_layout.addWidget(self.result_viewer, 1)
 
         self.btn_select_folder.clicked.connect(self.select_folder)
         self.btn_import.clicked.connect(self.import_images)
@@ -395,13 +399,22 @@ class AnalysisWindow(QWidget):
         self.set_running_state(False)
 
         if success:
+            self.append_log(f"输出目录：{self.current_cp_output_dir}")
+
+            if self.current_cp_output_dir:
+                self.result_viewer.set_output_dir(str(self.current_cp_output_dir))
+                self.result_viewer.refresh_results()
+
             QMessageBox.information(
                 self,
                 "分析完成",
                 f"分析完成。\n用时：{elapsed:.2f} 秒\n\n输出目录：\n{self.current_cp_output_dir}"
             )
-            self.append_log(f"输出目录：{self.current_cp_output_dir}")
         else:
+            if self.current_cp_output_dir:
+                self.result_viewer.set_output_dir(str(self.current_cp_output_dir))
+                self.result_viewer.refresh_results()
+
             QMessageBox.critical(
                 self,
                 "分析失败",
