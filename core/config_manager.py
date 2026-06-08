@@ -18,6 +18,14 @@ class ConfigManager:
         root_dir = self.get("Workspace", "root_dir", "workspace/cases")
         return Path(root_dir)
 
+    def get_database_path(self) -> Path:
+        database = self.get("Workspace", "database", "data/analysis.db")
+        return Path(database)
+
+    def get_report_dir(self) -> Path:
+        report_dir = self.get("Workspace", "report_dir", "reports")
+        return Path(report_dir)
+
     def get_image_rule(self) -> dict:
         return {
             "r_suffix": self.get("ImageRule", "r_suffix", "_R"),
@@ -49,7 +57,13 @@ class ConfigManager:
         return Path(self.get("CellProfiler", "source_project_dir", r"F:\MvImageID"))
 
     def get_venv_activate(self) -> Path:
-        return Path(self.get("CellProfiler", "venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1"))
+        return Path(
+            self.get(
+                "CellProfiler",
+                "venv_activate",
+                r"F:\MvImageID\.venv\Scripts\Activate.ps1",
+            )
+        )
 
     def get_module_name(self) -> str:
         return self.get("CellProfiler", "module_name", "MvImageID")
@@ -59,7 +73,3 @@ class ConfigManager:
 
     def get_log_file(self) -> Path:
         return Path(self.get("CellProfiler", "log_file", r"F:\MvImageID\run.log"))
-
-    def get_report_dir(self) -> Path:
-        report_dir = self.get("Workspace", "report_dir", "reports")
-        return Path(report_dir)
