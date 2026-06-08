@@ -134,12 +134,13 @@ class AnalysisWindow(QWidget):
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        self.log_edit.setMaximumHeight(180)
+        self.log_edit.setMaximumHeight(150)
         self.log_edit.setPlaceholderText("运行日志")
         main_layout.addWidget(self.log_edit)
+
         self.result_viewer = ResultViewer()
-        self.result_viewer.setMinimumHeight(260)
-        main_layout.addWidget(self.result_viewer, 1)
+        self.result_viewer.setMinimumHeight(320)
+        main_layout.addWidget(self.result_viewer, 2)
 
         self.btn_select_folder.clicked.connect(self.select_folder)
         self.btn_import.clicked.connect(self.import_images)
@@ -358,13 +359,6 @@ class AnalysisWindow(QWidget):
         self.cp_worker.start()
 
     def prepare_cp_input(self, complete_items, cp_input_dir: Path):
-        """
-        按源码环境运行方式准备输入目录。
-
-        第一版先只复制 R/G 图，避免 DIC/Merge 影响 pipeline 的 NamesAndTypes 匹配。
-        如果后续 pipeline 需要 DIC/Merge，再把 channel 列表改成 ["R", "G", "DIC", "Merge"]。
-        """
-
         if cp_input_dir.exists():
             shutil.rmtree(cp_input_dir)
 
@@ -398,23 +392,18 @@ class AnalysisWindow(QWidget):
     def on_cellprofiler_finished(self, success: bool, elapsed: float, log_text: str):
         self.set_running_state(False)
 
+        if self.current_cp_output_dir:
+            self.result_viewer.set_output_dir(str(self.current_cp_output_dir))
+            self.result_viewer.refresh_results()
+
         if success:
-            self.append_log(f"输出目录：{self.current_cp_output_dir}")
-
-            if self.current_cp_output_dir:
-                self.result_viewer.set_output_dir(str(self.current_cp_output_dir))
-                self.result_viewer.refresh_results()
-
             QMessageBox.information(
                 self,
                 "分析完成",
                 f"分析完成。\n用时：{elapsed:.2f} 秒\n\n输出目录：\n{self.current_cp_output_dir}"
             )
+            self.append_log(f"输出目录：{self.current_cp_output_dir}")
         else:
-            if self.current_cp_output_dir:
-                self.result_viewer.set_output_dir(str(self.current_cp_output_dir))
-                self.result_viewer.refresh_results()
-
             QMessageBox.critical(
                 self,
                 "分析失败",

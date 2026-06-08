@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QMessageBox,
     QSplitter,
+    QGroupBox,
 )
 
 from core.result_parser import ResultParser
@@ -26,11 +27,40 @@ class ResultViewer(QWidget):
 
         self.output_dir = None
         self.files = []
+        self.summary_data = None
 
         self.init_ui()
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
+
+        summary_group = QGroupBox("分析结果汇总")
+        summary_layout = QVBoxLayout(summary_group)
+
+        self.summary_label = QLabel("当前还没有结果。")
+        self.summary_label.setStyleSheet("font-size: 14px; color: #333333;")
+        summary_layout.addWidget(self.summary_label)
+
+        self.summary_table = QTableWidget()
+        self.summary_table.setColumnCount(5)
+        self.summary_table.setHorizontalHeaderLabels([
+            "视野",
+            "精子总数",
+            "阳性/共定位数",
+            "标定率(%)",
+            "荧光强度",
+        ])
+        self.summary_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.summary_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.summary_table.setAlternatingRowColors(True)
+        self.summary_table.verticalHeader().setVisible(False)
+
+        summary_header = self.summary_table.horizontalHeader()
+        summary_header.setSectionResizeMode(QHeaderView.Stretch)
+
+        summary_layout.addWidget(self.summary_table)
+
+        main_layout.addWidget(summary_group)
 
         top_layout = QHBoxLayout()
 
@@ -46,9 +76,9 @@ class ResultViewer(QWidget):
 
         main_layout.addLayout(top_layout)
 
-        self.summary_label = QLabel("结果统计：-")
-        self.summary_label.setStyleSheet("color: #666666;")
-        main_layout.addWidget(self.summary_label)
+        self.file_summary_label = QLabel("文件统计：-")
+        self.file_summary_label.setStyleSheet("color: #666666;")
+        main_layout.addWidget(self.file_summary_label)
 
         splitter = QSplitter(Qt.Horizontal)
 
@@ -69,11 +99,11 @@ class ResultViewer(QWidget):
         self.file_table.verticalHeader().setVisible(False)
         self.file_table.setColumnHidden(5, True)
 
-        header = self.file_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        file_header = self.file_table.horizontalHeader()
+        file_header.setSectionResizeMode(QHeaderView.Stretch)
+        file_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        file_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        file_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
 
         splitter.addWidget(self.file_table)
 
@@ -119,8 +149,65 @@ class ResultViewer(QWidget):
             return
 
         parser = ResultParser(str(self.output_dir))
+
+        self.refresh_summary(parser)
+        self.refresh_file_list(parser)
+
+    def refresh_summary(self, parser: ResultParser):
+        summary_result = parser.parse_image_summary()
+        self.summary_data = summary_result
+
+        if not summary_result.get("success"):
+            self.summary_label.setText(f"分析结果汇总：{summary_result.get('message')}")
+            self.summary_table.setRowCount(0)
+            return
+
+        rows = summary_result.get("rows", [])
+        total = summary_result.get("total", {})
+
+        self.summary_table.setRowCount(len(rows) + 1)
+
+        for row_index, item in enumerate(rows):
+            values = [
+                item.get("image_number", ""),
+                item.get("sperm_count", 0),
+                item.get("positive_count", 0),
+                item.get("expression_rate", 0),
+                item.get("mean_intensity", 0),
+            ]
+
+            for col_index, value in enumerate(values):
+                table_item = QTableWidgetItem(str(value))
+                table_item.setTextAlignment(Qt.AlignCenter)
+                self.summary_table.setItem(row_index, col_index, table_item)
+
+        total_row = len(rows)
+        total_values = [
+            "合计",
+            total.get("sperm_count", 0),
+            total.get("positive_count", 0),
+            total.get("expression_rate", 0),
+            total.get("mean_intensity", 0),
+        ]
+
+        for col_index, value in enumerate(total_values):
+            table_item = QTableWidgetItem(str(value))
+            table_item.setTextAlignment(Qt.AlignCenter)
+            table_item.setBackground(Qt.lightGray)
+            self.summary_table.setItem(total_row, col_index, table_item)
+
+        self.summary_label.setText(
+            "分析结果汇总："
+            f"视野数 {total.get('field_count', 0)}；"
+            f"精子总数 {total.get('sperm_count', 0)}；"
+            f"阳性/共定位数 {total.get('positive_count', 0)}；"
+            f"标定率 {total.get('expression_rate', 0)}%；"
+            f"荧光强度 {total.get('mean_intensity', 0)}"
+        )
+
+    def refresh_file_list(self, parser: ResultParser):
         self.files = parser.scan_files()
-        summary = parser.get_summary()
+        file_summary = parser.get_file_summary()
 
         self.file_table.setRowCount(len(self.files))
 
@@ -139,19 +226,19 @@ class ResultViewer(QWidget):
                 table_item.setTextAlignment(Qt.AlignCenter)
                 self.file_table.setItem(row_index, col_index, table_item)
 
-        self.summary_label.setText(
-            "结果统计："
-            f"总文件 {summary['total']} 个；"
-            f"图片 {summary['image']} 个；"
-            f"表格 {summary['table']} 个；"
-            f"日志 {summary['log']} 个；"
-            f"PDF {summary['pdf']} 个；"
-            f"脚本 {summary['script']} 个；"
-            f"其他 {summary['other']} 个"
+        self.file_summary_label.setText(
+            "文件统计："
+            f"总文件 {file_summary['total']} 个；"
+            f"图片 {file_summary['image']} 个；"
+            f"表格 {file_summary['table']} 个；"
+            f"日志 {file_summary['log']} 个；"
+            f"PDF {file_summary['pdf']} 个；"
+            f"脚本 {file_summary['script']} 个；"
+            f"其他 {file_summary['other']} 个"
         )
 
         if not self.files:
-            self.show_text_preview("未扫描到输出文件。请检查 CellProfiler 输出目录。")
+            self.show_text_preview("未扫描到输出文件。请检查输出目录。")
 
     def get_selected_file_path(self):
         selected_rows = self.file_table.selectionModel().selectedRows()
@@ -180,7 +267,7 @@ class ResultViewer(QWidget):
         elif suffix in {".tif", ".tiff"}:
             self.show_text_preview(
                 f"当前文件是 TIFF 图像：\n{file_path}\n\n"
-                "第一版暂不直接预览 TIFF，后续可用 tifffile/Pillow 转换显示。"
+                "第一版暂不直接预览 TIFF，可点击“打开选中文件”。"
             )
         elif suffix == ".csv":
             self.preview_csv(file_path)
@@ -216,6 +303,7 @@ class ResultViewer(QWidget):
         )
 
         self.preview_title.setText(f"图片预览：{file_path.name}")
+        self.preview_label.setText("")
         self.preview_label.setPixmap(scaled_pixmap)
 
     def preview_csv(self, file_path: Path):
