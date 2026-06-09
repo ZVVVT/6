@@ -71,16 +71,12 @@ class SettingsWindow(QWidget):
         self.btn_test.clicked.connect(self.check_paths)
         self.btn_save.clicked.connect(self.save_config)
 
-    # -------------------------
-    # Tab 初始化
-    # -------------------------
-
     def init_runtime_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        cp_group = QGroupBox("MvImageID / CellProfiler 源码环境")
-        cp_layout = QFormLayout(cp_group)
+        group = QGroupBox("MvImageID / CellProfiler 源码环境")
+        form = QFormLayout(group)
 
         self.powershell_edit = QLineEdit()
         self.source_project_dir_edit = QLineEdit()
@@ -92,17 +88,17 @@ class SettingsWindow(QWidget):
         self.plugins_directory_edit = QLineEdit()
         self.log_file_edit = QLineEdit()
 
-        cp_layout.addRow("PowerShell：", self._with_button(self.powershell_edit, "选择", self.select_powershell))
-        cp_layout.addRow("源码目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
-        cp_layout.addRow("虚拟环境 Activate.ps1：", self._with_button(self.venv_activate_edit, "选择", self.select_venv_activate))
-        cp_layout.addRow("模块名称：", self.module_name_edit)
-        cp_layout.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
-        cp_layout.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
-        cp_layout.addRow("PNA Pipeline：", self._with_button(self.pna_pipeline_edit, "选择", self.select_pna_pipeline))
-        cp_layout.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
-        cp_layout.addRow("日志文件：", self._with_button(self.log_file_edit, "选择", self.select_log_file))
+        form.addRow("PowerShell：", self._with_button(self.powershell_edit, "选择", self.select_powershell))
+        form.addRow("源码目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
+        form.addRow("虚拟环境 Activate.ps1：", self._with_button(self.venv_activate_edit, "选择", self.select_venv_activate))
+        form.addRow("模块名称：", self.module_name_edit)
+        form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
+        form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
+        form.addRow("PNA Pipeline：", self._with_button(self.pna_pipeline_edit, "选择", self.select_pna_pipeline))
+        form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
+        form.addRow("日志文件：", self._with_button(self.log_file_edit, "选择", self.select_log_file))
 
-        layout.addWidget(cp_group)
+        layout.addWidget(group)
         layout.addStretch()
 
         self.tabs.addTab(tab, "运行环境")
@@ -111,20 +107,20 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        workspace_group = QGroupBox("工作目录与报告设置")
-        workspace_layout = QFormLayout(workspace_group)
+        group = QGroupBox("工作目录与报告设置")
+        form = QFormLayout(group)
 
         self.workspace_root_edit = QLineEdit()
         self.database_edit = QLineEdit()
         self.report_dir_edit = QLineEdit()
         self.logo_path_edit = QLineEdit()
 
-        workspace_layout.addRow("病例工作目录：", self._with_button(self.workspace_root_edit, "选择", self.select_workspace_root))
-        workspace_layout.addRow("数据库文件：", self._with_button(self.database_edit, "选择", self.select_database_file))
-        workspace_layout.addRow("报告目录：", self._with_button(self.report_dir_edit, "选择", self.select_report_dir))
-        workspace_layout.addRow("LOGO 图片：", self._with_button(self.logo_path_edit, "选择", self.select_logo_path))
+        form.addRow("病例工作目录：", self._with_button(self.workspace_root_edit, "选择", self.select_workspace_root))
+        form.addRow("数据库文件：", self._with_button(self.database_edit, "选择", self.select_database_file))
+        form.addRow("报告目录：", self._with_button(self.report_dir_edit, "选择", self.select_report_dir))
+        form.addRow("LOGO 图片：", self._with_button(self.logo_path_edit, "选择", self.select_logo_path))
 
-        layout.addWidget(workspace_group)
+        layout.addWidget(group)
         layout.addStretch()
 
         self.tabs.addTab(tab, "工作目录")
@@ -133,8 +129,8 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        image_rule_group = QGroupBox("图片命名规则")
-        image_rule_layout = QFormLayout(image_rule_group)
+        group = QGroupBox("图片命名规则")
+        form = QFormLayout(group)
 
         self.r_suffix_edit = QLineEdit()
         self.g_suffix_edit = QLineEdit()
@@ -142,13 +138,13 @@ class SettingsWindow(QWidget):
         self.merge_suffix_edit = QLineEdit()
         self.image_ext_edit = QLineEdit()
 
-        image_rule_layout.addRow("R 通道后缀：", self.r_suffix_edit)
-        image_rule_layout.addRow("G 通道后缀：", self.g_suffix_edit)
-        image_rule_layout.addRow("DIC 通道后缀：", self.dic_suffix_edit)
-        image_rule_layout.addRow("Merge 通道后缀：", self.merge_suffix_edit)
-        image_rule_layout.addRow("默认图片扩展名：", self.image_ext_edit)
+        form.addRow("R 通道后缀：", self.r_suffix_edit)
+        form.addRow("G 通道后缀：", self.g_suffix_edit)
+        form.addRow("DIC 通道后缀：", self.dic_suffix_edit)
+        form.addRow("Merge 通道后缀：", self.merge_suffix_edit)
+        form.addRow("默认图片扩展名：", self.image_ext_edit)
 
-        layout.addWidget(image_rule_group)
+        layout.addWidget(group)
         layout.addStretch()
 
         self.tabs.addTab(tab, "图片规则")
@@ -176,7 +172,6 @@ class SettingsWindow(QWidget):
             "标定率下限(%)",
             "选择",
         ])
-
         self.protein_table.setAlternatingRowColors(True)
         self.protein_table.verticalHeader().setVisible(False)
 
@@ -190,17 +185,18 @@ class SettingsWindow(QWidget):
 
         layout.addWidget(self.protein_table, 1)
 
-        button_layout = QHBoxLayout()
+        btn_layout = QHBoxLayout()
+
         self.btn_reset_protein_defaults = QPushButton("恢复默认蛋白配置")
         self.btn_add_protein_row = QPushButton("增加一行")
         self.btn_remove_protein_row = QPushButton("删除选中行")
 
-        button_layout.addWidget(self.btn_reset_protein_defaults)
-        button_layout.addWidget(self.btn_add_protein_row)
-        button_layout.addWidget(self.btn_remove_protein_row)
-        button_layout.addStretch()
+        btn_layout.addWidget(self.btn_reset_protein_defaults)
+        btn_layout.addWidget(self.btn_add_protein_row)
+        btn_layout.addWidget(self.btn_remove_protein_row)
+        btn_layout.addStretch()
 
-        layout.addLayout(button_layout)
+        layout.addLayout(btn_layout)
 
         self.btn_reset_protein_defaults.clicked.connect(self.reset_protein_defaults)
         self.btn_add_protein_row.clicked.connect(self.add_empty_protein_row)
@@ -221,10 +217,6 @@ class SettingsWindow(QWidget):
         layout.addWidget(button)
 
         return widget
-
-    # -------------------------
-    # 加载 / 保存
-    # -------------------------
 
     def load_config(self):
         self.config.load()
@@ -290,22 +282,13 @@ class SettingsWindow(QWidget):
             QMessageBox.critical(self, "错误", f"保存配置失败：\n{e}")
             return
 
-        QMessageBox.information(
-            self,
-            "成功",
-            "系统设置已保存。\n\n注意：蛋白分析页面和报告生成页面已创建的配置对象，可能需要重启软件后完全生效。"
-        )
+        QMessageBox.information(self, "成功", "系统设置已保存。建议重启软件，使全部页面重新读取配置。")
         self.append_log("系统设置已保存到 config.ini。")
 
-    # -------------------------
-    # 蛋白配置表
-    # -------------------------
-
     def load_protein_table(self):
-        protein_items = self.config.get_protein_items()
         self.protein_table.setRowCount(0)
 
-        for item in protein_items:
+        for item in self.config.get_protein_items():
             self.add_protein_row(
                 key=item.get("key", ""),
                 name=item.get("name", ""),
@@ -319,27 +302,22 @@ class SettingsWindow(QWidget):
         row = self.protein_table.rowCount()
         self.protein_table.insertRow(row)
 
-        key_item = QTableWidgetItem(str(key))
-        name_item = QTableWidgetItem(str(name))
-        pipeline_item = QTableWidgetItem(str(pipeline))
-        intensity_item = QTableWidgetItem(str(intensity_min))
-        rate_item = QTableWidgetItem(str(rate_min))
+        self.protein_table.setItem(row, 0, QTableWidgetItem(str(key)))
+        self.protein_table.setItem(row, 1, QTableWidgetItem(str(name)))
 
         part_combo = QComboBox()
         part_combo.addItems(["head", "tail", "pna"])
         if part not in ["head", "tail", "pna"]:
             part = "head"
         part_combo.setCurrentText(part)
+        self.protein_table.setCellWidget(row, 2, part_combo)
+
+        self.protein_table.setItem(row, 3, QTableWidgetItem(str(pipeline)))
+        self.protein_table.setItem(row, 4, QTableWidgetItem(str(intensity_min)))
+        self.protein_table.setItem(row, 5, QTableWidgetItem(str(rate_min)))
 
         btn_select = QPushButton("选择")
         btn_select.clicked.connect(lambda checked=False, r=row: self.select_protein_pipeline_for_row(r))
-
-        self.protein_table.setItem(row, 0, key_item)
-        self.protein_table.setItem(row, 1, name_item)
-        self.protein_table.setCellWidget(row, 2, part_combo)
-        self.protein_table.setItem(row, 3, pipeline_item)
-        self.protein_table.setItem(row, 4, intensity_item)
-        self.protein_table.setItem(row, 5, rate_item)
         self.protein_table.setCellWidget(row, 6, btn_select)
 
     def add_empty_protein_row(self):
@@ -359,15 +337,14 @@ class SettingsWindow(QWidget):
             QMessageBox.information(self, "提示", "请先选择要删除的蛋白行。")
             return
 
-        rows = sorted([index.row() for index in selected_rows], reverse=True)
-        for row in rows:
-            self.protein_table.removeRow(row)
+        for index in sorted(selected_rows, key=lambda x: x.row(), reverse=True):
+            self.protein_table.removeRow(index.row())
 
     def reset_protein_defaults(self):
         reply = QMessageBox.question(
             self,
             "确认恢复",
-            "确定要恢复默认蛋白配置吗？\n\n这会覆盖当前蛋白表格中的内容。",
+            "确定要恢复默认蛋白配置吗？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -376,6 +353,7 @@ class SettingsWindow(QWidget):
             return
 
         self.protein_table.setRowCount(0)
+
         defaults = [
             ("protein1", "HEL-1", "head", "", "26.0", "82.88"),
             ("protein2", "HEL-2", "head", "", "26.0", "82.88"),
@@ -385,12 +363,11 @@ class SettingsWindow(QWidget):
             ("pna", "PNA", "pna", "", "0", "0"),
         ]
 
-        for row in defaults:
-            self.add_protein_row(*row)
+        for item in defaults:
+            self.add_protein_row(*item)
 
     def select_protein_pipeline_for_row(self, row):
-        current_item = self.protein_table.item(row, 3)
-        current_path = current_item.text() if current_item else ""
+        current_path = self.get_table_text(row, 3)
 
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -404,7 +381,7 @@ class SettingsWindow(QWidget):
 
     def save_protein_table_to_config(self):
         keys = []
-        seen_keys = set()
+        seen = set()
 
         for row in range(self.protein_table.rowCount()):
             key = self.get_table_text(row, 0).strip()
@@ -419,7 +396,7 @@ class SettingsWindow(QWidget):
             if not key:
                 return False, f"第 {row + 1} 行内部编号不能为空。"
 
-            if key in seen_keys:
+            if key in seen:
                 return False, f"内部编号重复：{key}"
 
             if not name:
@@ -439,7 +416,7 @@ class SettingsWindow(QWidget):
                 return False, f"第 {row + 1} 行标定率下限不是数字。"
 
             keys.append(key)
-            seen_keys.add(key)
+            seen.add(key)
 
             self.config.set("Protein", key, part)
             self.config.set("ProteinNames", key, name)
@@ -456,13 +433,7 @@ class SettingsWindow(QWidget):
 
     def get_table_text(self, row, col):
         item = self.protein_table.item(row, col)
-        if item is None:
-            return ""
-        return item.text()
-
-    # -------------------------
-    # 路径检查
-    # -------------------------
+        return item.text() if item else ""
 
     def check_paths(self):
         self.log_edit.clear()
@@ -490,7 +461,6 @@ class SettingsWindow(QWidget):
 
         for name, path_text, check_type in checks:
             ok, message = self._check_one_path(path_text, check_type)
-
             if ok:
                 self.append_log(f"√ {name}：{message}")
             else:
@@ -511,19 +481,13 @@ class SettingsWindow(QWidget):
         path = Path(path_text)
 
         if check_type == "file":
-            if path.exists() and path.is_file():
-                return True, str(path)
-            return False, f"文件不存在：{path}"
+            return (True, str(path)) if path.exists() and path.is_file() else (False, f"文件不存在：{path}")
 
         if check_type == "file_optional":
-            if path.exists() and path.is_file():
-                return True, str(path)
-            return False, f"文件不存在：{path}"
+            return (True, str(path)) if path.exists() and path.is_file() else (False, f"文件不存在：{path}")
 
         if check_type == "dir":
-            if path.exists() and path.is_dir():
-                return True, str(path)
-            return False, f"目录不存在：{path}"
+            return (True, str(path)) if path.exists() and path.is_dir() else (False, f"目录不存在：{path}")
 
         if check_type == "dir_create":
             try:
@@ -541,17 +505,8 @@ class SettingsWindow(QWidget):
 
         return False, "未知检查类型。"
 
-    # -------------------------
-    # 文件/文件夹选择
-    # -------------------------
-
     def select_powershell(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 PowerShell",
-            "",
-            "PowerShell (*.exe);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择 PowerShell", "", "PowerShell (*.exe);;所有文件 (*.*)")
         if path:
             self.powershell_edit.setText(path)
 
@@ -561,42 +516,22 @@ class SettingsWindow(QWidget):
             self.source_project_dir_edit.setText(path)
 
     def select_venv_activate(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 Activate.ps1",
-            "",
-            "PowerShell Script (*.ps1);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择 Activate.ps1", "", "PowerShell Script (*.ps1);;所有文件 (*.*)")
         if path:
             self.venv_activate_edit.setText(path)
 
     def select_head_pipeline(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择头部 Pipeline",
-            "",
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择头部 Pipeline", "", "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)")
         if path:
             self.head_pipeline_edit.setText(path)
 
     def select_tail_pipeline(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择尾部 Pipeline",
-            "",
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择尾部 Pipeline", "", "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)")
         if path:
             self.tail_pipeline_edit.setText(path)
 
     def select_pna_pipeline(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 PNA Pipeline",
-            "",
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择 PNA Pipeline", "", "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)")
         if path:
             self.pna_pipeline_edit.setText(path)
 
@@ -606,12 +541,7 @@ class SettingsWindow(QWidget):
             self.plugins_directory_edit.setText(path)
 
     def select_log_file(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "选择日志文件",
-            "run.log",
-            "Log File (*.log);;Text File (*.txt);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "选择日志文件", "run.log", "Log File (*.log);;Text File (*.txt);;所有文件 (*.*)")
         if path:
             self.log_file_edit.setText(path)
 
@@ -621,12 +551,7 @@ class SettingsWindow(QWidget):
             self.workspace_root_edit.setText(path)
 
     def select_database_file(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "选择数据库文件",
-            "analysis.db",
-            "SQLite Database (*.db);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "选择数据库文件", "analysis.db", "SQLite Database (*.db);;所有文件 (*.*)")
         if path:
             self.database_edit.setText(path)
 
@@ -636,12 +561,7 @@ class SettingsWindow(QWidget):
             self.report_dir_edit.setText(path)
 
     def select_logo_path(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 LOGO 图片",
-            "",
-            "Image Files (*.png *.jpg *.jpeg *.bmp);;所有文件 (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择 LOGO 图片", "", "Image Files (*.png *.jpg *.jpeg *.bmp);;所有文件 (*.*)")
         if path:
             self.logo_path_edit.setText(path)
 

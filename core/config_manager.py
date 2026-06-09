@@ -33,15 +33,6 @@ class ConfigManager:
         except Exception:
             return default
 
-    def get_section_dict(self, section: str) -> dict:
-        if not self.config.has_section(section):
-            return {}
-        return dict(self.config.items(section))
-
-    # -------------------------
-    # Workspace
-    # -------------------------
-
     def get_workspace_root(self) -> Path:
         return Path(self.get("Workspace", "root_dir", "workspace/cases"))
 
@@ -50,10 +41,6 @@ class ConfigManager:
 
     def get_report_dir(self) -> Path:
         return Path(self.get("Workspace", "report_dir", "reports"))
-
-    # -------------------------
-    # Image rule
-    # -------------------------
 
     def get_image_rule(self) -> dict:
         return {
@@ -64,13 +51,8 @@ class ConfigManager:
             "image_ext": self.get("ImageRule", "image_ext", ".tif"),
         }
 
-    # -------------------------
-    # Protein
-    # -------------------------
-
     def get_protein_keys(self) -> list:
         keys_text = self.get("ProteinOrder", "keys", "")
-
         if keys_text:
             keys = [item.strip() for item in keys_text.split(",") if item.strip()]
         else:
@@ -93,8 +75,7 @@ class ConfigManager:
             return value
 
         for key in self.get_protein_keys():
-            display_name = self.get_protein_display_name(key)
-            if value == display_name:
+            if value == self.get_protein_display_name(key):
                 return key
 
         return value.lower()
@@ -106,29 +87,6 @@ class ConfigManager:
     def get_protein_part(self, protein_name_or_key: str) -> str:
         protein_key = self.normalize_protein_key(protein_name_or_key)
         return self.get("Protein", protein_key, "")
-
-    def get_protein_items(self) -> list:
-        items = []
-
-        for key in self.get_protein_keys():
-            display_name = self.get_protein_display_name(key)
-            part = self.get_protein_part(key)
-            pipeline = self.get_pipeline_by_protein(key)
-            custom_pipeline = self.get("ProteinPipelines", key, "").strip()
-            intensity_min = self.get_protein_intensity_min(key)
-            rate_min = self.get_protein_rate_min(key)
-
-            items.append({
-                "key": key,
-                "name": display_name,
-                "part": part,
-                "pipeline": str(pipeline),
-                "custom_pipeline": custom_pipeline,
-                "intensity_min": intensity_min,
-                "rate_min": rate_min,
-            })
-
-        return items
 
     def get_pipeline_by_protein(self, protein_name_or_key: str) -> Path:
         protein_key = self.normalize_protein_key(protein_name_or_key)
@@ -148,26 +106,6 @@ class ConfigManager:
 
         return Path(pipeline)
 
-    def get_next_protein_key(self, current_key: str) -> str:
-        keys = self.get_protein_keys()
-
-        if not keys:
-            return ""
-
-        current_key = self.normalize_protein_key(current_key)
-
-        if current_key not in keys:
-            return keys[0]
-
-        current_index = keys.index(current_key)
-        next_index = (current_index + 1) % len(keys)
-
-        return keys[next_index]
-
-    # -------------------------
-    # Protein reference
-    # -------------------------
-
     def get_protein_intensity_min(self, protein_name_or_key: str) -> float:
         protein_key = self.normalize_protein_key(protein_name_or_key)
         return self.get_float("ProteinReferenceIntensityMin", protein_key, 26.0)
@@ -176,9 +114,23 @@ class ConfigManager:
         protein_key = self.normalize_protein_key(protein_name_or_key)
         return self.get_float("ProteinReferenceRateMin", protein_key, 82.88)
 
-    # -------------------------
-    # MvImageID / CellProfiler source mode
-    # -------------------------
+    def get_protein_items(self) -> list:
+        items = []
+
+        for key in self.get_protein_keys():
+            custom_pipeline = self.get("ProteinPipelines", key, "").strip()
+
+            items.append({
+                "key": key,
+                "name": self.get_protein_display_name(key),
+                "part": self.get_protein_part(key),
+                "pipeline": str(self.get_pipeline_by_protein(key)),
+                "custom_pipeline": custom_pipeline,
+                "intensity_min": self.get_protein_intensity_min(key),
+                "rate_min": self.get_protein_rate_min(key),
+            })
+
+        return items
 
     def get_powershell_exe(self) -> str:
         return self.get("CellProfiler", "powershell_exe", "powershell.exe")
@@ -187,13 +139,7 @@ class ConfigManager:
         return Path(self.get("CellProfiler", "source_project_dir", r"F:\MvImageID"))
 
     def get_venv_activate(self) -> Path:
-        return Path(
-            self.get(
-                "CellProfiler",
-                "venv_activate",
-                r"F:\MvImageID\.venv\Scripts\Activate.ps1",
-            )
-        )
+        return Path(self.get("CellProfiler", "venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1"))
 
     def get_module_name(self) -> str:
         return self.get("CellProfiler", "module_name", "MvImageID")
@@ -204,16 +150,8 @@ class ConfigManager:
     def get_log_file(self) -> Path:
         return Path(self.get("CellProfiler", "log_file", r"F:\MvImageID\run.log"))
 
-    # -------------------------
-    # Report
-    # -------------------------
-
     def get_logo_path(self) -> Path:
         return Path(self.get("Report", "logo_path", ""))
-
-    # -------------------------
-    # Default config
-    # -------------------------
 
     def ensure_default_config(self):
         defaults = {
