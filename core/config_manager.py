@@ -26,6 +26,13 @@ class ConfigManager:
             self.config.add_section(section)
         self.config.set(section, key, str(value))
 
+    def get_float(self, section: str, key: str, default: float = 0.0) -> float:
+        value = self.get(section, key, "")
+        try:
+            return float(value)
+        except Exception:
+            return default
+
     def get_section_dict(self, section: str) -> dict:
         if not self.config.has_section(section):
             return {}
@@ -74,10 +81,7 @@ class ConfigManager:
             if self.get("Protein", key, ""):
                 valid_keys.append(key)
 
-        if not valid_keys:
-            valid_keys = ["protein1", "protein2", "protein3", "protein4", "protein5", "pna"]
-
-        return valid_keys
+        return valid_keys or ["protein1", "protein2", "protein3", "protein4", "protein5", "pna"]
 
     def normalize_protein_key(self, protein_name_or_key: str) -> str:
         value = str(protein_name_or_key or "").strip()
@@ -110,12 +114,16 @@ class ConfigManager:
             display_name = self.get_protein_display_name(key)
             part = self.get_protein_part(key)
             pipeline = self.get_pipeline_by_protein(key)
+            intensity_min = self.get_protein_intensity_min(key)
+            rate_min = self.get_protein_rate_min(key)
 
             items.append({
                 "key": key,
                 "name": display_name,
                 "part": part,
                 "pipeline": str(pipeline),
+                "intensity_min": intensity_min,
+                "rate_min": rate_min,
             })
 
         return items
@@ -153,6 +161,18 @@ class ConfigManager:
         next_index = (current_index + 1) % len(keys)
 
         return keys[next_index]
+
+    # -------------------------
+    # Protein reference
+    # -------------------------
+
+    def get_protein_intensity_min(self, protein_name_or_key: str) -> float:
+        protein_key = self.normalize_protein_key(protein_name_or_key)
+        return self.get_float("ProteinReferenceIntensityMin", protein_key, 26.0)
+
+    def get_protein_rate_min(self, protein_name_or_key: str) -> float:
+        protein_key = self.normalize_protein_key(protein_name_or_key)
+        return self.get_float("ProteinReferenceRateMin", protein_key, 82.88)
 
     # -------------------------
     # MvImageID / CellProfiler source mode
@@ -250,6 +270,22 @@ class ConfigManager:
                 "protein4": "",
                 "protein5": "",
                 "pna": "",
+            },
+            "ProteinReferenceIntensityMin": {
+                "protein1": "26.0",
+                "protein2": "26.0",
+                "protein3": "26.0",
+                "protein4": "26.0",
+                "protein5": "26.0",
+                "pna": "0",
+            },
+            "ProteinReferenceRateMin": {
+                "protein1": "82.88",
+                "protein2": "82.88",
+                "protein3": "82.88",
+                "protein4": "82.88",
+                "protein5": "82.88",
+                "pna": "0",
             },
             "Report": {
                 "logo_path": r"assets\logo.png",

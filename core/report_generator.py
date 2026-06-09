@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 
 from PIL import Image as PILImage
-
+from core.config_manager import ConfigManager
 
 # ---------------------------------------------------------
 # Python 3.8 兼容补丁
@@ -76,6 +76,9 @@ class ReportGenerator:
         self.font_name = self._register_chinese_font()
 
         # 当前先固定参考下限，后续可以放到系统设置里
+        self.config = ConfigManager()
+        self.config.ensure_default_config()
+
         self.default_intensity_min = 26.0
         self.default_rate_min = 82.88
 
@@ -457,7 +460,6 @@ class ReportGenerator:
     def _build_marker_rows(self, analysis_rows: list) -> list:
         rows = []
 
-        # 数据库当前按 DESC 返回，这里按 id 升序显示，更符合分析顺序
         try:
             sorted_rows = sorted(analysis_rows, key=lambda x: int(x.get("id", 0)))
         except Exception:
@@ -466,15 +468,20 @@ class ReportGenerator:
         for index, row in enumerate(sorted_rows, start=1):
             name = row.get("protein_name", "") or f"HEL-{index}"
 
+            protein_key = self.config.normalize_protein_key(name)
+
             intensity = self._to_float(row.get("mean_intensity", 0))
             rate = self._to_float(row.get("expression_rate", 0))
+
+            intensity_min = self.config.get_protein_intensity_min(protein_key)
+            rate_min = self.config.get_protein_rate_min(protein_key)
 
             rows.append({
                 "name": name,
                 "intensity": intensity,
                 "rate": rate,
-                "intensity_min": self.default_intensity_min,
-                "rate_min": self.default_rate_min,
+                "intensity_min": intensity_min,
+                "rate_min": rate_min,
             })
 
         return rows
