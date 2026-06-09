@@ -4,7 +4,8 @@ from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
-    QFormLayout,
+    QHBoxLayout,
+    QGridLayout,
     QLineEdit,
     QSpinBox,
     QDateEdit,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCheckBox,
     QGroupBox,
-    QScrollArea,
+    QLabel,
     QWidget,
 )
 
@@ -26,64 +27,74 @@ class CaseEditDialog(QDialog):
 
         self.case_data = case_data or {}
 
-        self.setWindowTitle("新建病例" if not case_data else "编辑病例")
-        self.resize(720, 760)
+        self.setWindowTitle("创建病历" if not case_data else "修改病历")
+        self.resize(1080, 680)
 
         self.init_ui()
         self.load_data()
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(14, 12, 14, 12)
+        main_layout.setSpacing(10)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
+        title_label = QLabel("创建病历" if not self.case_data else "修改病历")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2f54eb;")
+        title_label.setAlignment(QtAlignCenter())
+        main_layout.addWidget(title_label)
 
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-
-        # -------------------------
-        # 基本信息
-        # -------------------------
-        basic_group = QGroupBox("基本信息")
-        basic_layout = QFormLayout(basic_group)
+        self.basic_group = QGroupBox("基本信息")
+        self.basic_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        basic_layout = QGridLayout(self.basic_group)
+        basic_layout.setHorizontalSpacing(16)
+        basic_layout.setVerticalSpacing(8)
 
         self.case_no_edit = QLineEdit()
-        self.case_no_edit.setPlaceholderText("例如：CASE20260608001")
+        self.case_no_edit.setPlaceholderText("病历号")
 
         self.patient_name_edit = QLineEdit()
-        self.patient_name_edit.setPlaceholderText("请输入姓名")
+        self.patient_name_edit.setPlaceholderText("姓名")
 
         self.sample_no_edit = QLineEdit()
-        self.sample_no_edit.setPlaceholderText("例如：20260309001")
+        self.sample_no_edit.setPlaceholderText("样本号")
 
         self.age_spin = QSpinBox()
         self.age_spin.setRange(0, 120)
         self.age_spin.setValue(30)
 
         self.sex_combo = self.create_combo(["男", "女", ""])
-        self.occupation_combo = self.create_combo(["", "医学", "计算机", "经济学", "法学", "工学", "农学"])
+        self.occupation_combo = self.create_combo(["医学", "计算机", "经济学", "法学", "工学", "农学", ""])
         self.phone_edit = QLineEdit()
         self.phone_edit.setPlaceholderText("联系方式")
 
         self.protein_analysis_check = QCheckBox("蛋白分析")
         self.protein_analysis_check.setChecked(True)
 
-        basic_layout.addRow("病历号：", self.case_no_edit)
-        basic_layout.addRow("姓名：", self.patient_name_edit)
-        basic_layout.addRow("样本号：", self.sample_no_edit)
-        basic_layout.addRow("年龄：", self.age_spin)
-        basic_layout.addRow("性别：", self.sex_combo)
-        basic_layout.addRow("职业：", self.occupation_combo)
-        basic_layout.addRow("联系方式：", self.phone_edit)
-        basic_layout.addRow("", self.protein_analysis_check)
+        self.add_row3(
+            basic_layout,
+            0,
+            ("病历号", self.case_no_edit),
+            ("姓名", self.patient_name_edit),
+            ("样本号", self.sample_no_edit),
+        )
+        self.add_row3(
+            basic_layout,
+            1,
+            ("年龄", self.age_spin),
+            ("职业", self.occupation_combo),
+            ("联系方式", self.phone_edit),
+        )
 
-        content_layout.addWidget(basic_group)
+        basic_layout.addWidget(QLabel("项目"), 2, 0)
+        basic_layout.addWidget(self.protein_analysis_check, 2, 1)
 
-        # -------------------------
-        # 样本信息
-        # -------------------------
-        sample_group = QGroupBox("样本信息")
-        sample_layout = QFormLayout(sample_group)
+        main_layout.addWidget(self.basic_group)
+
+        self.sample_group = QGroupBox("样本信息")
+        self.sample_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        sample_layout = QGridLayout(self.sample_group)
+        sample_layout.setHorizontalSpacing(16)
+        sample_layout.setVerticalSpacing(8)
 
         self.test_date_edit = QDateEdit()
         self.test_date_edit.setCalendarPopup(True)
@@ -98,69 +109,95 @@ class CaseEditDialog(QDialog):
         self.receive_time_edit.setDisplayFormat("HH:mm:ss")
         self.receive_time_edit.setTime(QTime.currentTime())
 
-        self.semen_volume_combo = self.create_combo(["", "1.0", "2.0", "3.0", "4.0", "5.0", "6.0"])
-        self.ph_combo = self.create_combo(["", "6.0", "6.5", "7.0", "7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "7.7"])
+        self.semen_volume_combo = self.create_combo(["1.0", "2.0", "3.0", "4.0", "5.0", "6.0", ""])
+        self.ph_combo = self.create_combo([
+            "6.0", "6.5", "7.0", "7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "7.7", ""
+        ])
 
-        self.appearance_combo = self.create_combo(["", "正常", "不正常", "血精", "脓精"])
+        self.appearance_combo = self.create_combo(["正常", "不正常", "血精", "脓精", ""])
         self.color_combo = self.create_combo([
-            "", "灰白色", "乳白色", "黄白色", "灰色", "白色", "灰黄色",
-            "黄色", "透明", "浅黄色", "红色", "黄褐色"
+            "灰白色", "乳白色", "黄白色", "灰色", "白色", "灰黄色",
+            "黄色", "透明", "浅黄色", "红色", "黄褐色", ""
         ])
 
-        self.liquefaction_time_combo = self.create_combo(["", "10", "20", "30", "40", "50", "60", "70"])
-        self.liquefaction_status_combo = self.create_combo(["", "完全液化", "不液化", "液化不良"])
-
+        self.liquefaction_time_combo = self.create_combo(["10", "20", "30", "40", "50", "60", "70", ""])
+        self.liquefaction_status_combo = self.create_combo(["完全液化", "不液化", "液化不良", ""])
         self.agglutination_combo = self.create_combo([
-            "", "1级(<10)", "2级(<50)", "3级(>50)", "4级(所有精子凝集)"
+            "1级(<10)", "2级(<50)", "3级(>50)", "4级(所有精子凝集)", ""
         ])
+        self.viscosity_combo = self.create_combo(["正常", "+", "++", "+++", ""])
 
-        self.viscosity_combo = self.create_combo(["", "正常", "+", "++", "+++"])
-
-        self.collect_method_combo = self.create_combo(["", "手淫", "性交", "射精后尿液"])
-        self.abstinence_days_combo = self.create_combo(["", "1天", "2天", "3天", "4天", "5天", "6天", "7天", "不详"])
-
-        self.smell_combo = self.create_combo(["", "正常", "不正常"])
-        self.test_temperature_combo = self.create_combo(["", "室温", "35", "37"])
-
-        self.collect_location_combo = self.create_combo(["", "医院", "住所"])
-        self.collect_complete_combo = self.create_combo(["", "完整", "不完整"])
-        self.dead_sperm_combo = self.create_combo(["", "否", "是"])
+        self.collect_method_combo = self.create_combo(["射精后尿液", "手淫", "性交", ""])
+        self.abstinence_days_combo = self.create_combo([
+            "1天", "2天", "3天", "4天", "5天", "6天", "7天", "不详", ""
+        ])
+        self.smell_combo = self.create_combo(["正常", "不正常", ""])
+        self.test_temperature_combo = self.create_combo(["室温", "35", "37", ""])
+        self.collect_location_combo = self.create_combo(["医院", "住所", ""])
+        self.collect_complete_combo = self.create_combo(["完整", "不完整", ""])
+        self.dead_sperm_combo = self.create_combo(["否", "是", ""])
 
         self.sperm_concentration_edit = QLineEdit()
         self.sperm_total_edit = QLineEdit()
         self.forward_motility_edit = QLineEdit()
         self.total_motility_edit = QLineEdit()
 
-        sample_layout.addRow("检查日期：", self.test_date_edit)
-        sample_layout.addRow("取样时间：", self.collect_time_edit)
-        sample_layout.addRow("送检时间：", self.receive_time_edit)
-        sample_layout.addRow("精液量：", self.semen_volume_combo)
-        sample_layout.addRow("PH值：", self.ph_combo)
-        sample_layout.addRow("外观：", self.appearance_combo)
-        sample_layout.addRow("颜色：", self.color_combo)
-        sample_layout.addRow("液化时间(min)：", self.liquefaction_time_combo)
-        sample_layout.addRow("液化状态：", self.liquefaction_status_combo)
-        sample_layout.addRow("凝集程度：", self.agglutination_combo)
-        sample_layout.addRow("粘稠度：", self.viscosity_combo)
-        sample_layout.addRow("取样方式：", self.collect_method_combo)
-        sample_layout.addRow("禁欲时间：", self.abstinence_days_combo)
-        sample_layout.addRow("气味：", self.smell_combo)
-        sample_layout.addRow("检测温度：", self.test_temperature_combo)
-        sample_layout.addRow("取样地点：", self.collect_location_combo)
-        sample_layout.addRow("取样完整：", self.collect_complete_combo)
-        sample_layout.addRow("死精子症：", self.dead_sperm_combo)
-        sample_layout.addRow("精子浓度：", self.sperm_concentration_edit)
-        sample_layout.addRow("精子总数：", self.sperm_total_edit)
-        sample_layout.addRow("前向运动：", self.forward_motility_edit)
-        sample_layout.addRow("总活力：", self.total_motility_edit)
+        self.add_row3(
+            sample_layout,
+            0,
+            ("检查日期", self.test_date_edit),
+            ("取样时间", self.collect_time_edit),
+            ("送检时间", self.receive_time_edit),
+        )
+        self.add_row3(
+            sample_layout,
+            1,
+            ("精液量", self.semen_volume_combo),
+            ("PH值", self.ph_combo),
+            ("外观", self.appearance_combo),
+        )
+        self.add_row3(
+            sample_layout,
+            2,
+            ("颜色", self.color_combo),
+            ("液化时间", self.liquefaction_time_combo),
+            ("液化状态", self.liquefaction_status_combo),
+        )
+        self.add_row3(
+            sample_layout,
+            3,
+            ("凝集程度", self.agglutination_combo),
+            ("黏稠度", self.viscosity_combo),
+            ("禁欲时间", self.abstinence_days_combo),
+        )
+        self.add_row3(
+            sample_layout,
+            4,
+            ("取样方式", self.collect_method_combo),
+            ("气味", self.smell_combo),
+            ("检测温度", self.test_temperature_combo),
+        )
+        self.add_row3(
+            sample_layout,
+            5,
+            ("取样地点", self.collect_location_combo),
+            ("取样完整", self.collect_complete_combo),
+            ("死精子症", self.dead_sperm_combo),
+        )
+        self.add_row4(
+            sample_layout,
+            6,
+            ("精子浓度", self.sperm_concentration_edit),
+            ("精子总数", self.sperm_total_edit),
+            ("前向运动", self.forward_motility_edit),
+            ("总活力", self.total_motility_edit),
+        )
 
-        content_layout.addWidget(sample_group)
+        main_layout.addWidget(self.sample_group)
 
-        # -------------------------
-        # 结论信息
-        # -------------------------
         conclusion_group = QGroupBox("结论")
-        conclusion_layout = QFormLayout(conclusion_group)
+        conclusion_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        conclusion_layout = QHBoxLayout(conclusion_group)
 
         self.conclusion_normal_check = QCheckBox("正常")
         self.conclusion_oligo_check = QCheckBox("少精子症")
@@ -168,36 +205,45 @@ class CaseEditDialog(QDialog):
         self.conclusion_oligoastheno_check = QCheckBox("少弱精子症")
         self.conclusion_necro_check = QCheckBox("坏死精子症")
 
-        conclusion_layout.addRow(self.conclusion_normal_check)
-        conclusion_layout.addRow(self.conclusion_oligo_check)
-        conclusion_layout.addRow(self.conclusion_astheno_check)
-        conclusion_layout.addRow(self.conclusion_oligoastheno_check)
-        conclusion_layout.addRow(self.conclusion_necro_check)
+        conclusion_layout.addWidget(self.conclusion_normal_check)
+        conclusion_layout.addWidget(self.conclusion_oligo_check)
+        conclusion_layout.addWidget(self.conclusion_astheno_check)
+        conclusion_layout.addWidget(self.conclusion_oligoastheno_check)
+        conclusion_layout.addWidget(self.conclusion_necro_check)
+        conclusion_layout.addStretch()
 
-        content_layout.addWidget(conclusion_group)
+        main_layout.addWidget(conclusion_group)
 
-        # -------------------------
-        # 医师信息
-        # -------------------------
+        bottom_layout = QHBoxLayout()
+
         doctor_group = QGroupBox("医师信息")
-        doctor_layout = QFormLayout(doctor_group)
+        doctor_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        doctor_layout = QGridLayout(doctor_group)
+        doctor_layout.setHorizontalSpacing(12)
+        doctor_layout.setVerticalSpacing(8)
 
         self.checker_combo = self.create_combo([""])
         self.reviewer_combo = self.create_combo([""])
         self.doctor_combo = self.create_combo([""])
         self.department_combo = self.create_combo([""])
 
-        doctor_layout.addRow("检测者：", self.checker_combo)
-        doctor_layout.addRow("审核者：", self.reviewer_combo)
-        doctor_layout.addRow("送检医生：", self.doctor_combo)
-        doctor_layout.addRow("送检科室：", self.department_combo)
+        self.add_row2(
+            doctor_layout,
+            0,
+            ("检测者", self.checker_combo),
+            ("审核者", self.reviewer_combo),
+        )
+        self.add_row2(
+            doctor_layout,
+            1,
+            ("送检医生", self.doctor_combo),
+            ("送检科室", self.department_combo),
+        )
 
-        content_layout.addWidget(doctor_group)
+        bottom_layout.addWidget(doctor_group, 1)
 
-        # -------------------------
-        # 备注
-        # -------------------------
         remark_group = QGroupBox("备注")
+        remark_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         remark_layout = QVBoxLayout(remark_group)
 
         self.remark_edit = QTextEdit()
@@ -205,14 +251,11 @@ class CaseEditDialog(QDialog):
         self.remark_edit.setMaximumHeight(90)
 
         remark_layout.addWidget(self.remark_edit)
-        content_layout.addWidget(remark_group)
+        bottom_layout.addWidget(remark_group, 1)
 
-        scroll_area.setWidget(content_widget)
-        main_layout.addWidget(scroll_area)
+        main_layout.addLayout(bottom_layout)
 
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-        )
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.button_box.button(QDialogButtonBox.Ok).setText("提交")
         self.button_box.button(QDialogButtonBox.Cancel).setText("取消")
         self.button_box.accepted.connect(self.on_accept)
@@ -220,17 +263,106 @@ class CaseEditDialog(QDialog):
 
         main_layout.addWidget(self.button_box)
 
+        self.set_common_style()
+
+    def set_common_style(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f7f9fc;
+                font-family: Microsoft YaHei;
+                font-size: 13px;
+            }
+            QGroupBox {
+                border: 1px solid #d9e2ef;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 12px;
+                background-color: #ffffff;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+                color: #1f4e79;
+            }
+            QLabel {
+                color: #333333;
+            }
+            QLineEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit {
+                min-height: 24px;
+                border: 1px solid #cfd8e3;
+                border-radius: 4px;
+                padding-left: 4px;
+                background-color: #ffffff;
+            }
+            QTextEdit {
+                border: 1px solid #cfd8e3;
+                border-radius: 4px;
+                background-color: #ffffff;
+            }
+            QPushButton {
+                min-width: 78px;
+                min-height: 28px;
+            }
+        """)
+
     def create_combo(self, items):
         combo = QComboBox()
         combo.setEditable(True)
         combo.addItems(items)
         return combo
 
+    def add_row2(self, layout, row, item1, item2):
+        label1, widget1 = item1
+        label2, widget2 = item2
+
+        layout.addWidget(QLabel(f"{label1}："), row, 0)
+        layout.addWidget(widget1, row, 1)
+        layout.addWidget(QLabel(f"{label2}："), row, 2)
+        layout.addWidget(widget2, row, 3)
+
+    def add_row3(self, layout, row, item1, item2, item3):
+        label1, widget1 = item1
+        label2, widget2 = item2
+        label3, widget3 = item3
+
+        layout.addWidget(QLabel(f"{label1}："), row, 0)
+        layout.addWidget(widget1, row, 1)
+        layout.addWidget(QLabel(f"{label2}："), row, 2)
+        layout.addWidget(widget2, row, 3)
+        layout.addWidget(QLabel(f"{label3}："), row, 4)
+        layout.addWidget(widget3, row, 5)
+
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
+        layout.setColumnStretch(5, 1)
+
+    def add_row4(self, layout, row, item1, item2, item3, item4):
+        label1, widget1 = item1
+        label2, widget2 = item2
+        label3, widget3 = item3
+        label4, widget4 = item4
+
+        layout.addWidget(QLabel(f"{label1}："), row, 0)
+        layout.addWidget(widget1, row, 1)
+        layout.addWidget(QLabel(f"{label2}："), row, 2)
+        layout.addWidget(widget2, row, 3)
+        layout.addWidget(QLabel(f"{label3}："), row, 4)
+        layout.addWidget(widget3, row, 5)
+        layout.addWidget(QLabel(f"{label4}："), row, 6)
+        layout.addWidget(widget4, row, 7)
+
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
+        layout.setColumnStretch(5, 1)
+        layout.setColumnStretch(7, 1)
+
     def load_data(self):
         if not self.case_data:
             now_text = datetime.now().strftime("%Y%m%d%H%M%S")
             self.case_no_edit.setText(f"CASE{now_text}")
             self.sample_no_edit.setText(datetime.now().strftime("%Y%m%d001"))
+            self.sex_combo.setCurrentText("男")
             return
 
         self.case_no_edit.setText(str(self.case_data.get("case_no", "")))
@@ -389,3 +521,8 @@ class CaseEditDialog(QDialog):
             return True
 
         return False
+
+
+def QtAlignCenter():
+    from PySide6.QtCore import Qt
+    return Qt.AlignCenter
