@@ -33,6 +33,8 @@ class AnalysisWindow(QWidget):
 
         self.database = database
         self.config = ConfigManager()
+        self.config.ensure_default_config()
+
         self.current_case = None
         self.imported_images = []
         self.cp_worker = None
@@ -69,27 +71,27 @@ class AnalysisWindow(QWidget):
         row1_layout = QHBoxLayout()
 
         self.protein_combo = QComboBox()
-        self.protein_combo.addItems([
-            "protein1",
-            "protein2",
-            "protein3",
-            "protein4",
-            "protein5",
-            "pna",
-        ])
+        self.load_protein_combo()
 
         self.protein_part_label = QLabel("表达部位：-")
         self.pipeline_label = QLabel("Pipeline：-")
+        self.protein_status_label = QLabel("已分析：-")
+        self.protein_status_label.setStyleSheet("color: #666666;")
 
-        self.protein_combo.currentTextChanged.connect(self.on_protein_changed)
+        self.btn_next_protein = QPushButton("下一个未分析")
+
+        self.protein_combo.currentIndexChanged.connect(self.on_protein_changed)
+        self.btn_next_protein.clicked.connect(self.select_next_unanalyzed_protein)
 
         row1_layout.addWidget(QLabel("蛋白名称："))
         row1_layout.addWidget(self.protein_combo)
         row1_layout.addWidget(self.protein_part_label)
-        row1_layout.addWidget(self.pipeline_label)
+        row1_layout.addWidget(self.pipeline_label, 1)
+        row1_layout.addWidget(self.btn_next_protein)
         row1_layout.addStretch()
 
         operation_layout.addLayout(row1_layout)
+        operation_layout.addWidget(self.protein_status_label)
 
         row2_layout = QHBoxLayout()
 
@@ -148,7 +150,123 @@ class AnalysisWindow(QWidget):
         self.btn_import.clicked.connect(self.import_images)
         self.btn_run_cp.clicked.connect(self.run_cellprofiler)
 
-        self.on_protein_changed(self.protein_combo.currentText())
+        self.on_protein_changed()
+
+    # -------------------------
+    # 蛋白配置
+    # -------------------------
+
+    def load_protein_combo(self):
+        self.protein_combo.clear()
+
+        protein_items = self.config.get_protein_items()
+
+        for item in protein_items:
+            key = item.get("key", "")
+            name = item.get("name", key)
+            part = item.get("part", "")
+
+            if part:
+                text = f"{name}（{part}）"
+            else:
+                text = name
+
+            self.protein_combo.addItem(text, key)
+
+    def get_current_protein_key(self):
+        key = self.protein_combo.currentData()
+
+        if key:
+            return str(key)
+
+        return self.config.normalize_protein_key(self.protein_combo.currentText())
+
+    def get_current_protein_name(self):
+        key = self.get_current_protein_key()
+        return self.config.get_protein_display_name(key)
+
+    def on_protein_changed(self, *args):
+        protein_key = self.get_current_protein_key()
+
+        if not protein_key:
+            return
+
+        protein_name = self.config.get_protein_display_name(protein_key)
+        protein_part = self.config.get_protein_part(protein_key) or "未配置"
+        pipeline_path = self.config.get_pipeline_by_protein(protein_key)
+
+        self.protein_part_label.setText(f"表达部位：{protein_part}")
+        self.pipeline_label.setText(f"Pipeline：{pipeline_path}")
+
+        self.append_log(f"当前选择蛋白：{protein_name}，内部编号：{protein_key}")
+
+    def get_analyzed_protein_name_set(self):
+        if not self.current_case:
+            return set()
+
+        case_id = self.current_case.get("id")
+
+        if not case_id:
+            return set()
+
+        try:
+            rows = self.database.get_protein_analysis_by_case(case_id)
+        except Exception:
+            return set()
+
+        name_set = set()
+
+        for row in rows:
+            name = str(row.get("protein_name", "") or "").strip()
+            if name:
+                name_set.add(name)
+
+        return name_set
+
+    def refresh_protein_status(self):
+        if not self.current_case:
+            self.protein_status_label.setText("已分析：-")
+            return
+
+        analyzed_names = self.get_analyzed_protein_name_set()
+
+        status_items = []
+
+        for item in self.config.get_protein_items():
+            key = item.get("key", "")
+            name = item.get("name", key)
+
+            if name in analyzed_names or key in analyzed_names:
+                status_items.append(f"{name} √")
+            else:
+                status_items.append(f"{name} -")
+
+        self.protein_status_label.setText("已分析：" + "　".join(status_items))
+
+    def select_next_unanalyzed_protein(self):
+        if self.protein_combo.count() <= 0:
+            return
+
+        analyzed_names = self.get_analyzed_protein_name_set()
+
+        current_index = self.protein_combo.currentIndex()
+        total = self.protein_combo.count()
+
+        for offset in range(1, total + 1):
+            index = (current_index + offset) % total
+            key = str(self.protein_combo.itemData(index))
+            name = self.config.get_protein_display_name(key)
+
+            if name not in analyzed_names and key not in analyzed_names:
+                self.protein_combo.setCurrentIndex(index)
+                self.append_log(f"已切换到下一个未分析蛋白：{name}")
+                return
+
+        QMessageBox.information(self, "提示", "当前病例所有配置蛋白均已有分析结果。")
+
+    # -------------------------
+    # 病例
+    # -------------------------
 
     def set_case(self, case_data: dict):
         self.current_case = case_data
@@ -158,19 +276,15 @@ class AnalysisWindow(QWidget):
         self.sample_no_label.setText(str(case_data.get("sample_no", "")))
         self.test_date_label.setText(str(case_data.get("test_date", "")))
 
+        self.refresh_protein_status()
+
         self.append_log(
             f"已载入病例：{case_data.get('case_no', '')} - {case_data.get('patient_name', '')}"
         )
 
-    def on_protein_changed(self, protein_name: str):
-        protein_part = self.config.get_protein_part(protein_name)
-        if not protein_part:
-            protein_part = "未配置"
-
-        pipeline_path = self.config.get_pipeline_by_protein(protein_name)
-
-        self.protein_part_label.setText(f"表达部位：{protein_part}")
-        self.pipeline_label.setText(f"Pipeline：{pipeline_path}")
+    # -------------------------
+    # 图片导入
+    # -------------------------
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(
@@ -189,11 +303,13 @@ class AnalysisWindow(QWidget):
             return
 
         source_folder = self.folder_edit.text().strip()
+
         if not source_folder:
             QMessageBox.information(self, "提示", "请先选择图片文件夹。")
             return
 
-        protein_name = self.protein_combo.currentText()
+        protein_key = self.get_current_protein_key()
+        protein_name = self.get_current_protein_name()
         case_no = str(self.current_case.get("case_no", "")).strip()
 
         if not case_no:
@@ -201,7 +317,8 @@ class AnalysisWindow(QWidget):
             return
 
         workspace_root = self.config.get_workspace_root()
-        target_folder = workspace_root / case_no / "raw_images" / protein_name
+        target_folder = workspace_root / case_no / "raw_images" / protein_key
+
         self.current_raw_image_folder = target_folder
 
         try:
@@ -209,7 +326,7 @@ class AnalysisWindow(QWidget):
             self.imported_images = importer.copy_to_workspace(
                 source_folder=source_folder,
                 target_folder=str(target_folder),
-                protein_name=protein_name,
+                protein_name=protein_key,
             )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导入图片失败：\n{e}")
@@ -220,7 +337,9 @@ class AnalysisWindow(QWidget):
         complete_count = sum(1 for item in self.imported_images if item["status"] == "完整")
         total_count = len(self.imported_images)
 
-        self.append_log(f"图片导入完成：共识别 {total_count} 个视野，完整视野 {complete_count} 个。")
+        self.append_log(
+            f"{protein_name} 图片导入完成：共识别 {total_count} 个视野，完整视野 {complete_count} 个。"
+        )
         self.append_log(f"图片已复制到：{target_folder}")
 
         self.btn_run_cp.setEnabled(complete_count > 0)
@@ -228,7 +347,10 @@ class AnalysisWindow(QWidget):
         QMessageBox.information(
             self,
             "导入完成",
-            f"共识别 {total_count} 个视野。\n完整视野：{complete_count} 个。\n\n已复制到：\n{target_folder}"
+            f"蛋白：{protein_name}\n"
+            f"共识别 {total_count} 个视野。\n"
+            f"完整视野：{complete_count} 个。\n\n"
+            f"已复制到：\n{target_folder}"
         )
 
     def refresh_table(self, image_items):
@@ -256,6 +378,10 @@ class AnalysisWindow(QWidget):
 
                 self.table.setItem(row_index, col_index, table_item)
 
+    # -------------------------
+    # 后台分析
+    # -------------------------
+
     def run_cellprofiler(self):
         if not self.current_case:
             QMessageBox.information(self, "提示", "请先选择病例。")
@@ -274,13 +400,14 @@ class AnalysisWindow(QWidget):
             QMessageBox.warning(self, "提示", "没有完整的 R/G 视野，无法运行分析。")
             return
 
-        protein_name = self.protein_combo.currentText()
+        protein_key = self.get_current_protein_key()
+        protein_name = self.get_current_protein_name()
         case_no = str(self.current_case.get("case_no", "")).strip()
 
         source_project_dir = self.config.get_source_project_dir().resolve()
         venv_activate = self.config.get_venv_activate().resolve()
         module_name = self.config.get_module_name()
-        pipeline_file = self.config.get_pipeline_by_protein(protein_name).resolve()
+        pipeline_file = self.config.get_pipeline_by_protein(protein_key).resolve()
         plugins_directory = self.config.get_plugins_directory().resolve()
         log_file = self.config.get_log_file().resolve()
         powershell_exe = self.config.get_powershell_exe()
@@ -318,8 +445,8 @@ class AnalysisWindow(QWidget):
             return
 
         workspace_root = self.config.get_workspace_root()
-        cp_input_dir = workspace_root / case_no / "cp_input" / protein_name
-        cp_output_dir = workspace_root / case_no / "cp_output" / protein_name
+        cp_input_dir = workspace_root / case_no / "cp_input" / protein_key
+        cp_output_dir = workspace_root / case_no / "cp_output" / protein_key
 
         cp_input_dir = cp_input_dir.resolve()
         cp_output_dir = cp_output_dir.resolve()
@@ -333,7 +460,7 @@ class AnalysisWindow(QWidget):
         cp_output_dir.mkdir(parents=True, exist_ok=True)
         self.current_cp_output_dir = cp_output_dir
 
-        self.append_log("准备以源码环境方式运行分析。")
+        self.append_log(f"准备以源码环境方式运行分析：{protein_name}")
         self.append_log(f"源码目录：{source_project_dir}")
         self.append_log(f"虚拟环境：{venv_activate}")
         self.append_log(f"模块名称：{module_name}")
@@ -407,18 +534,29 @@ class AnalysisWindow(QWidget):
             else:
                 self.append_log(f"结果入库失败：{save_message}")
 
+            self.refresh_protein_status()
+
             QMessageBox.information(
                 self,
                 "分析完成",
-                f"分析完成。\n用时：{elapsed:.2f} 秒\n\n输出目录：\n{self.current_cp_output_dir}\n\n{save_message}"
+                f"分析完成。\n用时：{elapsed:.2f} 秒\n\n"
+                f"输出目录：\n{self.current_cp_output_dir}\n\n{save_message}"
             )
+
             self.append_log(f"输出目录：{self.current_cp_output_dir}")
+
+            self.select_next_unanalyzed_protein()
+
         else:
             QMessageBox.critical(
                 self,
                 "分析失败",
                 f"分析失败。\n用时：{elapsed:.2f} 秒\n\n请查看日志。"
             )
+
+    # -------------------------
+    # 入库
+    # -------------------------
 
     def save_analysis_result_to_database(self):
         if not self.current_case:
@@ -428,11 +566,13 @@ class AnalysisWindow(QWidget):
             return False, "当前输出目录为空。"
 
         case_id = self.current_case.get("id")
+
         if not case_id:
             return False, "当前病例缺少数据库 ID。"
 
-        protein_name = self.protein_combo.currentText()
-        protein_part = self.config.get_protein_part(protein_name)
+        protein_key = self.get_current_protein_key()
+        protein_name = self.get_current_protein_name()
+        protein_part = self.config.get_protein_part(protein_key)
 
         parser = ResultParser(str(self.current_cp_output_dir))
         summary_result = parser.parse_image_summary()
@@ -480,7 +620,7 @@ class AnalysisWindow(QWidget):
             return False, f"保存数据库失败：{e}"
 
         return True, (
-            "结果已保存到数据库："
+            f"{protein_name} 结果已保存到数据库："
             f"视野数 {total.get('field_count', 0)}，"
             f"精子总数 {total.get('sperm_count', 0)}，"
             f"阳性/共定位数 {total.get('positive_count', 0)}，"
@@ -488,10 +628,15 @@ class AnalysisWindow(QWidget):
             f"荧光强度 {total.get('mean_intensity', 0)}。"
         )
 
+    # -------------------------
+    # 通用
+    # -------------------------
+
     def set_running_state(self, running: bool):
         self.btn_select_folder.setEnabled(not running)
         self.btn_import.setEnabled(not running)
         self.btn_run_cp.setEnabled(not running)
+        self.btn_next_protein.setEnabled(not running)
         self.protein_combo.setEnabled(not running)
 
         if running:

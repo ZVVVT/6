@@ -24,13 +24,11 @@ class ConfigManager:
     def set(self, section: str, key: str, value: str):
         if not self.config.has_section(section):
             self.config.add_section(section)
-
         self.config.set(section, key, str(value))
 
     def get_section_dict(self, section: str) -> dict:
         if not self.config.has_section(section):
             return {}
-
         return dict(self.config.items(section))
 
     # -------------------------
@@ -38,16 +36,13 @@ class ConfigManager:
     # -------------------------
 
     def get_workspace_root(self) -> Path:
-        root_dir = self.get("Workspace", "root_dir", "workspace/cases")
-        return Path(root_dir)
+        return Path(self.get("Workspace", "root_dir", "workspace/cases"))
 
     def get_database_path(self) -> Path:
-        database = self.get("Workspace", "database", "data/analysis.db")
-        return Path(database)
+        return Path(self.get("Workspace", "database", "data/analysis.db"))
 
     def get_report_dir(self) -> Path:
-        report_dir = self.get("Workspace", "report_dir", "reports")
-        return Path(report_dir)
+        return Path(self.get("Workspace", "report_dir", "reports"))
 
     # -------------------------
     # Image rule
@@ -66,11 +61,73 @@ class ConfigManager:
     # Protein
     # -------------------------
 
-    def get_protein_part(self, protein_name: str) -> str:
-        return self.get("Protein", protein_name.lower(), "")
+    def get_protein_keys(self) -> list:
+        keys_text = self.get("ProteinOrder", "keys", "")
 
-    def get_pipeline_by_protein(self, protein_name: str) -> Path:
-        protein_part = self.get_protein_part(protein_name)
+        if keys_text:
+            keys = [item.strip() for item in keys_text.split(",") if item.strip()]
+        else:
+            keys = ["protein1", "protein2", "protein3", "protein4", "protein5", "pna"]
+
+        valid_keys = []
+        for key in keys:
+            if self.get("Protein", key, ""):
+                valid_keys.append(key)
+
+        if not valid_keys:
+            valid_keys = ["protein1", "protein2", "protein3", "protein4", "protein5", "pna"]
+
+        return valid_keys
+
+    def normalize_protein_key(self, protein_name_or_key: str) -> str:
+        value = str(protein_name_or_key or "").strip()
+
+        if not value:
+            return ""
+
+        if self.get("Protein", value, ""):
+            return value
+
+        for key in self.get_protein_keys():
+            display_name = self.get_protein_display_name(key)
+            if value == display_name:
+                return key
+
+        return value.lower()
+
+    def get_protein_display_name(self, protein_key: str) -> str:
+        protein_key = str(protein_key or "").strip()
+        return self.get("ProteinNames", protein_key, protein_key)
+
+    def get_protein_part(self, protein_name_or_key: str) -> str:
+        protein_key = self.normalize_protein_key(protein_name_or_key)
+        return self.get("Protein", protein_key, "")
+
+    def get_protein_items(self) -> list:
+        items = []
+
+        for key in self.get_protein_keys():
+            display_name = self.get_protein_display_name(key)
+            part = self.get_protein_part(key)
+            pipeline = self.get_pipeline_by_protein(key)
+
+            items.append({
+                "key": key,
+                "name": display_name,
+                "part": part,
+                "pipeline": str(pipeline),
+            })
+
+        return items
+
+    def get_pipeline_by_protein(self, protein_name_or_key: str) -> Path:
+        protein_key = self.normalize_protein_key(protein_name_or_key)
+
+        custom_pipeline = self.get("ProteinPipelines", protein_key, "").strip()
+        if custom_pipeline:
+            return Path(custom_pipeline)
+
+        protein_part = self.get_protein_part(protein_key)
 
         if protein_part == "tail":
             pipeline = self.get("CellProfiler", "tail_pipeline", "")
@@ -80,6 +137,22 @@ class ConfigManager:
             pipeline = self.get("CellProfiler", "head_pipeline", "")
 
         return Path(pipeline)
+
+    def get_next_protein_key(self, current_key: str) -> str:
+        keys = self.get_protein_keys()
+
+        if not keys:
+            return ""
+
+        current_key = self.normalize_protein_key(current_key)
+
+        if current_key not in keys:
+            return keys[0]
+
+        current_index = keys.index(current_key)
+        next_index = (current_index + 1) % len(keys)
+
+        return keys[next_index]
 
     # -------------------------
     # MvImageID / CellProfiler source mode
@@ -158,6 +231,25 @@ class ConfigManager:
                 "protein4": "head",
                 "protein5": "head",
                 "pna": "pna",
+            },
+            "ProteinOrder": {
+                "keys": "protein1,protein2,protein3,protein4,protein5,pna",
+            },
+            "ProteinNames": {
+                "protein1": "HEL-1",
+                "protein2": "HEL-2",
+                "protein3": "HEL-3",
+                "protein4": "HEL-4",
+                "protein5": "HEL-5",
+                "pna": "PNA",
+            },
+            "ProteinPipelines": {
+                "protein1": "",
+                "protein2": "",
+                "protein3": "",
+                "protein4": "",
+                "protein5": "",
+                "pna": "",
             },
             "Report": {
                 "logo_path": r"assets\logo.png",
