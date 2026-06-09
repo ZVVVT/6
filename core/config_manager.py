@@ -56,14 +56,14 @@ class ConfigManager:
         if keys_text:
             keys = [item.strip() for item in keys_text.split(",") if item.strip()]
         else:
-            keys = ["protein1", "protein2", "protein3", "protein4", "protein5", "pna"]
+            keys = ["protein1", "protein2", "protein3", "protein4", "protein5"]
 
         valid_keys = []
         for key in keys:
             if self.get("Protein", key, ""):
                 valid_keys.append(key)
 
-        return valid_keys or ["protein1", "protein2", "protein3", "protein4", "protein5", "pna"]
+        return valid_keys or ["protein1", "protein2", "protein3", "protein4", "protein5"]
 
     def normalize_protein_key(self, protein_name_or_key: str) -> str:
         value = str(protein_name_or_key or "").strip()
@@ -99,8 +99,6 @@ class ConfigManager:
 
         if protein_part == "tail":
             pipeline = self.get("CellProfiler", "tail_pipeline", "")
-        elif protein_part == "pna":
-            pipeline = self.get("CellProfiler", "pna_pipeline", "")
         else:
             pipeline = self.get("CellProfiler", "head_pipeline", "")
 
@@ -168,7 +166,6 @@ class ConfigManager:
                 "module_name": "MvImageID",
                 "head_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
                 "tail_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
-                "pna_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
                 "plugins_directory": r"F:\MvImageID\C-plugins\active_plugins",
                 "log_file": r"F:\MvImageID\run.log",
             },
@@ -190,10 +187,9 @@ class ConfigManager:
                 "protein3": "tail",
                 "protein4": "head",
                 "protein5": "head",
-                "pna": "pna",
             },
             "ProteinOrder": {
-                "keys": "protein1,protein2,protein3,protein4,protein5,pna",
+                "keys": "protein1,protein2,protein3,protein4,protein5",
             },
             "ProteinNames": {
                 "protein1": "HEL-1",
@@ -201,7 +197,6 @@ class ConfigManager:
                 "protein3": "HEL-3",
                 "protein4": "HEL-4",
                 "protein5": "HEL-5",
-                "pna": "PNA",
             },
             "ProteinPipelines": {
                 "protein1": "",
@@ -209,7 +204,6 @@ class ConfigManager:
                 "protein3": "",
                 "protein4": "",
                 "protein5": "",
-                "pna": "",
             },
             "ProteinReferenceIntensityMin": {
                 "protein1": "26.0",
@@ -217,7 +211,6 @@ class ConfigManager:
                 "protein3": "26.0",
                 "protein4": "26.0",
                 "protein5": "26.0",
-                "pna": "0",
             },
             "ProteinReferenceRateMin": {
                 "protein1": "82.88",
@@ -225,7 +218,6 @@ class ConfigManager:
                 "protein3": "82.88",
                 "protein4": "82.88",
                 "protein5": "82.88",
-                "pna": "0",
             },
             "Report": {
                 "logo_path": r"assets\logo.png",

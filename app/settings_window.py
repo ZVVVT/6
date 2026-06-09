@@ -89,7 +89,6 @@ class SettingsWindow(QWidget):
         self.module_name_edit = QLineEdit()
         self.head_pipeline_edit = QLineEdit()
         self.tail_pipeline_edit = QLineEdit()
-        self.pna_pipeline_edit = QLineEdit()
         self.plugins_directory_edit = QLineEdit()
         self.log_file_edit = QLineEdit()
 
@@ -99,7 +98,6 @@ class SettingsWindow(QWidget):
         form.addRow("模块名称：", self.module_name_edit)
         form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
         form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
-        form.addRow("PNA Pipeline：", self._with_button(self.pna_pipeline_edit, "选择", self.select_pna_pipeline))
         form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
         form.addRow("日志文件：", self._with_button(self.log_file_edit, "选择", self.select_log_file))
 
@@ -160,7 +158,7 @@ class SettingsWindow(QWidget):
 
         tips = QLabel(
             "说明：内部编号用于工作目录和配置索引；显示名称用于界面和报告。"
-            "自定义 Pipeline 为空时，会按表达部位自动使用头部、尾部或 PNA Pipeline。"
+            "自定义 Pipeline 为空时，会按表达部位自动使用头部、尾部 Pipeline。"
         )
         tips.setWordWrap(True)
         tips.setStyleSheet("color: #666666;")
@@ -238,7 +236,6 @@ class SettingsWindow(QWidget):
         self.module_name_edit.setText(self.config.get("CellProfiler", "module_name", "MvImageID"))
         self.head_pipeline_edit.setText(self.config.get("CellProfiler", "head_pipeline", ""))
         self.tail_pipeline_edit.setText(self.config.get("CellProfiler", "tail_pipeline", ""))
-        self.pna_pipeline_edit.setText(self.config.get("CellProfiler", "pna_pipeline", ""))
         self.plugins_directory_edit.setText(self.config.get("CellProfiler", "plugins_directory", ""))
         self.log_file_edit.setText(self.config.get("CellProfiler", "log_file", ""))
 
@@ -265,7 +262,6 @@ class SettingsWindow(QWidget):
         self.config.set("CellProfiler", "module_name", self.module_name_edit.text().strip())
         self.config.set("CellProfiler", "head_pipeline", self.head_pipeline_edit.text().strip())
         self.config.set("CellProfiler", "tail_pipeline", self.tail_pipeline_edit.text().strip())
-        self.config.set("CellProfiler", "pna_pipeline", self.pna_pipeline_edit.text().strip())
         self.config.set("CellProfiler", "plugins_directory", self.plugins_directory_edit.text().strip())
         self.config.set("CellProfiler", "log_file", self.log_file_edit.text().strip())
 
@@ -333,9 +329,9 @@ class SettingsWindow(QWidget):
         self.protein_table.setItem(row, 1, QTableWidgetItem(str(name)))
 
         part_combo = QComboBox()
-        part_combo.addItems(["head", "tail", "pna"])
+        part_combo.addItems(["head", "tail"])
 
-        if part not in ["head", "tail", "pna"]:
+        if part not in ["head", "tail"]:
             part = "head"
 
         part_combo.setCurrentText(part)
@@ -393,7 +389,6 @@ class SettingsWindow(QWidget):
             ("protein3", "HEL-3", "tail", "", "26.0", "82.88"),
             ("protein4", "HEL-4", "head", "", "26.0", "82.88"),
             ("protein5", "HEL-5", "head", "", "26.0", "82.88"),
-            ("pna", "PNA", "pna", "", "0", "0"),
         ]
 
         for item in defaults:
@@ -448,8 +443,8 @@ class SettingsWindow(QWidget):
             if not name:
                 return False, f"第 {row + 1} 行显示名称不能为空。"
 
-            if part not in ["head", "tail", "pna"]:
-                return False, f"第 {row + 1} 行表达部位必须是 head、tail 或 pna。"
+            if part not in ["head", "tail"]:
+                return False, f"第 {row + 1} 行表达部位必须是 head 或 tail。"
 
             try:
                 float(intensity_min)
@@ -493,7 +488,6 @@ class SettingsWindow(QWidget):
             ("虚拟环境 Activate.ps1", self.venv_activate_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),
-            ("PNA Pipeline", self.pna_pipeline_edit.text().strip(), "file"),
             ("插件目录", self.plugins_directory_edit.text().strip(), "dir"),
             ("病例工作目录", self.workspace_root_edit.text().strip(), "dir_create"),
             ("数据库文件", self.database_edit.text().strip(), "parent_create"),
@@ -611,16 +605,6 @@ class SettingsWindow(QWidget):
         )
         if path:
             self.tail_pipeline_edit.setText(path)
-
-    def select_pna_pipeline(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 PNA Pipeline",
-            "",
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
-        )
-        if path:
-            self.pna_pipeline_edit.setText(path)
 
     def select_plugins_directory(self):
         path = QFileDialog.getExistingDirectory(self, "选择插件目录")

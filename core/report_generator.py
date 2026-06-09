@@ -4,7 +4,9 @@ from pathlib import Path
 from datetime import datetime
 
 from PIL import Image as PILImage
+
 from core.config_manager import ConfigManager
+
 
 # ---------------------------------------------------------
 # Python 3.8 兼容补丁
@@ -34,6 +36,7 @@ def _patch_hashlib_for_python38():
             def wrapper(*args, **kwargs):
                 kwargs.pop("usedforsecurity", None)
                 return func(*args, **kwargs)
+
             return wrapper
 
         setattr(hashlib, name, make_wrapper(original_func))
@@ -53,34 +56,38 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 class ReportGenerator:
     """
-    报告模板 V2：
-    参考 ExportToPDF_蛋白.py 的版式，改成新软件独立生成 PDF。
-    数据来源：
-    1. cases 表：病例基本信息
-    2. protein_analysis 表：蛋白汇总结果
-    3. field_results 表：视野明细
-    4. cp_output 目录：代表性 Overlay 图片
+    报告生成器。
+
+    当前版本业务逻辑：
+    1. 固定生成 HEL-1 到 HEL-5 五个分子标志物项目。
+    2. 报告中的表格和图片均按 HEL-1 到 HEL-5 固定槽位显示。
+    3. 某个项目没有分析结果时，显示“未检测”。
+    4. 某个项目有结果时，数据和图片只出现在对应项目位置。
+    5. 参考值从 config.ini 读取。
     """
 
     def __init__(self, database, report_dir: str = "reports", logo_path: str = ""):
         self.database = database
 
-        self.report_dir = Path(report_dir)
+        self.config = ConfigManager()
+        self.config.ensure_default_config()
+
+        if report_dir:
+            self.report_dir = Path(report_dir)
+        else:
+            self.report_dir = self.config.get_report_dir()
+
         self.report_dir.mkdir(parents=True, exist_ok=True)
 
-        self.logo_path = Path(logo_path) if logo_path else None
+        if logo_path:
+            self.logo_path = Path(logo_path)
+        else:
+            self.logo_path = self.config.get_logo_path()
 
         self.temp_image_dir = self.report_dir / "_temp_images"
         self.temp_image_dir.mkdir(parents=True, exist_ok=True)
 
         self.font_name = self._register_chinese_font()
-
-        # 当前先固定参考下限，后续可以放到系统设置里
-        self.config = ConfigManager()
-        self.config.ensure_default_config()
-
-        self.default_intensity_min = 26.0
-        self.default_rate_min = 82.88
 
     # ------------------------------------------------------------------
     # 字体
@@ -115,6 +122,9 @@ class ReportGenerator:
     # ------------------------------------------------------------------
 
     def generate_case_report(self, case_id: int) -> str:
+        self.config.load()
+        self.config.ensure_default_config()
+
         case_data = self.database.get_case(case_id)
 
         if not case_data:
@@ -180,7 +190,7 @@ class ReportGenerator:
         c.setFillColor(blue)
         c.drawCentredString(W / 2, y, "人类精液质量检查报告")
 
-        # 顶部三项
+        # 顶部基础信息
         y -= gap_big
         c.setFillColor(black)
         c.setFont(self.font_name, 12)
@@ -258,7 +268,7 @@ class ReportGenerator:
         y -= gap_line
         self._draw_label_value(c, col1, y, "总活力：", meta.get("总活力", ""))
 
-        # 结论复选框
+        # 结论
         y -= gap_big
         c.setFont(self.font_name, 11)
         c.setFillColor(black)
@@ -279,120 +289,127 @@ class ReportGenerator:
             x += 30 * mm
 
         # 精子质量分子评价
-        y -= gap_big
-        c.setFont(self.font_name, 13)
-        c.setFillColor(blue)
-        c.drawString(left, y, "精子质量分子评价")
+        marker_slots = self._build_marker_slots(analysis_rows)
 
-        marker_rows = self._build_marker_rows(analysis_rows)
+        if marker_slots:
+            y -= gap_big
+            c.setFont(self.font_name, 13)
+            c.setFillColor(blue)
+            c.drawString(left, y, "精子质量分子评价")
 
-        y -= gap_line
-        c.setFillColor(black)
-        c.setFont(self.font_name, 12)
-
-        headers = ["分子标志物", "荧光强度", "参考值范围", "标定率", "参考值范围"]
-        cols_x = [
-            left + 10 * mm,
-            left + 45 * mm,
-            left + 80 * mm,
-            left + 120 * mm,
-            left + 152 * mm,
-        ]
-
-        for hx, htxt in zip(cols_x, headers):
-            c.drawCentredString(hx, y, htxt)
-
-        c.setFont(self.font_name, 12)
-
-        if not marker_rows:
             y -= gap_line
-            for cx, cell in zip(cols_x, ["-", "-", "-", "-", "-"]):
-                c.drawCentredString(cx, y, str(cell))
-        else:
-            for marker in marker_rows[:5]:
+            c.setFillColor(black)
+            c.setFont(self.font_name, 12)
+
+            headers = ["分子标志物", "荧光强度", "参考值范围", "标定率", "参考值范围"]
+            cols_x = [
+                left + 10 * mm,
+                left + 45 * mm,
+                left + 80 * mm,
+                left + 120 * mm,
+                left + 152 * mm,
+            ]
+
+            for hx, htxt in zip(cols_x, headers):
+                c.drawCentredString(hx, y, htxt)
+
+            c.setFont(self.font_name, 11)
+
+            for slot in marker_slots:
                 y -= gap_line
 
+                intensity_text = self._fmt_with_arrow(
+                    slot.get("intensity"),
+                    slot.get("intensity_min"),
+                    nd=0,
+                    unit="",
+                )
+
+                rate_text = self._fmt_with_arrow(
+                    slot.get("rate"),
+                    slot.get("rate_min"),
+                    nd=2,
+                    unit="%",
+                )
+
                 row = [
-                    marker.get("name", ""),
-                    self._fmt_with_arrow(
-                        marker.get("intensity"),
-                        marker.get("intensity_min"),
-                        nd=0,
-                        unit="",
-                    ),
-                    self._fmt_ref(marker.get("intensity_min")),
-                    self._fmt_with_arrow(
-                        marker.get("rate"),
-                        marker.get("rate_min"),
-                        nd=2,
-                        unit="%",
-                    ),
-                    self._fmt_ref(marker.get("rate_min")),
+                    slot.get("name", ""),
+                    intensity_text,
+                    self._fmt_ref(slot.get("intensity_min")),
+                    rate_text,
+                    self._fmt_ref(slot.get("rate_min")),
                 ]
 
                 for cx, cell in zip(cols_x, row):
                     c.drawCentredString(cx, y, str(cell))
 
-        # 分子标志物荧光图
-        y -= gap_big
-        c.setFont(self.font_name, 13)
-        c.setFillColor(blue)
-        c.drawString(left, y, "分子标志物荧光图")
+            # 分子标志物荧光图
+            # 注意：表格只显示已检测项目；但荧光图区域固定显示 HEL-1 到 HEL-5 五个槽位。
+            image_slots = self._build_marker_image_slots(analysis_rows)
 
-        y -= gap_line
-        c.setFillColor(black)
-        c.setFont(self.font_name, 12)
+            if image_slots:
+                y -= gap_big
+                c.setFont(self.font_name, 13)
+                c.setFillColor(blue)
+                c.drawString(left, y, "分子标志物荧光图")
 
-        box_w = 30 * mm
-        gap = 5 * mm
-        total_w = box_w * 5 + gap * 4
-        start_x = (W - total_w) / 2
+                y -= gap_line
+                c.setFillColor(black)
+                c.setFont(self.font_name, 12)
 
-        labels_y = y
-        img_top_y = y - 6 * mm
-        img_h = 34 * mm
-        img_w = 34 * mm
+                box_w = 30 * mm
+                gap = 5 * mm
+                total_w = box_w * 5 + gap * 4
+                start_x = (W - total_w) / 2
 
-        # 固定 5 个蛋白槽位：HEL-1 到 HEL-5
-        # 有结果就放到对应槽位，没有结果就只显示标题，不放图片。
-        marker_slots = self._build_marker_image_slots(analysis_rows)
+                labels_y = y
+                img_top_y = y - 6 * mm
+                img_h = 34 * mm
+                img_w = 34 * mm
 
-        for i, slot in enumerate(marker_slots):
-            name = slot.get("name", f"HEL-{i + 1}")
-            image_path = slot.get("image_path")
+                for i, slot in enumerate(image_slots):
+                    name = slot.get("name", f"HEL-{i + 1}")
+                    image_path = slot.get("image_path")
 
-            bx = start_x + i * (box_w + gap)
-            c.drawCentredString(bx + box_w / 2, labels_y, name)
+                    bx = start_x + i * (box_w + gap)
+                    c.drawCentredString(bx + box_w / 2, labels_y, name)
 
-            safe_image = self._prepare_image_for_report(
-                image_path,
-                f"marker_image_{i + 1}.png",
-            )
-
-            if safe_image:
-                ix = bx + (box_w - img_w) / 2
-                iy = img_top_y - img_h
-
-                try:
-                    c.drawImage(
-                        str(safe_image),
-                        ix,
-                        iy,
-                        width=img_w,
-                        height=img_h,
-                        preserveAspectRatio=True,
-                        anchor="c",
-                        mask="auto",
+                    safe_image = self._prepare_image_for_report(
+                        image_path,
+                        f"marker_image_{i + 1}.png",
                     )
-                except Exception:
-                    pass
 
+                    if safe_image:
+                        ix = bx + (box_w - img_w) / 2
+                        iy = img_top_y - img_h
+
+                        try:
+                            c.drawImage(
+                                str(safe_image),
+                                ix,
+                                iy,
+                                width=img_w,
+                                height=img_h,
+                                preserveAspectRatio=True,
+                                anchor="c",
+                                mask="auto",
+                            )
+                        except Exception:
+                            pass
 
         # 页脚
         c.setFillColor(colors.grey)
         c.setFont(self.font_name, 8)
-        c.drawString(left, 16 * mm, "备注：本报告由软件根据 MvImageID / CellProfiler 后台分析结果自动生成。")
-        c.drawRightString(right, 16 * mm, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        c.drawString(
+            left,
+            16 * mm,
+            "备注：本报告由软件根据 MvImageID / CellProfiler 后台分析结果自动生成。",
+        )
+        c.drawRightString(
+            right,
+            16 * mm,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
         c.showPage()
         c.save()
@@ -424,32 +441,25 @@ class ReportGenerator:
             "姓名": case_data.get("patient_name", ""),
             "样本号": case_data.get("sample_no", ""),
             "病历号": case_data.get("case_no", ""),
-
             "年龄": case_data.get("age", ""),
             "性别": case_data.get("sex", "男"),
             "节欲天数": case_data.get("abstinence_days", ""),
-
             "取样方式": case_data.get("collect_method", ""),
             "取样时间": sample_time,
             "检测时间": test_time,
-
             "外观": case_data.get("appearance", ""),
             "气味": case_data.get("smell", ""),
             "凝集程度": case_data.get("agglutination", ""),
-
             "粘稠度": case_data.get("viscosity", ""),
             "精液量": case_data.get("semen_volume", ""),
             "PH值": case_data.get("ph_value", ""),
-
             "液化时间": case_data.get("liquefaction_time", ""),
             "液化效果": case_data.get("liquefaction_status", ""),
             "颜色": case_data.get("color", ""),
-
             "精子浓度": case_data.get("sperm_concentration", ""),
             "精子总数": case_data.get("sperm_total", ""),
             "前向运动": case_data.get("forward_motility", ""),
             "总活力": case_data.get("total_motility", ""),
-
             "结论_正常": bool_value("conclusion_normal"),
             "结论_少精子症": bool_value("conclusion_oligo"),
             "结论_弱精子症": bool_value("conclusion_astheno"),
@@ -457,66 +467,87 @@ class ReportGenerator:
             "结论_坏死精子症": bool_value("conclusion_necro"),
         }
 
-    def _build_marker_rows(self, analysis_rows: list) -> list:
-        rows = []
+    def _build_marker_slots(self, analysis_rows: list) -> list:
+        """
+        构建报告中需要显示的分子标志物结果。
 
-        try:
-            sorted_rows = sorted(analysis_rows, key=lambda x: int(x.get("id", 0)))
-        except Exception:
-            sorted_rows = analysis_rows
+        当前逻辑：
+        1. 只显示已经分析、有数据库结果的项目。
+        2. 没有分析的 HEL 项目不显示。
+        3. 显示顺序仍然按照 config.ini 中 ProteinOrder 的顺序。
+        4. 例如只分析 HEL-2，则报告只显示 HEL-2。
+        """
+        if not analysis_rows:
+            return []
 
-        for index, row in enumerate(sorted_rows, start=1):
-            name = row.get("protein_name", "") or f"HEL-{index}"
+        analysis_map = {}
 
-            protein_key = self.config.normalize_protein_key(name)
+        for row in analysis_rows:
+            protein_name = str(row.get("protein_name", "") or "").strip()
+            protein_key = self._normalize_protein_key(protein_name)
+
+            if protein_key:
+                analysis_map[protein_key] = row
+
+        protein_items = self._get_report_protein_items()
+
+        slots = []
+
+        for item in protein_items:
+            key = item.get("key", "")
+            name = item.get("name", key)
+
+            row = analysis_map.get(key)
+
+            if not row:
+                continue
+
+            intensity_min = self._get_protein_intensity_min(key)
+            rate_min = self._get_protein_rate_min(key)
 
             intensity = self._to_float(row.get("mean_intensity", 0))
             rate = self._to_float(row.get("expression_rate", 0))
+            image_path = self._find_representative_image(row.get("output_folder", ""))
 
-            intensity_min = self.config.get_protein_intensity_min(protein_key)
-            rate_min = self.config.get_protein_rate_min(protein_key)
-
-            rows.append({
+            slots.append({
+                "key": key,
                 "name": name,
+                "has_result": True,
                 "intensity": intensity,
                 "rate": rate,
                 "intensity_min": intensity_min,
                 "rate_min": rate_min,
+                "image_path": image_path,
             })
 
-        return rows
-
+        return slots[:5]
 
     def _build_marker_image_slots(self, analysis_rows: list) -> list:
         """
-        构建固定的分子标志物图片槽位。
+        固定构建 HEL-1 到 HEL-5 五个荧光图槽位。
 
-        关键点：
-        1. 槽位顺序按 config.ini 的 ProteinOrder。
-        2. 默认只取前 5 个非 PNA 蛋白，对应 HEL-1 到 HEL-5。
-        3. 如果某个蛋白没有分析结果，则该槽位 image_path = None。
-        4. 如果只分析 HEL-2，图片会放到 HEL-2 槽位，而不是第一个槽位。
+        业务逻辑：
+        1. 图片区域永远显示 HEL-1 到 HEL-5 的标题。
+        2. 有结果的项目，在对应槽位显示图片。
+        3. 没有结果的项目，只显示标题，下面为空。
+        4. 只分析 HEL-2 时，图片只出现在 HEL-2 下方。
         """
         analysis_map = {}
 
         for row in analysis_rows:
             protein_name = str(row.get("protein_name", "") or "").strip()
-            protein_key = self.config.normalize_protein_key(protein_name)
+            protein_key = self._normalize_protein_key(protein_name)
 
             if protein_key:
                 analysis_map[protein_key] = row
 
+        protein_items = self._get_report_protein_items()
+
         slots = []
 
-        for item in self.config.get_protein_items():
+        for item in protein_items:
             key = item.get("key", "")
             name = item.get("name", key)
-            part = item.get("part", "")
-
-            # 这里的分子标志物荧光图默认只展示 HEL-1 到 HEL-5，
-            # PNA 后续可以单独做 PNA 区域。
-            if part == "pna" or key.lower() == "pna":
-                continue
 
             row = analysis_map.get(key)
 
@@ -530,10 +561,6 @@ class ReportGenerator:
                 "image_path": image_path,
             })
 
-            if len(slots) >= 5:
-                break
-
-        # 如果配置里不足 5 个，兜底补齐 HEL-1 到 HEL-5
         while len(slots) < 5:
             index = len(slots) + 1
             slots.append({
@@ -542,19 +569,77 @@ class ReportGenerator:
                 "image_path": None,
             })
 
-        return slots
+        return slots[:5]
 
+    def _get_report_protein_items(self) -> list:
+        items = []
+
+        try:
+            config_items = self.config.get_protein_items()
+        except Exception:
+            config_items = []
+
+        for item in config_items:
+            key = str(item.get("key", "") or "").strip()
+            name = str(item.get("name", key) or key).strip()
+            part = str(item.get("part", "") or "").strip().lower()
+
+            if not key:
+                continue
+
+            items.append({
+                "key": key,
+                "name": name,
+                "part": part,
+            })
+
+            if len(items) >= 5:
+                break
+
+        if not items:
+            items = [
+                {"key": "protein1", "name": "HEL-1", "part": "head"},
+                {"key": "protein2", "name": "HEL-2", "part": "head"},
+                {"key": "protein3", "name": "HEL-3", "part": "tail"},
+                {"key": "protein4", "name": "HEL-4", "part": "head"},
+                {"key": "protein5", "name": "HEL-5", "part": "head"},
+            ]
+
+        return items[:5]
+
+    def _normalize_protein_key(self, protein_name_or_key: str) -> str:
+        value = str(protein_name_or_key or "").strip()
+
+        if not value:
+            return ""
+
+        try:
+            return self.config.normalize_protein_key(value)
+        except Exception:
+            pass
+
+        upper_value = value.upper()
+
+        if upper_value.startswith("HEL-"):
+            number = upper_value.replace("HEL-", "").strip()
+            if number.isdigit():
+                return f"protein{number}"
+
+        return value.lower()
+
+    def _get_protein_intensity_min(self, protein_key: str) -> float:
+        try:
+            return self.config.get_protein_intensity_min(protein_key)
+        except Exception:
+            return 26.0
+
+    def _get_protein_rate_min(self, protein_key: str) -> float:
+        try:
+            return self.config.get_protein_rate_min(protein_key)
+        except Exception:
+            return 82.88
 
     def _find_representative_image(self, output_folder: str):
-        """
-        从某个蛋白的输出目录中找代表性图片。
-        优先级：
-        1. G_colocalized Overlay
-        2. G_objects Overlay
-        3. R_objects Overlay
-        4. 其他 Overlay
-        5. 任意 PNG
-        """
         if not output_folder:
             return None
 
@@ -580,48 +665,6 @@ class ReportGenerator:
         candidates.sort()
 
         return candidates[0] if candidates else None
-
-
-    def _build_marker_images(self, analysis_rows: list) -> list:
-        image_paths = []
-
-        try:
-            sorted_rows = sorted(analysis_rows, key=lambda x: int(x.get("id", 0)))
-        except Exception:
-            sorted_rows = analysis_rows
-
-        for row in sorted_rows:
-            output_folder = row.get("output_folder", "")
-
-            if not output_folder:
-                image_paths.append(None)
-                continue
-
-            folder = Path(output_folder)
-
-            if not folder.exists():
-                image_paths.append(None)
-                continue
-
-            candidates = list(folder.glob("*G_colocalized*Overlay*.png"))
-
-            if not candidates:
-                candidates = list(folder.glob("*G_objects*Overlay*.png"))
-
-            if not candidates:
-                candidates = list(folder.glob("*R_objects*Overlay*.png"))
-
-            if not candidates:
-                candidates = list(folder.glob("*Overlay*.png"))
-
-            if not candidates:
-                candidates = list(folder.glob("*.png"))
-
-            candidates.sort()
-
-            image_paths.append(candidates[0] if candidates else None)
-
-        return image_paths
 
     # ------------------------------------------------------------------
     # 绘图辅助
@@ -652,8 +695,18 @@ class ReportGenerator:
 
         if checked:
             c.setLineWidth(tick_line_width)
-            c.line(x + size * 0.18, y - size * 0.45, x + size * 0.42, y - size * 0.70)
-            c.line(x + size * 0.42, y - size * 0.70, x + size * 0.82, y - size * 0.20)
+            c.line(
+                x + size * 0.18,
+                y - size * 0.45,
+                x + size * 0.42,
+                y - size * 0.70,
+            )
+            c.line(
+                x + size * 0.42,
+                y - size * 0.70,
+                x + size * 0.82,
+                y - size * 0.20,
+            )
 
         c.setLineWidth(1)
 
@@ -662,10 +715,6 @@ class ReportGenerator:
     # ------------------------------------------------------------------
 
     def _prepare_image_for_report(self, image_path, output_name: str):
-        """
-        将图片转换成 ReportLab 更稳定识别的 RGB PNG。
-        图片不存在、损坏或格式不支持时返回 None。
-        """
         if not image_path:
             return None
 
