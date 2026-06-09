@@ -114,6 +114,7 @@ class ConfigManager:
             display_name = self.get_protein_display_name(key)
             part = self.get_protein_part(key)
             pipeline = self.get_pipeline_by_protein(key)
+            custom_pipeline = self.get("ProteinPipelines", key, "").strip()
             intensity_min = self.get_protein_intensity_min(key)
             rate_min = self.get_protein_rate_min(key)
 
@@ -122,6 +123,7 @@ class ConfigManager:
                 "name": display_name,
                 "part": part,
                 "pipeline": str(pipeline),
+                "custom_pipeline": custom_pipeline,
                 "intensity_min": intensity_min,
                 "rate_min": rate_min,
             })
