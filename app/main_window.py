@@ -19,6 +19,19 @@ from core.database import Database
 
 
 class MainWindow(QMainWindow):
+    
+    def on_config_saved(self):
+        if hasattr(self.page_analysis, "reload_config"):
+            self.page_analysis.reload_config()
+
+        if hasattr(self.page_reports, "reload_config"):
+            self.page_reports.reload_config()
+
+        if hasattr(self.page_detail, "reload_config"):
+            self.page_detail.reload_config()
+
+        self.statusBar().showMessage("系统配置已刷新，无需重启。")
+    
     def __init__(self):
         super().__init__()
 
@@ -101,6 +114,7 @@ class MainWindow(QMainWindow):
         self.page_analysis = AnalysisWindow(self.database)
         self.page_reports = ReportWindow(self.database)
         self.page_settings = SettingsWindow()
+        self.page_settings.config_saved.connect(self.on_config_saved)
 
         self.stack.addWidget(self.page_cases)
         self.stack.addWidget(self.page_detail)

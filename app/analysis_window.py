@@ -268,6 +268,25 @@ class AnalysisWindow(QWidget):
     # 病例
     # -------------------------
 
+    def reload_config(self):
+        current_key = self.get_current_protein_key()
+
+        self.config.load()
+        self.config.ensure_default_config()
+
+        self.load_protein_combo()
+
+        if current_key:
+            for index in range(self.protein_combo.count()):
+                if self.protein_combo.itemData(index) == current_key:
+                    self.protein_combo.setCurrentIndex(index)
+                    break
+
+        self.on_protein_changed()
+        self.refresh_protein_status()
+
+        self.append_log("系统配置已刷新。")
+
     def set_case(self, case_data: dict):
         self.current_case = case_data
 

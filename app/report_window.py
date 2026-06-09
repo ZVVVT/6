@@ -107,6 +107,21 @@ class ReportWindow(QWidget):
         self.btn_open_report.clicked.connect(self.open_report)
         self.btn_open_report_dir.clicked.connect(self.open_report_dir)
 
+    def reload_config(self):
+        self.config.load()
+        self.config.ensure_default_config()
+
+        if self.current_case:
+            case_id = self.current_case.get("id")
+            if case_id:
+                fresh_case = self.database.get_case(case_id)
+                if fresh_case:
+                    self.current_case = fresh_case
+                    self.current_report_path = str(fresh_case.get("report_path", "") or "")
+                    self.report_path_label.setText(self.current_report_path or "-")
+
+        self.refresh_analysis_results()
+
     def set_case(self, case_data: dict):
         self.current_case = case_data
 

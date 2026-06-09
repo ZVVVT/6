@@ -23,6 +23,10 @@ class CaseDetailWindow(QWidget):
     start_analysis_requested = Signal(dict)
     report_requested = Signal(dict)
 
+    def reload_config(self):
+        self.config.load()
+        self.config.ensure_default_config()
+
     def __init__(self, database, parent=None):
         super().__init__(parent)
 

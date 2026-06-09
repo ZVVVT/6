@@ -1,4 +1,5 @@
 from pathlib import Path
+from PySide6.QtCore import Signal
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -23,6 +24,7 @@ from core.config_manager import ConfigManager
 
 
 class SettingsWindow(QWidget):
+    config_saved = Signal()
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -293,9 +295,10 @@ class SettingsWindow(QWidget):
         QMessageBox.information(
             self,
             "成功",
-            "系统设置已保存。\n\n建议重启软件，使全部页面重新读取配置。"
+            "系统设置已保存。\n\n蛋白分析、报告管理等页面已自动刷新配置。"
         )
         self.append_log("系统设置已保存到 config.ini。")
+        self.config_saved.emit()
 
     # -------------------------
     # 蛋白配置表
