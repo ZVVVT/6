@@ -3,12 +3,13 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 
+from PIL import Image as PILImage
+
 
 # ---------------------------------------------------------
 # Python 3.8 兼容补丁
-# 某些新版 reportlab 会调用 hashlib.md5(..., usedforsecurity=False)
-# 但 Python 3.8 不支持 usedforsecurity 参数，会导致：
-# 'usedforsecurity' is an invalid keyword argument for openssl_md5()
+# 某些 reportlab 版本可能调用 hashlib.md5(..., usedforsecurity=False)
+# Python 3.8 不支持 usedforsecurity 参数。
 # ---------------------------------------------------------
 def _patch_hashlib_for_python38():
     if sys.version_info >= (3, 9):
@@ -41,106 +42,78 @@ def _patch_hashlib_for_python38():
 _patch_hashlib_for_python38()
 
 
-from reportlab.lib import colors
+from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    Image,
-)
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 
 
 class ReportGenerator:
+    """
+    报告模板 V2：
+    参考 ExportToPDF_蛋白.py 的版式，改成新软件独立生成 PDF。
+    数据来源：
+    1. cases 表：病例基本信息
+    2. protein_analysis 表：蛋白汇总结果
+    3. field_results 表：视野明细
+    4. cp_output 目录：代表性 Overlay 图片
+    """
+
     def __init__(self, database, report_dir: str = "reports", logo_path: str = ""):
         self.database = database
+
         self.report_dir = Path(report_dir)
         self.report_dir.mkdir(parents=True, exist_ok=True)
 
         self.logo_path = Path(logo_path) if logo_path else None
 
+        self.temp_image_dir = self.report_dir / "_temp_images"
+        self.temp_image_dir.mkdir(parents=True, exist_ok=True)
+
         self.font_name = self._register_chinese_font()
-        self.styles = self._build_styles()
+
+        # 当前先固定参考下限，后续可以放到系统设置里
+        self.default_intensity_min = 26.0
+        self.default_rate_min = 82.88
+
+    # ------------------------------------------------------------------
+    # 字体
+    # ------------------------------------------------------------------
 
     def _register_chinese_font(self):
-        """
-        优先使用 Windows 常见中文字体。
-        如果本机没有 TTF 字体，则使用 ReportLab 内置 STSong-Light。
-        """
         font_candidates = [
-            r"C:\Windows\Fonts\simhei.ttf",
             r"C:\Windows\Fonts\simsun.ttc",
             r"C:\Windows\Fonts\simsun.ttf",
             r"C:\Windows\Fonts\msyh.ttc",
             r"C:\Windows\Fonts\msyh.ttf",
+            r"C:\Windows\Fonts\simhei.ttf",
         ]
 
         for font_path in font_candidates:
             path = Path(font_path)
-            if path.exists():
-                try:
-                    pdfmetrics.registerFont(TTFont("ChineseFont", str(path)))
-                    return "ChineseFont"
-                except Exception:
-                    pass
+
+            if not path.exists():
+                continue
+
+            try:
+                pdfmetrics.registerFont(TTFont("ChineseFont", str(path)))
+                return "ChineseFont"
+            except Exception:
+                continue
 
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
         return "STSong-Light"
 
-    def _build_styles(self):
-        styles = getSampleStyleSheet()
-
-        styles.add(ParagraphStyle(
-            name="ChineseTitle",
-            parent=styles["Title"],
-            fontName=self.font_name,
-            fontSize=20,
-            alignment=TA_CENTER,
-            leading=26,
-            spaceAfter=12,
-        ))
-
-        styles.add(ParagraphStyle(
-            name="ChineseHeading",
-            parent=styles["Heading2"],
-            fontName=self.font_name,
-            fontSize=14,
-            leading=20,
-            spaceBefore=10,
-            spaceAfter=8,
-        ))
-
-        styles.add(ParagraphStyle(
-            name="ChineseNormal",
-            parent=styles["Normal"],
-            fontName=self.font_name,
-            fontSize=10,
-            leading=16,
-            alignment=TA_LEFT,
-        ))
-
-        styles.add(ParagraphStyle(
-            name="ChineseSmall",
-            parent=styles["Normal"],
-            fontName=self.font_name,
-            fontSize=8,
-            leading=12,
-            alignment=TA_LEFT,
-            textColor=colors.grey,
-        ))
-
-        return styles
+    # ------------------------------------------------------------------
+    # 对外主函数
+    # ------------------------------------------------------------------
 
     def generate_case_report(self, case_id: int) -> str:
         case_data = self.database.get_case(case_id)
+
         if not case_data:
             raise ValueError(f"未找到病例：case_id={case_id}")
 
@@ -149,262 +122,492 @@ class ReportGenerator:
         case_no = str(case_data.get("case_no", f"case_{case_id}"))
         safe_case_no = self._safe_filename(case_no)
 
-        output_path = self.report_dir / f"{safe_case_no}_精子蛋白分析报告.pdf"
+        output_path = self.report_dir / f"{safe_case_no}_人类精液质量检查报告.pdf"
 
-        doc = SimpleDocTemplate(
-            str(output_path),
-            pagesize=A4,
-            rightMargin=18 * mm,
-            leftMargin=18 * mm,
-            topMargin=18 * mm,
-            bottomMargin=18 * mm,
-            title="人精子蛋白质量分析报告",
+        self._export_pdf(
+            pdf_path=str(output_path),
+            case_data=case_data,
+            analysis_rows=analysis_rows,
         )
-
-        story = []
-
-        story.extend(self._build_title())
-        story.extend(self._build_case_info(case_data))
-        story.extend(self._build_analysis_summary(analysis_rows))
-        story.extend(self._build_analysis_detail(analysis_rows))
-        story.extend(self._build_images_section(analysis_rows))
-        story.extend(self._build_note())
-
-        doc.build(story)
 
         self.database.update_case_report_path(case_id, str(output_path))
 
         return str(output_path)
 
-    def _build_title(self):
-        story = []
+    # ------------------------------------------------------------------
+    # PDF 绘制
+    # ------------------------------------------------------------------
 
-        if self.logo_path and self.logo_path.exists():
+    def _export_pdf(self, pdf_path: str, case_data: dict, analysis_rows: list):
+        W, H = A4
+        c = canvas.Canvas(pdf_path, pagesize=A4)
+
+        blue = colors.HexColor("#1F4E79")
+        black = colors.black
+
+        left = 22 * mm
+        right = W - 22 * mm
+
+        gap_big = 14 * mm
+        gap_mid = 12 * mm
+        gap_line = 10 * mm
+        gap_bar = 8 * mm
+
+        y = H - 22 * mm
+
+        # LOGO
+        logo_file = self._prepare_image_for_report(self.logo_path, "logo_safe.png")
+        if logo_file:
             try:
-                logo = Image(str(self.logo_path), width=28 * mm, height=28 * mm)
-                logo.hAlign = "CENTER"
-                story.append(logo)
-                story.append(Spacer(1, 4 * mm))
+                c.drawImage(
+                    str(logo_file),
+                    left,
+                    y - 7 * mm,
+                    width=18 * mm,
+                    height=18 * mm,
+                    preserveAspectRatio=True,
+                    anchor="c",
+                    mask="auto",
+                )
             except Exception:
                 pass
 
-        story.append(Paragraph("人精子蛋白质量分析报告", self.styles["ChineseTitle"]))
-        story.append(Paragraph(
-            f"报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            self.styles["ChineseSmall"],
-        ))
-        story.append(Spacer(1, 8 * mm))
+        # 标题
+        c.setFont(self.font_name, 16)
+        c.setFillColor(blue)
+        c.drawCentredString(W / 2, y, "人类精液质量检查报告")
 
-        return story
+        # 顶部三项
+        y -= gap_big
+        c.setFillColor(black)
+        c.setFont(self.font_name, 12)
 
-    def _build_case_info(self, case_data):
-        story = []
-        story.append(Paragraph("一、病例信息", self.styles["ChineseHeading"]))
+        meta = self._build_meta(case_data)
 
-        data = [
-            ["病例编号", case_data.get("case_no", ""), "姓名", case_data.get("patient_name", "")],
-            ["年龄", case_data.get("age", ""), "样本编号", case_data.get("sample_no", "")],
-            ["检测日期", case_data.get("test_date", ""), "备注", case_data.get("remark", "")],
+        self._draw_label_value(c, left, y, "姓名：", meta.get("姓名", ""))
+        self._draw_label_value(c, W / 2 - 25 * mm, y, "样本号：", meta.get("样本号", ""))
+        self._draw_label_value(c, right - 55 * mm, y, "病历号：", meta.get("病历号", ""))
+
+        # 粗横线
+        y -= gap_bar
+        c.setLineWidth(3)
+        c.line(left, y, right, y)
+        c.setLineWidth(1)
+
+        # 基本信息
+        y -= gap_big
+        c.setFont(self.font_name, 13)
+        c.setFillColor(blue)
+        c.drawString(left, y, "基本信息")
+
+        y -= gap_line
+        c.setFillColor(black)
+        c.setFont(self.font_name, 11)
+
+        col1 = left
+        col2 = W / 2 - 25 * mm
+        col3 = right - 55 * mm
+
+        self._draw_label_value(c, col1, y, "年龄：", meta.get("年龄", ""))
+        self._draw_label_value(c, col2, y, "性别：", meta.get("性别", ""))
+        self._draw_label_value(c, col3, y, "节欲天数：", meta.get("节欲天数", ""))
+
+        y -= gap_line
+        self._draw_label_value(c, col1, y, "取样方式：", meta.get("取样方式", ""))
+        self._draw_label_value(c, col2, y, "取样时间：", meta.get("取样时间", ""))
+        self._draw_label_value(c, col3, y, "检测时间：", meta.get("检测时间", ""))
+
+        # 精液常规检查
+        y -= gap_mid
+        c.setFont(self.font_name, 13)
+        c.setFillColor(blue)
+        c.drawString(left, y, "精液常规检查（WHO标准2010版）")
+
+        c.setFillColor(black)
+        c.setFont(self.font_name, 11)
+
+        col1 = left
+        col2 = W / 2 - 25 * mm
+        col3 = right - 53 * mm
+
+        y -= gap_line
+        self._draw_label_value(c, col1, y, "外观：", meta.get("外观", ""))
+        self._draw_label_value(c, col2, y, "气味：", meta.get("气味", ""))
+        self._draw_label_value(c, col3, y, "凝集程度：", meta.get("凝集程度", ""))
+
+        y -= gap_line
+        self._draw_label_value(c, col1, y, "粘稠度：", meta.get("粘稠度", ""))
+        self._draw_label_value(c, col2, y, "精液量：", meta.get("精液量", ""))
+        c.drawString(col2 + 36 * mm, y, "ml")
+        self._draw_label_value(c, col3, y, "PH值：", meta.get("PH值", ""))
+
+        y -= gap_line
+        self._draw_label_value(c, col1, y, "液化时间：", meta.get("液化时间", ""))
+        c.drawString(col1 + 36 * mm, y, "min")
+        self._draw_label_value(c, col2, y, "液化效果：", meta.get("液化效果", ""))
+        self._draw_label_value(c, col3, y, "颜色：", meta.get("颜色", ""))
+
+        y -= gap_line
+        self._draw_label_value(c, col1, y, "精子浓度：", meta.get("精子浓度", ""))
+        self._draw_label_value(c, col2, y, "精子总数：", meta.get("精子总数", ""))
+        self._draw_label_value(c, col3, y, "前向运动：", meta.get("前向运动", ""))
+
+        y -= gap_line
+        self._draw_label_value(c, col1, y, "总活力：", meta.get("总活力", ""))
+
+        # 结论复选框
+        y -= gap_big
+        c.setFont(self.font_name, 11)
+        c.setFillColor(black)
+        c.drawString(col1, y, "结论：")
+
+        options = [
+            ("正常", bool(meta.get("结论_正常", False))),
+            ("少精子症", bool(meta.get("结论_少精子症", False))),
+            ("弱精子症", bool(meta.get("结论_弱精子症", False))),
+            ("少弱精子症", bool(meta.get("结论_少弱精子症", False))),
+            ("坏死精子症", bool(meta.get("结论_坏死精子症", False))),
         ]
 
-        table = Table(data, colWidths=[28 * mm, 52 * mm, 28 * mm, 70 * mm])
-        table.setStyle(self._basic_table_style())
-        story.append(table)
-        story.append(Spacer(1, 8 * mm))
+        x = col1 + 20 * mm
+        for txt, checked in options:
+            self._draw_checkbox(c, x, y + 2 * mm, checked)
+            c.drawString(x + 6 * mm, y, txt)
+            x += 30 * mm
 
-        return story
+        # 精子质量分子评价
+        y -= gap_big
+        c.setFont(self.font_name, 13)
+        c.setFillColor(blue)
+        c.drawString(left, y, "精子质量分子评价")
 
-    def _build_analysis_summary(self, analysis_rows):
-        story = []
-        story.append(Paragraph("二、蛋白分析汇总", self.styles["ChineseHeading"]))
+        marker_rows = self._build_marker_rows(analysis_rows)
 
-        if not analysis_rows:
-            story.append(Paragraph("当前病例暂无蛋白分析结果。", self.styles["ChineseNormal"]))
-            story.append(Spacer(1, 8 * mm))
-            return story
+        y -= gap_line
+        c.setFillColor(black)
+        c.setFont(self.font_name, 12)
 
-        data = [[
-            "蛋白名称",
-            "表达部位",
-            "视野数",
-            "精子总数",
-            "阳性/共定位数",
-            "标定率(%)",
-            "荧光强度",
-            "状态",
-        ]]
+        headers = ["分子标志物", "荧光强度", "参考值范围", "标定率", "参考值范围"]
+        cols_x = [
+            left + 10 * mm,
+            left + 45 * mm,
+            left + 80 * mm,
+            left + 120 * mm,
+            left + 152 * mm,
+        ]
 
-        for row in analysis_rows:
-            data.append([
-                row.get("protein_name", ""),
-                row.get("protein_part", ""),
-                row.get("total_fields", 0),
-                row.get("total_sperm_count", 0),
-                row.get("positive_count", 0),
-                self._fmt(row.get("expression_rate", 0)),
-                self._fmt(row.get("mean_intensity", 0)),
-                row.get("status", ""),
-            ])
+        for hx, htxt in zip(cols_x, headers):
+            c.drawCentredString(hx, y, htxt)
 
-        table = Table(
-            data,
-            colWidths=[
-                24 * mm,
-                24 * mm,
-                18 * mm,
-                24 * mm,
-                28 * mm,
-                24 * mm,
-                24 * mm,
-                18 * mm,
-            ],
-            repeatRows=1,
-        )
-        table.setStyle(self._header_table_style())
-        story.append(table)
-        story.append(Spacer(1, 8 * mm))
+        c.setFont(self.font_name, 12)
 
-        return story
+        if not marker_rows:
+            y -= gap_line
+            for cx, cell in zip(cols_x, ["-", "-", "-", "-", "-"]):
+                c.drawCentredString(cx, y, str(cell))
+        else:
+            for marker in marker_rows[:5]:
+                y -= gap_line
 
-    def _build_analysis_detail(self, analysis_rows):
-        story = []
-        story.append(Paragraph("三、视野明细", self.styles["ChineseHeading"]))
+                row = [
+                    marker.get("name", ""),
+                    self._fmt_with_arrow(
+                        marker.get("intensity"),
+                        marker.get("intensity_min"),
+                        nd=0,
+                        unit="",
+                    ),
+                    self._fmt_ref(marker.get("intensity_min")),
+                    self._fmt_with_arrow(
+                        marker.get("rate"),
+                        marker.get("rate_min"),
+                        nd=2,
+                        unit="%",
+                    ),
+                    self._fmt_ref(marker.get("rate_min")),
+                ]
 
-        if not analysis_rows:
-            story.append(Paragraph("暂无视野明细。", self.styles["ChineseNormal"]))
-            story.append(Spacer(1, 8 * mm))
-            return story
+                for cx, cell in zip(cols_x, row):
+                    c.drawCentredString(cx, y, str(cell))
 
-        for analysis in analysis_rows:
-            analysis_id = analysis.get("id")
-            field_rows = self.database.get_field_results(analysis_id)
+        # 分子标志物荧光图
+        y -= gap_big
+        c.setFont(self.font_name, 13)
+        c.setFillColor(blue)
+        c.drawString(left, y, "分子标志物荧光图")
 
-            story.append(Paragraph(
-                f"蛋白：{analysis.get('protein_name', '')}",
-                self.styles["ChineseNormal"],
-            ))
+        y -= gap_line
+        c.setFillColor(black)
+        c.setFont(self.font_name, 12)
 
-            if not field_rows:
-                story.append(Paragraph("暂无视野明细。", self.styles["ChineseSmall"]))
-                story.append(Spacer(1, 4 * mm))
-                continue
+        box_w = 30 * mm
+        gap = 5 * mm
+        total_w = box_w * 5 + gap * 4
+        start_x = (W - total_w) / 2
 
-            data = [[
-                "视野",
-                "精子总数",
-                "阳性/共定位数",
-                "标定率(%)",
-                "荧光强度",
-            ]]
+        labels_y = y
+        img_top_y = y - 6 * mm
+        img_h = 34 * mm
+        img_w = 34 * mm
 
-            for row in field_rows:
-                data.append([
-                    row.get("field_no", ""),
-                    row.get("sperm_count", 0),
-                    row.get("positive_count", 0),
-                    self._fmt(row.get("expression_rate", 0)),
-                    self._fmt(row.get("mean_intensity", 0)),
-                ])
+        image_items = self._build_marker_images(analysis_rows)
 
-            table = Table(
-                data,
-                colWidths=[34 * mm, 34 * mm, 38 * mm, 34 * mm, 34 * mm],
+        for i in range(5):
+            if i < len(marker_rows):
+                name = marker_rows[i].get("name", f"HEL-{i + 1}")
+            else:
+                name = f"HEL-{i + 1}"
+
+            bx = start_x + i * (box_w + gap)
+            c.drawCentredString(bx + box_w / 2, labels_y, name)
+
+            image_path = image_items[i] if i < len(image_items) else None
+            safe_image = self._prepare_image_for_report(
+                image_path,
+                f"marker_image_{i + 1}.png",
             )
-            table.setStyle(self._header_table_style())
-            story.append(table)
-            story.append(Spacer(1, 6 * mm))
 
-        return story
+            if safe_image:
+                ix = bx + (box_w - img_w) / 2
+                iy = img_top_y - img_h
 
-    def _build_images_section(self, analysis_rows):
-        story = []
-        story.append(Paragraph("四、代表性图像", self.styles["ChineseHeading"]))
+                try:
+                    c.drawImage(
+                        str(safe_image),
+                        ix,
+                        iy,
+                        width=img_w,
+                        height=img_h,
+                        preserveAspectRatio=True,
+                        anchor="c",
+                        mask="auto",
+                    )
+                except Exception:
+                    pass
 
+        # 页脚
+        c.setFillColor(colors.grey)
+        c.setFont(self.font_name, 8)
+        c.drawString(left, 16 * mm, "备注：本报告由软件根据 MvImageID / CellProfiler 后台分析结果自动生成。")
+        c.drawRightString(right, 16 * mm, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        c.showPage()
+        c.save()
+
+    # ------------------------------------------------------------------
+    # 数据组装
+    # ------------------------------------------------------------------
+
+    def _build_meta(self, case_data: dict) -> dict:
+        test_date = case_data.get("test_date", "")
+
+        return {
+            "姓名": case_data.get("patient_name", ""),
+            "样本号": case_data.get("sample_no", ""),
+            "病历号": case_data.get("case_no", ""),
+            "年龄": case_data.get("age", ""),
+            "性别": "男",
+            "节欲天数": "",
+            "取样方式": "",
+            "取样时间": test_date,
+            "检测时间": test_date,
+            "外观": "",
+            "气味": "",
+            "凝集程度": "",
+            "粘稠度": "",
+            "精液量": "",
+            "PH值": "",
+            "液化时间": "",
+            "液化效果": "",
+            "颜色": "",
+            "精子浓度": "",
+            "精子总数": "",
+            "前向运动": "",
+            "总活力": "",
+            "结论_正常": False,
+            "结论_少精子症": False,
+            "结论_弱精子症": False,
+            "结论_少弱精子症": False,
+            "结论_坏死精子症": False,
+        }
+
+    def _build_marker_rows(self, analysis_rows: list) -> list:
+        rows = []
+
+        # 数据库当前按 DESC 返回，这里按 id 升序显示，更符合分析顺序
+        try:
+            sorted_rows = sorted(analysis_rows, key=lambda x: int(x.get("id", 0)))
+        except Exception:
+            sorted_rows = analysis_rows
+
+        for index, row in enumerate(sorted_rows, start=1):
+            name = row.get("protein_name", "") or f"HEL-{index}"
+
+            intensity = self._to_float(row.get("mean_intensity", 0))
+            rate = self._to_float(row.get("expression_rate", 0))
+
+            rows.append({
+                "name": name,
+                "intensity": intensity,
+                "rate": rate,
+                "intensity_min": self.default_intensity_min,
+                "rate_min": self.default_rate_min,
+            })
+
+        return rows
+
+    def _build_marker_images(self, analysis_rows: list) -> list:
         image_paths = []
 
-        for analysis in analysis_rows:
-            output_folder = analysis.get("output_folder", "")
+        try:
+            sorted_rows = sorted(analysis_rows, key=lambda x: int(x.get("id", 0)))
+        except Exception:
+            sorted_rows = analysis_rows
+
+        for row in sorted_rows:
+            output_folder = row.get("output_folder", "")
+
             if not output_folder:
+                image_paths.append(None)
                 continue
 
             folder = Path(output_folder)
+
             if not folder.exists():
+                image_paths.append(None)
                 continue
 
-            # 优先选共定位图，其次选 overlay 图，其次任意 png
             candidates = list(folder.glob("*G_colocalized*Overlay*.png"))
+
+            if not candidates:
+                candidates = list(folder.glob("*G_objects*Overlay*.png"))
+
+            if not candidates:
+                candidates = list(folder.glob("*R_objects*Overlay*.png"))
+
             if not candidates:
                 candidates = list(folder.glob("*Overlay*.png"))
+
             if not candidates:
                 candidates = list(folder.glob("*.png"))
 
-            if candidates:
-                image_paths.append((analysis.get("protein_name", ""), candidates[0]))
+            candidates.sort()
 
-        if not image_paths:
-            story.append(Paragraph("未找到可插入报告的结果图像。", self.styles["ChineseNormal"]))
-            story.append(Spacer(1, 8 * mm))
-            return story
+            image_paths.append(candidates[0] if candidates else None)
 
-        for protein_name, image_path in image_paths[:5]:
-            story.append(Paragraph(
-                f"蛋白：{protein_name}　图像：{image_path.name}",
-                self.styles["ChineseSmall"],
-            ))
+        return image_paths
 
-            try:
-                img = Image(str(image_path), width=145 * mm, height=145 * mm)
-                img.hAlign = "CENTER"
-                story.append(img)
-                story.append(Spacer(1, 6 * mm))
-            except Exception:
-                story.append(Paragraph(f"图像插入失败：{image_path}", self.styles["ChineseSmall"]))
+    # ------------------------------------------------------------------
+    # 绘图辅助
+    # ------------------------------------------------------------------
 
-        return story
+    def _draw_label_value(self, c: canvas.Canvas, x, y, label, value="", font_size=11):
+        c.setFont(self.font_name, font_size)
+        c.setFillColor(colors.black)
+        c.drawString(x, y, label)
 
-    def _build_note(self):
-        story = []
-        story.append(Spacer(1, 8 * mm))
-        story.append(Paragraph("五、备注", self.styles["ChineseHeading"]))
-        story.append(Paragraph(
-            "本报告由软件根据 CellProfiler/MvImageID 后台分析结果自动生成。"
-            "当前版本结果基于自动识别结果，尚未包含人工校正流程。",
-            self.styles["ChineseNormal"],
-        ))
-        return story
+        value_x = x + c.stringWidth(label, self.font_name, font_size) + 1.0 * mm
 
-    def _basic_table_style(self):
-        return TableStyle([
-            ("FONTNAME", (0, 0), (-1, -1), self.font_name),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
-            ("BACKGROUND", (2, 0), (2, -1), colors.whitesmoke),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ])
+        if value not in [None, ""]:
+            c.drawString(value_x, y, str(value))
 
-    def _header_table_style(self):
-        return TableStyle([
-            ("FONTNAME", (0, 0), (-1, -1), self.font_name),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-        ])
+    def _draw_checkbox(
+        self,
+        c: canvas.Canvas,
+        x,
+        y,
+        checked: bool,
+        size=3.6 * mm,
+        box_line_width: float = 0.6,
+        tick_line_width: float = 0.8,
+    ):
+        c.setLineWidth(box_line_width)
+        c.rect(x, y - size * 0.75, size, size, stroke=1, fill=0)
 
-    @staticmethod
-    def _fmt(value):
+        if checked:
+            c.setLineWidth(tick_line_width)
+            c.line(x + size * 0.18, y - size * 0.45, x + size * 0.42, y - size * 0.70)
+            c.line(x + size * 0.42, y - size * 0.70, x + size * 0.82, y - size * 0.20)
+
+        c.setLineWidth(1)
+
+    # ------------------------------------------------------------------
+    # 图片处理
+    # ------------------------------------------------------------------
+
+    def _prepare_image_for_report(self, image_path, output_name: str):
+        """
+        将图片转换成 ReportLab 更稳定识别的 RGB PNG。
+        图片不存在、损坏或格式不支持时返回 None。
+        """
+        if not image_path:
+            return None
+
+        image_path = Path(image_path)
+
+        if not image_path.exists():
+            return None
+
         try:
-            return f"{float(value):.2f}"
+            with PILImage.open(str(image_path)) as img:
+                img.load()
+
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                elif img.mode == "L":
+                    img = img.convert("RGB")
+                else:
+                    img = img.copy()
+
+                output_path = self.temp_image_dir / output_name
+                img.save(str(output_path), format="PNG")
+                return output_path
+
         except Exception:
-            return str(value)
+            return None
+
+    # ------------------------------------------------------------------
+    # 格式化
+    # ------------------------------------------------------------------
+
+    def _fmt_with_arrow(self, value, ref_min, nd=0, unit=""):
+        if value is None:
+            return ""
+
+        try:
+            value_float = float(value)
+        except Exception:
+            return ""
+
+        arrow = ""
+
+        try:
+            if ref_min is not None and ref_min != "":
+                arrow = "↑" if value_float >= float(ref_min) else "↓"
+        except Exception:
+            arrow = ""
+
+        if nd == 0:
+            value_text = str(int(round(value_float)))
+        else:
+            value_text = f"{value_float:.{nd}f}"
+
+        return f"{value_text}{unit}{arrow}"
+
+    def _fmt_ref(self, value):
+        if value in [None, ""]:
+            return ""
+
+        try:
+            return f"≥{float(value):.2f}".rstrip("0").rstrip(".")
+        except Exception:
+            return f"≥{value}"
+
+    def _to_float(self, value):
+        try:
+            return float(value)
+        except Exception:
+            return None
 
     @staticmethod
     def _safe_filename(name: str):
