@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pandas as pd
-
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
@@ -59,7 +58,6 @@ class ResultViewer(QWidget):
         summary_header.setSectionResizeMode(QHeaderView.Stretch)
 
         summary_layout.addWidget(self.summary_table)
-
         main_layout.addWidget(summary_group)
 
         top_layout = QHBoxLayout()
@@ -139,19 +137,48 @@ class ResultViewer(QWidget):
         self.btn_open_file.clicked.connect(self.open_selected_file)
         self.file_table.itemSelectionChanged.connect(self.preview_selected_file)
 
+    # -------------------------
+    # 对外接口
+    # -------------------------
+
     def set_output_dir(self, output_dir: str):
         self.output_dir = Path(output_dir)
         self.output_dir_label.setText(f"输出目录：{self.output_dir}")
+
+    def clear_results(self, message: str = "当前还没有结果。"):
+        self.output_dir = None
+        self.files = []
+        self.summary_data = None
+
+        self.summary_label.setText(message)
+        self.summary_table.setRowCount(0)
+
+        self.output_dir_label.setText("输出目录：未设置")
+        self.file_summary_label.setText("文件统计：-")
+        self.file_table.setRowCount(0)
+
+        self.show_text_preview(message)
+
+    def show_message(self, message: str):
+        self.clear_results(message)
 
     def refresh_results(self):
         if not self.output_dir:
             QMessageBox.information(self, "提示", "还没有设置输出目录。")
             return
 
+        if not self.output_dir.exists():
+            self.clear_results(f"输出目录不存在：\n{self.output_dir}")
+            return
+
         parser = ResultParser(str(self.output_dir))
 
         self.refresh_summary(parser)
         self.refresh_file_list(parser)
+
+    # -------------------------
+    # 汇总结果
+    # -------------------------
 
     def refresh_summary(self, parser: ResultParser):
         summary_result = parser.parse_image_summary()
@@ -205,6 +232,10 @@ class ResultViewer(QWidget):
             f"荧光强度 {total.get('mean_intensity', 0)}"
         )
 
+    # -------------------------
+    # 文件列表
+    # -------------------------
+
     def refresh_file_list(self, parser: ResultParser):
         self.files = parser.scan_files()
         file_summary = parser.get_file_summary()
@@ -239,6 +270,10 @@ class ResultViewer(QWidget):
 
         if not self.files:
             self.show_text_preview("未扫描到输出文件。请检查输出目录。")
+
+    # -------------------------
+    # 选择与预览
+    # -------------------------
 
     def get_selected_file_path(self):
         selected_rows = self.file_table.selectionModel().selectedRows()
@@ -321,7 +356,6 @@ class ResultViewer(QWidget):
         self.preview_table.show()
 
         self.preview_title.setText(f"CSV 预览：{file_path.name}，前 {len(preview_df)} 行")
-
         self.preview_table.clear()
         self.preview_table.setRowCount(len(preview_df))
         self.preview_table.setColumnCount(len(preview_df.columns))
@@ -354,6 +388,10 @@ class ResultViewer(QWidget):
         self.preview_title.setText(title)
         self.preview_label.setPixmap(QPixmap())
         self.preview_label.setText(text)
+
+    # -------------------------
+    # 打开文件
+    # -------------------------
 
     def open_output_dir(self):
         if not self.output_dir:

@@ -40,6 +40,7 @@ class AnalysisWindow(QWidget):
         self.cp_worker = None
         self.current_cp_output_dir = None
         self.current_raw_image_folder = None
+        self._suspend_protein_changed = False
 
         self.init_ui()
 
@@ -110,7 +111,6 @@ class AnalysisWindow(QWidget):
         row2_layout.addWidget(self.btn_run_cp)
 
         operation_layout.addLayout(row2_layout)
-
         main_layout.addWidget(operation_group)
 
         self.table = QTableWidget()
@@ -186,9 +186,13 @@ class AnalysisWindow(QWidget):
         return self.config.get_protein_display_name(key)
 
     def on_protein_changed(self, *args):
+        if self._suspend_protein_changed:
+            return
+
         protein_key = self.get_current_protein_key()
 
         if not protein_key:
+            self.clear_current_protein_display("当前没有可用蛋白配置。")
             return
 
         protein_name = self.config.get_protein_display_name(protein_key)
@@ -199,6 +203,8 @@ class AnalysisWindow(QWidget):
         self.pipeline_label.setText(f"Pipeline：{pipeline_path}")
 
         self.append_log(f"当前选择蛋白：{protein_name}，内部编号：{protein_key}")
+
+        self.refresh_current_protein_workspace()
 
     def get_analyzed_protein_name_set(self):
         if not self.current_case:
@@ -274,13 +280,17 @@ class AnalysisWindow(QWidget):
         self.config.load()
         self.config.ensure_default_config()
 
-        self.load_protein_combo()
+        self._suspend_protein_changed = True
+        try:
+            self.load_protein_combo()
 
-        if current_key:
-            for index in range(self.protein_combo.count()):
-                if self.protein_combo.itemData(index) == current_key:
-                    self.protein_combo.setCurrentIndex(index)
-                    break
+            if current_key:
+                for index in range(self.protein_combo.count()):
+                    if self.protein_combo.itemData(index) == current_key:
+                        self.protein_combo.setCurrentIndex(index)
+                        break
+        finally:
+            self._suspend_protein_changed = False
 
         self.on_protein_changed()
         self.refresh_protein_status()
@@ -296,10 +306,178 @@ class AnalysisWindow(QWidget):
         self.test_date_label.setText(str(case_data.get("test_date", "")))
 
         self.refresh_protein_status()
+        self.on_protein_changed()
 
         self.append_log(
             f"已载入病例：{case_data.get('case_no', '')} - {case_data.get('patient_name', '')}"
         )
+
+    def get_current_case_no(self):
+        if not self.current_case:
+            return ""
+
+        return str(self.current_case.get("case_no", "") or "").strip()
+
+    # -------------------------
+    # 当前蛋白工作区刷新
+    # -------------------------
+
+    def clear_current_protein_display(self, message: str = ""):
+        self.imported_images = []
+        self.current_raw_image_folder = None
+        self.current_cp_output_dir = None
+
+        self.refresh_table([])
+        self.btn_run_cp.setEnabled(False)
+
+        if hasattr(self.result_viewer, "clear_results"):
+            self.result_viewer.clear_results(message or "当前蛋白暂无分析结果。")
+
+    def refresh_current_protein_workspace(self):
+        protein_key = self.get_current_protein_key()
+        protein_name = self.get_current_protein_name()
+
+        if not self.current_case:
+            self.clear_current_protein_display("请先在病例管理中选择病例。")
+            return
+
+        case_no = self.get_current_case_no()
+
+        if not case_no:
+            self.clear_current_protein_display("当前病例编号为空。")
+            return
+
+        workspace_root = self.config.get_workspace_root()
+
+        raw_folder = workspace_root / case_no / "raw_images" / protein_key
+        output_folder = workspace_root / case_no / "cp_output" / protein_key
+
+        self.current_raw_image_folder = raw_folder
+        self.current_cp_output_dir = output_folder
+
+        if raw_folder.exists():
+            self.imported_images = self.load_images_from_raw_folder(raw_folder, protein_key)
+            self.refresh_table(self.imported_images)
+
+            complete_count = self.get_complete_image_count(self.imported_images)
+            total_count = len(self.imported_images)
+
+            if total_count > 0:
+                self.append_log(
+                    f"{protein_name} 已加载历史导入图片：共 {total_count} 个视野，完整视野 {complete_count} 个。"
+                )
+            else:
+                self.append_log(f"{protein_name} 暂无导入图片。")
+
+            self.btn_run_cp.setEnabled(complete_count > 0)
+        else:
+            self.imported_images = []
+            self.refresh_table([])
+            self.btn_run_cp.setEnabled(False)
+            self.append_log(f"{protein_name} 暂无导入图片。")
+
+        if output_folder.exists() and self.folder_has_files(output_folder):
+            self.result_viewer.set_output_dir(str(output_folder))
+            self.result_viewer.refresh_results()
+            self.append_log(f"{protein_name} 已加载历史分析结果：{output_folder}")
+        else:
+            if hasattr(self.result_viewer, "clear_results"):
+                self.result_viewer.clear_results(f"{protein_name} 暂无分析结果。")
+            self.append_log(f"{protein_name} 暂无分析结果。")
+
+    def load_images_from_raw_folder(self, raw_folder: Path, protein_key: str):
+        support_exts = {
+            ".tif",
+            ".tiff",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".bmp",
+        }
+
+        groups = {}
+
+        for image_path in raw_folder.iterdir():
+            if not image_path.is_file():
+                continue
+
+            if image_path.suffix.lower() not in support_exts:
+                continue
+
+            channel_info = self.parse_workspace_image_channel(image_path, protein_key)
+
+            if channel_info is None:
+                continue
+
+            field_no, channel = channel_info
+
+            if field_no not in groups:
+                groups[field_no] = {
+                    "field_no": field_no,
+                    "R": "",
+                    "G": "",
+                    "DIC": "",
+                    "Merge": "",
+                    "status": "未完整",
+                }
+
+            groups[field_no][channel] = str(image_path)
+
+        results = list(groups.values())
+
+        for item in results:
+            required_ok = bool(item["R"]) and bool(item["G"])
+            item["status"] = "完整" if required_ok else "缺少R或G"
+
+        results.sort(key=lambda x: str(x.get("field_no", "")))
+
+        return results
+
+    def parse_workspace_image_channel(self, image_path: Path, protein_key: str):
+        stem = image_path.stem
+
+        suffix_map = {
+            "_R": "R",
+            "_G": "G",
+            "_DIC": "DIC",
+            "_Merge": "Merge",
+        }
+
+        for suffix, channel in suffix_map.items():
+            if not stem.endswith(suffix):
+                continue
+
+            base = stem[:-len(suffix)]
+
+            prefix = f"{protein_key}_"
+            if base.startswith(prefix):
+                field_no = base[len(prefix):]
+            else:
+                field_no = base
+
+            field_no = field_no.strip("_- ")
+
+            if not field_no:
+                field_no = base
+
+            return field_no, channel
+
+        return None
+
+    @staticmethod
+    def folder_has_files(folder: Path):
+        if not folder.exists() or not folder.is_dir():
+            return False
+
+        for item in folder.iterdir():
+            if item.is_file():
+                return True
+
+        return False
+
+    @staticmethod
+    def get_complete_image_count(image_items):
+        return sum(1 for item in image_items if item.get("status") == "完整")
 
     # -------------------------
     # 图片导入
@@ -329,7 +507,7 @@ class AnalysisWindow(QWidget):
 
         protein_key = self.get_current_protein_key()
         protein_name = self.get_current_protein_name()
-        case_no = str(self.current_case.get("case_no", "")).strip()
+        case_no = self.get_current_case_no()
 
         if not case_no:
             QMessageBox.warning(self, "提示", "当前病例编号为空，无法建立工作目录。")
@@ -337,6 +515,27 @@ class AnalysisWindow(QWidget):
 
         workspace_root = self.config.get_workspace_root()
         target_folder = workspace_root / case_no / "raw_images" / protein_key
+
+        if target_folder.exists() and self.folder_has_files(target_folder):
+            reply = QMessageBox.question(
+                self,
+                "确认重新导入",
+                f"{protein_name} 已经有导入图片。\n\n"
+                "继续导入会清空当前蛋白的旧导入图片，并复制新的图片。\n"
+                "不会删除已经生成的分析结果。\n\n"
+                "是否继续？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+
+            if reply != QMessageBox.Yes:
+                return
+
+            try:
+                shutil.rmtree(target_folder)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"清理旧导入图片失败：\n{e}")
+                return
 
         self.current_raw_image_folder = target_folder
 
@@ -353,7 +552,7 @@ class AnalysisWindow(QWidget):
 
         self.refresh_table(self.imported_images)
 
-        complete_count = sum(1 for item in self.imported_images if item["status"] == "完整")
+        complete_count = self.get_complete_image_count(self.imported_images)
         total_count = len(self.imported_images)
 
         self.append_log(
@@ -407,7 +606,7 @@ class AnalysisWindow(QWidget):
             return
 
         if not self.imported_images:
-            QMessageBox.information(self, "提示", "请先导入图片。")
+            QMessageBox.information(self, "提示", "请先导入当前蛋白的图片。")
             return
 
         complete_items = [
@@ -421,7 +620,21 @@ class AnalysisWindow(QWidget):
 
         protein_key = self.get_current_protein_key()
         protein_name = self.get_current_protein_name()
-        case_no = str(self.current_case.get("case_no", "")).strip()
+        case_no = self.get_current_case_no()
+
+        if not self.imported_images_match_current_protein(complete_items, protein_key):
+            reply = QMessageBox.question(
+                self,
+                "图片来源提示",
+                f"当前图片文件名不完全符合 {protein_name} / {protein_key} 的导入命名。\n\n"
+                "如果你确认要复用这组图片进行当前蛋白分析，可以继续。\n\n"
+                "是否继续运行分析？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+
+            if reply != QMessageBox.Yes:
+                return
 
         source_project_dir = self.config.get_source_project_dir().resolve()
         venv_activate = self.config.get_venv_activate().resolve()
@@ -506,6 +719,26 @@ class AnalysisWindow(QWidget):
         self.cp_worker.log_signal.connect(self.append_log)
         self.cp_worker.finished_signal.connect(self.on_cellprofiler_finished)
         self.cp_worker.start()
+
+    def imported_images_match_current_protein(self, image_items, protein_key: str):
+        prefix = f"{protein_key}_"
+
+        checked_count = 0
+
+        for item in image_items:
+            for channel in ["R", "G"]:
+                path_text = item.get(channel, "")
+
+                if not path_text:
+                    continue
+
+                checked_count += 1
+                file_name = Path(path_text).name
+
+                if not file_name.startswith(prefix):
+                    return False
+
+        return checked_count > 0
 
     def prepare_cp_input(self, complete_items, cp_input_dir: Path):
         if cp_input_dir.exists():
@@ -654,14 +887,15 @@ class AnalysisWindow(QWidget):
     def set_running_state(self, running: bool):
         self.btn_select_folder.setEnabled(not running)
         self.btn_import.setEnabled(not running)
-        self.btn_run_cp.setEnabled(not running)
         self.btn_next_protein.setEnabled(not running)
         self.protein_combo.setEnabled(not running)
 
         if running:
+            self.btn_run_cp.setEnabled(False)
             self.btn_run_cp.setText("正在分析...")
         else:
             self.btn_run_cp.setText("运行分析")
+            self.btn_run_cp.setEnabled(self.get_complete_image_count(self.imported_images) > 0)
 
     def append_log(self, message: str):
         self.log_edit.append(str(message))
