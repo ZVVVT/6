@@ -353,18 +353,17 @@ class ReportGenerator:
         img_h = 34 * mm
         img_w = 34 * mm
 
-        image_items = self._build_marker_images(analysis_rows)
+        # 固定 5 个蛋白槽位：HEL-1 到 HEL-5
+        # 有结果就放到对应槽位，没有结果就只显示标题，不放图片。
+        marker_slots = self._build_marker_image_slots(analysis_rows)
 
-        for i in range(5):
-            if i < len(marker_rows):
-                name = marker_rows[i].get("name", f"HEL-{i + 1}")
-            else:
-                name = f"HEL-{i + 1}"
+        for i, slot in enumerate(marker_slots):
+            name = slot.get("name", f"HEL-{i + 1}")
+            image_path = slot.get("image_path")
 
             bx = start_x + i * (box_w + gap)
             c.drawCentredString(bx + box_w / 2, labels_y, name)
 
-            image_path = image_items[i] if i < len(image_items) else None
             safe_image = self._prepare_image_for_report(
                 image_path,
                 f"marker_image_{i + 1}.png",
@@ -387,6 +386,7 @@ class ReportGenerator:
                     )
                 except Exception:
                     pass
+
 
         # 页脚
         c.setFillColor(colors.grey)
@@ -485,6 +485,102 @@ class ReportGenerator:
             })
 
         return rows
+
+
+    def _build_marker_image_slots(self, analysis_rows: list) -> list:
+        """
+        构建固定的分子标志物图片槽位。
+
+        关键点：
+        1. 槽位顺序按 config.ini 的 ProteinOrder。
+        2. 默认只取前 5 个非 PNA 蛋白，对应 HEL-1 到 HEL-5。
+        3. 如果某个蛋白没有分析结果，则该槽位 image_path = None。
+        4. 如果只分析 HEL-2，图片会放到 HEL-2 槽位，而不是第一个槽位。
+        """
+        analysis_map = {}
+
+        for row in analysis_rows:
+            protein_name = str(row.get("protein_name", "") or "").strip()
+            protein_key = self.config.normalize_protein_key(protein_name)
+
+            if protein_key:
+                analysis_map[protein_key] = row
+
+        slots = []
+
+        for item in self.config.get_protein_items():
+            key = item.get("key", "")
+            name = item.get("name", key)
+            part = item.get("part", "")
+
+            # 这里的分子标志物荧光图默认只展示 HEL-1 到 HEL-5，
+            # PNA 后续可以单独做 PNA 区域。
+            if part == "pna" or key.lower() == "pna":
+                continue
+
+            row = analysis_map.get(key)
+
+            image_path = None
+            if row:
+                image_path = self._find_representative_image(row.get("output_folder", ""))
+
+            slots.append({
+                "key": key,
+                "name": name,
+                "image_path": image_path,
+            })
+
+            if len(slots) >= 5:
+                break
+
+        # 如果配置里不足 5 个，兜底补齐 HEL-1 到 HEL-5
+        while len(slots) < 5:
+            index = len(slots) + 1
+            slots.append({
+                "key": f"protein{index}",
+                "name": f"HEL-{index}",
+                "image_path": None,
+            })
+
+        return slots
+
+
+    def _find_representative_image(self, output_folder: str):
+        """
+        从某个蛋白的输出目录中找代表性图片。
+        优先级：
+        1. G_colocalized Overlay
+        2. G_objects Overlay
+        3. R_objects Overlay
+        4. 其他 Overlay
+        5. 任意 PNG
+        """
+        if not output_folder:
+            return None
+
+        folder = Path(output_folder)
+
+        if not folder.exists():
+            return None
+
+        candidates = list(folder.glob("*G_colocalized*Overlay*.png"))
+
+        if not candidates:
+            candidates = list(folder.glob("*G_objects*Overlay*.png"))
+
+        if not candidates:
+            candidates = list(folder.glob("*R_objects*Overlay*.png"))
+
+        if not candidates:
+            candidates = list(folder.glob("*Overlay*.png"))
+
+        if not candidates:
+            candidates = list(folder.glob("*.png"))
+
+        candidates.sort()
+
+        return candidates[0] if candidates else None
+
 
     def _build_marker_images(self, analysis_rows: list) -> list:
         image_paths = []
