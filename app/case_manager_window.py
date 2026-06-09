@@ -22,6 +22,7 @@ class CaseManagerWindow(QWidget):
 
     def __init__(self, database, parent=None):
         super().__init__(parent)
+
         self.database = database
 
         self.init_ui()
@@ -37,7 +38,7 @@ class CaseManagerWindow(QWidget):
         toolbar_layout = QHBoxLayout()
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("按病例编号、姓名、样本编号、检测日期搜索")
+        self.search_edit.setPlaceholderText("按病历号、姓名、样本号、日期、联系方式搜索")
 
         self.btn_search = QPushButton("搜索")
         self.btn_refresh = QPushButton("刷新")
@@ -55,17 +56,19 @@ class CaseManagerWindow(QWidget):
         main_layout.addLayout(toolbar_layout)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(11)
         self.table.setHorizontalHeaderLabels([
             "ID",
-            "病例编号",
+            "病历号",
             "姓名",
             "年龄",
-            "样本编号",
-            "检测日期",
+            "性别",
+            "联系方式",
+            "样本号",
+            "检查日期",
+            "报告路径",
             "创建时间",
             "更新时间",
-            "报告路径",
         ])
 
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -79,11 +82,12 @@ class CaseManagerWindow(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
 
         main_layout.addWidget(self.table, 1)
 
-        self.info_label = QLabel("提示：双击病例可进入后续蛋白分析流程。")
+        self.info_label = QLabel("提示：双击病例可进入蛋白分析流程。")
         self.info_label.setStyleSheet("color: #666666;")
         main_layout.addWidget(self.info_label)
 
@@ -92,6 +96,7 @@ class CaseManagerWindow(QWidget):
         self.btn_add.clicked.connect(self.add_case)
         self.btn_edit.clicked.connect(self.edit_case)
         self.btn_delete.clicked.connect(self.delete_case)
+
         self.table.doubleClicked.connect(self.open_selected_case)
 
     def load_cases(self):
@@ -117,11 +122,13 @@ class CaseManagerWindow(QWidget):
                 case.get("case_no", ""),
                 case.get("patient_name", ""),
                 case.get("age", ""),
+                case.get("sex", ""),
+                case.get("phone", ""),
                 case.get("sample_no", ""),
                 case.get("test_date", ""),
+                case.get("report_path", "") or "",
                 case.get("created_at", ""),
                 case.get("updated_at", ""),
-                case.get("report_path", "") or "",
             ]
 
             for col_index, value in enumerate(values):
@@ -160,16 +167,9 @@ class CaseManagerWindow(QWidget):
         data = dialog.get_data()
 
         try:
-            self.database.create_case(
-                case_no=data["case_no"],
-                patient_name=data["patient_name"],
-                age=data["age"],
-                sample_no=data["sample_no"],
-                test_date=data["test_date"],
-                remark=data["remark"],
-            )
+            self.database.create_case(**data)
         except sqlite3.IntegrityError:
-            QMessageBox.warning(self, "提示", "病例编号已存在，请更换病例编号。")
+            QMessageBox.warning(self, "提示", "病历号已存在，请更换病历号。")
             return
         except Exception as e:
             QMessageBox.critical(self, "错误", f"新建病例失败：\n{e}")
@@ -180,10 +180,12 @@ class CaseManagerWindow(QWidget):
 
     def edit_case(self):
         case_id = self.get_selected_case_id()
+
         if case_id is None:
             return
 
         case_data = self.database.get_case(case_id)
+
         if not case_data:
             QMessageBox.warning(self, "提示", "未找到该病例记录。")
             return
@@ -196,17 +198,9 @@ class CaseManagerWindow(QWidget):
         data = dialog.get_data()
 
         try:
-            self.database.update_case(
-                case_id=case_id,
-                case_no=data["case_no"],
-                patient_name=data["patient_name"],
-                age=data["age"],
-                sample_no=data["sample_no"],
-                test_date=data["test_date"],
-                remark=data["remark"],
-            )
+            self.database.update_case(case_id=case_id, **data)
         except sqlite3.IntegrityError:
-            QMessageBox.warning(self, "提示", "病例编号已存在，请更换病例编号。")
+            QMessageBox.warning(self, "提示", "病历号已存在，请更换病历号。")
             return
         except Exception as e:
             QMessageBox.critical(self, "错误", f"编辑病例失败：\n{e}")
@@ -217,10 +211,12 @@ class CaseManagerWindow(QWidget):
 
     def delete_case(self):
         case_id = self.get_selected_case_id()
+
         if case_id is None:
             return
 
         case_data = self.database.get_case(case_id)
+
         if not case_data:
             QMessageBox.warning(self, "提示", "未找到该病例记录。")
             return
@@ -231,7 +227,7 @@ class CaseManagerWindow(QWidget):
         reply = QMessageBox.question(
             self,
             "确认删除",
-            f"确定要删除病例吗？\n\n病例编号：{case_no}\n姓名：{patient_name}\n\n删除后不可恢复。",
+            f"确定要删除病例吗？\n\n病历号：{case_no}\n姓名：{patient_name}\n\n删除后不可恢复。",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -250,10 +246,12 @@ class CaseManagerWindow(QWidget):
 
     def open_selected_case(self):
         case_id = self.get_selected_case_id()
+
         if case_id is None:
             return
 
         case_data = self.database.get_case(case_id)
+
         if not case_data:
             QMessageBox.warning(self, "提示", "未找到该病例记录。")
             return

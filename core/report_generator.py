@@ -399,36 +399,59 @@ class ReportGenerator:
     # ------------------------------------------------------------------
 
     def _build_meta(self, case_data: dict) -> dict:
-        test_date = case_data.get("test_date", "")
+        def bool_value(key):
+            value = case_data.get(key, 0)
+            return value in [1, "1", True, "true", "True", "是"]
+
+        test_date = str(case_data.get("test_date", "") or "")
+        collect_time = str(case_data.get("collect_time", "") or "")
+        receive_time = str(case_data.get("receive_time", "") or "")
+
+        if collect_time:
+            sample_time = f"{test_date} {collect_time}".strip()
+        else:
+            sample_time = test_date
+
+        if receive_time:
+            test_time = f"{test_date} {receive_time}".strip()
+        else:
+            test_time = test_date
 
         return {
             "姓名": case_data.get("patient_name", ""),
             "样本号": case_data.get("sample_no", ""),
             "病历号": case_data.get("case_no", ""),
+
             "年龄": case_data.get("age", ""),
-            "性别": "男",
-            "节欲天数": "",
-            "取样方式": "",
-            "取样时间": test_date,
-            "检测时间": test_date,
-            "外观": "",
-            "气味": "",
-            "凝集程度": "",
-            "粘稠度": "",
-            "精液量": "",
-            "PH值": "",
-            "液化时间": "",
-            "液化效果": "",
-            "颜色": "",
-            "精子浓度": "",
-            "精子总数": "",
-            "前向运动": "",
-            "总活力": "",
-            "结论_正常": False,
-            "结论_少精子症": False,
-            "结论_弱精子症": False,
-            "结论_少弱精子症": False,
-            "结论_坏死精子症": False,
+            "性别": case_data.get("sex", "男"),
+            "节欲天数": case_data.get("abstinence_days", ""),
+
+            "取样方式": case_data.get("collect_method", ""),
+            "取样时间": sample_time,
+            "检测时间": test_time,
+
+            "外观": case_data.get("appearance", ""),
+            "气味": case_data.get("smell", ""),
+            "凝集程度": case_data.get("agglutination", ""),
+
+            "粘稠度": case_data.get("viscosity", ""),
+            "精液量": case_data.get("semen_volume", ""),
+            "PH值": case_data.get("ph_value", ""),
+
+            "液化时间": case_data.get("liquefaction_time", ""),
+            "液化效果": case_data.get("liquefaction_status", ""),
+            "颜色": case_data.get("color", ""),
+
+            "精子浓度": case_data.get("sperm_concentration", ""),
+            "精子总数": case_data.get("sperm_total", ""),
+            "前向运动": case_data.get("forward_motility", ""),
+            "总活力": case_data.get("total_motility", ""),
+
+            "结论_正常": bool_value("conclusion_normal"),
+            "结论_少精子症": bool_value("conclusion_oligo"),
+            "结论_弱精子症": bool_value("conclusion_astheno"),
+            "结论_少弱精子症": bool_value("conclusion_oligoastheno"),
+            "结论_坏死精子症": bool_value("conclusion_necro"),
         }
 
     def _build_marker_rows(self, analysis_rows: list) -> list:

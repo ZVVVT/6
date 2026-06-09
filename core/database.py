@@ -4,6 +4,104 @@ from datetime import datetime
 
 
 class Database:
+    CASE_FIELD_DEFS = {
+        "patient_name": "TEXT",
+        "age": "INTEGER",
+        "sex": "TEXT",
+        "occupation": "TEXT",
+        "phone": "TEXT",
+        "sample_no": "TEXT",
+        "test_date": "TEXT",
+        "remark": "TEXT",
+
+        "protein_analysis_enabled": "INTEGER DEFAULT 1",
+
+        "collect_time": "TEXT",
+        "receive_time": "TEXT",
+        "semen_volume": "TEXT",
+        "ph_value": "TEXT",
+        "appearance": "TEXT",
+        "color": "TEXT",
+        "liquefaction_time": "TEXT",
+        "liquefaction_status": "TEXT",
+        "agglutination": "TEXT",
+        "viscosity": "TEXT",
+        "collect_method": "TEXT",
+        "abstinence_days": "TEXT",
+        "smell": "TEXT",
+        "test_temperature": "TEXT",
+        "collect_location": "TEXT",
+        "collect_complete": "TEXT",
+        "dead_sperm": "TEXT",
+
+        "sperm_concentration": "TEXT",
+        "sperm_total": "TEXT",
+        "forward_motility": "TEXT",
+        "total_motility": "TEXT",
+
+        "checker": "TEXT",
+        "reviewer": "TEXT",
+        "doctor": "TEXT",
+        "department": "TEXT",
+
+        "conclusion_normal": "INTEGER DEFAULT 0",
+        "conclusion_oligo": "INTEGER DEFAULT 0",
+        "conclusion_astheno": "INTEGER DEFAULT 0",
+        "conclusion_oligoastheno": "INTEGER DEFAULT 0",
+        "conclusion_necro": "INTEGER DEFAULT 0",
+
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+        "report_path": "TEXT",
+    }
+
+    EDITABLE_CASE_FIELDS = [
+        "patient_name",
+        "age",
+        "sex",
+        "occupation",
+        "phone",
+        "sample_no",
+        "test_date",
+        "remark",
+
+        "protein_analysis_enabled",
+
+        "collect_time",
+        "receive_time",
+        "semen_volume",
+        "ph_value",
+        "appearance",
+        "color",
+        "liquefaction_time",
+        "liquefaction_status",
+        "agglutination",
+        "viscosity",
+        "collect_method",
+        "abstinence_days",
+        "smell",
+        "test_temperature",
+        "collect_location",
+        "collect_complete",
+        "dead_sperm",
+
+        "sperm_concentration",
+        "sperm_total",
+        "forward_motility",
+        "total_motility",
+
+        "checker",
+        "reviewer",
+        "doctor",
+        "department",
+
+        "conclusion_normal",
+        "conclusion_oligo",
+        "conclusion_astheno",
+        "conclusion_oligoastheno",
+        "conclusion_necro",
+    ]
+
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -21,17 +119,11 @@ class Database:
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS cases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                case_no TEXT UNIQUE NOT NULL,
-                patient_name TEXT,
-                age INTEGER,
-                sample_no TEXT,
-                test_date TEXT,
-                remark TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                report_path TEXT
+                case_no TEXT UNIQUE NOT NULL
             )
             """)
+
+            self._ensure_case_columns(cursor)
 
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS protein_analysis (
@@ -69,59 +161,97 @@ class Database:
 
             conn.commit()
 
+    def _ensure_case_columns(self, cursor):
+        cursor.execute("PRAGMA table_info(cases)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        for column_name, column_type in self.CASE_FIELD_DEFS.items():
+            if column_name not in existing_columns:
+                cursor.execute(f"ALTER TABLE cases ADD COLUMN {column_name} {column_type}")
+
     # -------------------------
     # 病例管理
     # -------------------------
 
-    def create_case(self, case_no, patient_name, age, sample_no, test_date, remark):
+    def create_case(
+        self,
+        case_no,
+        patient_name="",
+        age=0,
+        sample_no="",
+        test_date="",
+        remark="",
+        **extra
+    ):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        data = {
+            "patient_name": patient_name,
+            "age": age,
+            "sample_no": sample_no,
+            "test_date": test_date,
+            "remark": remark,
+        }
+        data.update(extra)
+
+        data["created_at"] = now
+        data["updated_at"] = now
+        data["report_path"] = data.get("report_path", "")
+
+        columns = ["case_no"] + self.EDITABLE_CASE_FIELDS + ["created_at", "updated_at", "report_path"]
+        values = [case_no] + [data.get(col, "") for col in self.EDITABLE_CASE_FIELDS] + [
+            data["created_at"],
+            data["updated_at"],
+            data["report_path"],
+        ]
+
+        placeholders = ",".join(["?"] * len(columns))
+        column_text = ",".join(columns)
 
         with self.connect() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-            INSERT INTO cases (
-                case_no, patient_name, age, sample_no, test_date,
-                remark, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                case_no,
-                patient_name,
-                age,
-                sample_no,
-                test_date,
-                remark,
-                now,
-                now
-            ))
+            cursor.execute(f"""
+            INSERT INTO cases ({column_text})
+            VALUES ({placeholders})
+            """, values)
             conn.commit()
             return cursor.lastrowid
 
-    def update_case(self, case_id, case_no, patient_name, age, sample_no, test_date, remark):
+    def update_case(
+        self,
+        case_id,
+        case_no,
+        patient_name="",
+        age=0,
+        sample_no="",
+        test_date="",
+        remark="",
+        **extra
+    ):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        data = {
+            "patient_name": patient_name,
+            "age": age,
+            "sample_no": sample_no,
+            "test_date": test_date,
+            "remark": remark,
+        }
+        data.update(extra)
+        data["updated_at"] = now
+
+        columns = ["case_no"] + self.EDITABLE_CASE_FIELDS + ["updated_at"]
+        set_text = ", ".join([f"{col} = ?" for col in columns])
+        values = [case_no] + [data.get(col, "") for col in self.EDITABLE_CASE_FIELDS] + [now]
+        values.append(case_id)
 
         with self.connect() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
             UPDATE cases
-            SET case_no = ?,
-                patient_name = ?,
-                age = ?,
-                sample_no = ?,
-                test_date = ?,
-                remark = ?,
-                updated_at = ?
+            SET {set_text}
             WHERE id = ?
-            """, (
-                case_no,
-                patient_name,
-                age,
-                sample_no,
-                test_date,
-                remark,
-                now,
-                case_id
-            ))
+            """, values)
             conn.commit()
 
     def delete_case(self, case_id):
@@ -151,8 +281,7 @@ class Database:
         with self.connect() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-            SELECT id, case_no, patient_name, age, sample_no, test_date,
-                   remark, created_at, updated_at, report_path
+            SELECT *
             FROM cases
             WHERE id = ?
             """, (case_id,))
@@ -168,24 +297,26 @@ class Database:
             if keyword:
                 like_keyword = f"%{keyword}%"
                 cursor.execute("""
-                SELECT id, case_no, patient_name, age, sample_no, test_date,
-                       created_at, updated_at, report_path
+                SELECT id, case_no, patient_name, age, sex, phone,
+                       sample_no, test_date, created_at, updated_at, report_path
                 FROM cases
                 WHERE case_no LIKE ?
                    OR patient_name LIKE ?
                    OR sample_no LIKE ?
                    OR test_date LIKE ?
+                   OR phone LIKE ?
                 ORDER BY id DESC
                 """, (
                     like_keyword,
                     like_keyword,
                     like_keyword,
-                    like_keyword
+                    like_keyword,
+                    like_keyword,
                 ))
             else:
                 cursor.execute("""
-                SELECT id, case_no, patient_name, age, sample_no, test_date,
-                       created_at, updated_at, report_path
+                SELECT id, case_no, patient_name, age, sex, phone,
+                       sample_no, test_date, created_at, updated_at, report_path
                 FROM cases
                 ORDER BY id DESC
                 """)
@@ -197,10 +328,6 @@ class Database:
     # -------------------------
 
     def delete_protein_analysis(self, case_id, protein_name):
-        """
-        删除某个病例下某个蛋白的旧分析结果。
-        重新分析同一个蛋白时，先删旧结果，再写新结果，避免重复。
-        """
         with self.connect() as conn:
             cursor = conn.cursor()
 
@@ -233,10 +360,6 @@ class Database:
         expression_rate,
         status="完成"
     ):
-        """
-        保存蛋白汇总结果。
-        同一个病例、同一个蛋白重复保存时，会覆盖旧结果。
-        """
         self.delete_protein_analysis(case_id, protein_name)
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
