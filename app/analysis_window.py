@@ -229,6 +229,37 @@ class AnalysisWindow(QWidget):
 
         return name_set
 
+
+    def get_existing_analysis_result_for_current_protein(self):
+        if not self.current_case:
+            return None
+
+        case_id = self.current_case.get("id")
+
+        if not case_id:
+            return None
+
+        protein_key = self.get_current_protein_key()
+        protein_name = self.get_current_protein_name()
+
+        try:
+            rows = self.database.get_protein_analysis_by_case(case_id)
+        except Exception:
+            return None
+
+        for row in rows:
+            row_name = str(row.get("protein_name", "") or "").strip()
+
+            if not row_name:
+                continue
+
+            row_key = self.config.normalize_protein_key(row_name)
+
+            if row_name == protein_name or row_key == protein_key:
+                return row
+
+        return None
+
     def refresh_protein_status(self):
         if not self.current_case:
             self.protein_status_label.setText("已分析：-")
@@ -635,6 +666,36 @@ class AnalysisWindow(QWidget):
 
             if reply != QMessageBox.Yes:
                 return
+        
+        existing_result = self.get_existing_analysis_result_for_current_protein()
+
+        if existing_result:
+            created_at = existing_result.get("created_at", "")
+            total_fields = existing_result.get("total_fields", "")
+            total_sperm_count = existing_result.get("total_sperm_count", "")
+            positive_count = existing_result.get("positive_count", "")
+            expression_rate = existing_result.get("expression_rate", "")
+
+            reply = QMessageBox.question(
+                self,
+                "确认重新分析",
+                f"{protein_name} 当前已经有分析结果。\n\n"
+                f"分析时间：{created_at}\n"
+                f"视野数：{total_fields}\n"
+                f"精子总数：{total_sperm_count}\n"
+                f"阳性/共定位数：{positive_count}\n"
+                f"标定率：{expression_rate}%\n\n"
+                "继续运行会用新的分析结果替换该蛋白旧结果。\n"
+                "不会影响当前病例下其他蛋白的结果。\n\n"
+                "是否继续重新分析？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+
+            if reply != QMessageBox.Yes:
+                self.append_log(f"用户取消重新分析：{protein_name}")
+                return
+        
 
         source_project_dir = self.config.get_source_project_dir().resolve()
         venv_activate = self.config.get_venv_activate().resolve()
