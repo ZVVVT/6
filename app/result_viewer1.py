@@ -113,7 +113,7 @@ class ResultViewer(QWidget):
         self.image_label = QLabel("当前蛋白暂无识别图片。")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setWordWrap(True)
-        self.image_label.setMinimumSize(1050, 560)
+        self.image_label.setMinimumSize(800, 420)
         self.image_label.setStyleSheet("""
             QLabel {
                 background-color: #f8f8f8;
@@ -169,9 +169,8 @@ class ResultViewer(QWidget):
         self.file_summary_label.setStyleSheet("color: #666666;")
         right_layout.addWidget(self.file_summary_label)
 
-        right_group.setMaximumWidth(330)
         main_splitter.addWidget(right_group)
-        main_splitter.setSizes([1450, 300])
+        main_splitter.setSizes([1100, 360])
 
         main_layout.addWidget(main_splitter, 1)
 
@@ -220,7 +219,7 @@ class ResultViewer(QWidget):
         self.image_title_label.setText("当前暂无识别图片")
         self.image_label.setPixmap(QPixmap())
         self.image_label.setText(message)
-        self.image_label.resize(1050, 560)
+        self.image_label.resize(800, 420)
 
     def show_message(self, message: str):
         self.clear_results(message)
@@ -345,7 +344,7 @@ class ResultViewer(QWidget):
             self.image_title_label.setText("当前暂无识别图片")
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText("当前蛋白暂无识别图片。")
-            self.image_label.resize(1050, 560)
+            self.image_label.resize(800, 420)
             return
 
         self.show_best_image_for_mode(self.current_image_mode)
@@ -392,7 +391,7 @@ class ResultViewer(QWidget):
         if not self.image_files:
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText("当前蛋白暂无识别图片。")
-            self.image_label.resize(1050, 560)
+            self.image_label.resize(800, 420)
             return
 
         candidates = [item for item in self.image_files if item["mode"] == mode]
@@ -402,7 +401,7 @@ class ResultViewer(QWidget):
             self.image_label.setPixmap(QPixmap())
             self.image_title_label.setText(f"{mode_name}：暂无图片")
             self.image_label.setText(f"当前输出目录没有 {mode_name}。")
-            self.image_label.resize(1050, 560)
+            self.image_label.resize(800, 420)
             return
 
         self.load_image(candidates[0]["path"])
@@ -411,7 +410,7 @@ class ResultViewer(QWidget):
         if not image_path.exists():
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText(f"图片不存在：\n{image_path}")
-            self.image_label.resize(1050, 560)
+            self.image_label.resize(800, 420)
             return
 
         pixmap = QPixmap(str(image_path))
@@ -419,7 +418,7 @@ class ResultViewer(QWidget):
         if pixmap.isNull():
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText(f"图片读取失败：\n{image_path}")
-            self.image_label.resize(1050, 560)
+            self.image_label.resize(800, 420)
             return
 
         self.current_image_path = image_path

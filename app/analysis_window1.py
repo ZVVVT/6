@@ -46,39 +46,28 @@ class AnalysisWindow(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(6)
-
-        # -------------------------
-        # 顶部：标题 + 病例信息，压缩成一行
-        # -------------------------
-        title_layout = QHBoxLayout()
 
         title_label = QLabel("蛋白分析")
         title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
+        main_layout.addWidget(title_label)
 
-        self.case_summary_label = QLabel("当前病例：未选择")
-        self.case_summary_label.setStyleSheet("color: #333333;")
+        self.case_group = QGroupBox("当前病例")
+        case_layout = QFormLayout(self.case_group)
 
-        title_layout.addWidget(title_label)
-        title_layout.addSpacing(20)
-        title_layout.addWidget(self.case_summary_label, 1)
-
-        main_layout.addLayout(title_layout)
-
-        # 保留这些 QLabel，兼容原有 set_case 逻辑和状态栏
         self.case_no_label = QLabel("未选择")
         self.patient_name_label = QLabel("-")
         self.sample_no_label = QLabel("-")
         self.test_date_label = QLabel("-")
 
-        # -------------------------
-        # 分析设置：控制区压缩
-        # -------------------------
+        case_layout.addRow("病例编号：", self.case_no_label)
+        case_layout.addRow("姓名：", self.patient_name_label)
+        case_layout.addRow("样本编号：", self.sample_no_label)
+        case_layout.addRow("检测日期：", self.test_date_label)
+
+        main_layout.addWidget(self.case_group)
+
         operation_group = QGroupBox("分析设置")
         operation_layout = QVBoxLayout(operation_group)
-        operation_layout.setContentsMargins(8, 8, 8, 8)
-        operation_layout.setSpacing(5)
 
         row1_layout = QHBoxLayout()
 
@@ -100,8 +89,10 @@ class AnalysisWindow(QWidget):
         row1_layout.addWidget(self.protein_part_label)
         row1_layout.addWidget(self.pipeline_label, 1)
         row1_layout.addWidget(self.btn_next_protein)
+        row1_layout.addStretch()
 
         operation_layout.addLayout(row1_layout)
+        operation_layout.addWidget(self.protein_status_label)
 
         row2_layout = QHBoxLayout()
 
@@ -120,40 +111,8 @@ class AnalysisWindow(QWidget):
         row2_layout.addWidget(self.btn_run_cp)
 
         operation_layout.addLayout(row2_layout)
-
-        row3_layout = QHBoxLayout()
-
-        self.import_status_label = QLabel("图片状态：未导入")
-        self.import_status_label.setStyleSheet("color: #555555;")
-
-        row3_layout.addWidget(self.protein_status_label)
-        row3_layout.addSpacing(20)
-        row3_layout.addWidget(self.import_status_label, 1)
-
-        operation_layout.addLayout(row3_layout)
-
         main_layout.addWidget(operation_group)
 
-        # -------------------------
-        # 折叠控制：导入图片表格 / 运行日志默认隐藏
-        # -------------------------
-        detail_bar_layout = QHBoxLayout()
-
-        self.last_log_label = QLabel("最近状态：-")
-        self.last_log_label.setStyleSheet("color: #666666;")
-
-        self.btn_toggle_table = QPushButton("查看导入图片列表")
-        self.btn_toggle_log = QPushButton("查看运行日志")
-
-        detail_bar_layout.addWidget(self.last_log_label, 1)
-        detail_bar_layout.addWidget(self.btn_toggle_table)
-        detail_bar_layout.addWidget(self.btn_toggle_log)
-
-        main_layout.addLayout(detail_bar_layout)
-
-        # -------------------------
-        # 导入图片表格：默认隐藏
-        # -------------------------
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
@@ -169,89 +128,30 @@ class AnalysisWindow(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.setMaximumHeight(130)
-        self.table.setVisible(False)
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
 
-        main_layout.addWidget(self.table)
+        main_layout.addWidget(self.table, 1)
 
-        # -------------------------
-        # 运行日志：默认隐藏
-        # -------------------------
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        self.log_edit.setMaximumHeight(120)
+        self.log_edit.setMaximumHeight(150)
         self.log_edit.setPlaceholderText("运行日志")
-        self.log_edit.setVisible(False)
-
         main_layout.addWidget(self.log_edit)
 
-        # -------------------------
-        # 大图核查区：主区域
-        # -------------------------
         self.result_viewer = ResultViewer()
-        self.result_viewer.setMinimumHeight(560)
-
-        main_layout.addWidget(self.result_viewer, 10)
+        self.result_viewer.setMinimumHeight(320)
+        main_layout.addWidget(self.result_viewer, 2)
 
         self.btn_select_folder.clicked.connect(self.select_folder)
         self.btn_import.clicked.connect(self.import_images)
         self.btn_run_cp.clicked.connect(self.run_cellprofiler)
 
-        self.btn_toggle_table.clicked.connect(self.toggle_import_table)
-        self.btn_toggle_log.clicked.connect(self.toggle_log)
-
         self.on_protein_changed()
 
-    def toggle_import_table(self):
-        visible = not self.table.isVisible()
-        self.table.setVisible(visible)
-
-        if visible:
-            self.btn_toggle_table.setText("隐藏导入图片列表")
-        else:
-            self.btn_toggle_table.setText("查看导入图片列表")
-
-    def toggle_log(self):
-        visible = not self.log_edit.isVisible()
-        self.log_edit.setVisible(visible)
-
-        if visible:
-            self.btn_toggle_log.setText("隐藏运行日志")
-        else:
-            self.btn_toggle_log.setText("查看运行日志")
-
-    def update_case_summary_label(self):
-        if not self.current_case:
-            self.case_summary_label.setText("当前病例：未选择")
-            return
-
-        case_no = str(self.current_case.get("case_no", "") or "")
-        patient_name = str(self.current_case.get("patient_name", "") or "")
-        sample_no = str(self.current_case.get("sample_no", "") or "")
-        test_date = str(self.current_case.get("test_date", "") or "")
-
-        self.case_summary_label.setText(
-            f"当前病例：{case_no}    姓名：{patient_name}    样本号：{sample_no}    检测日期：{test_date}"
-        )
-
-    def update_import_status_label(self, image_items=None):
-        if image_items is None:
-            image_items = self.imported_images
-
-        total_count = len(image_items)
-        complete_count = self.get_complete_image_count(image_items)
-
-        if total_count <= 0:
-            self.import_status_label.setText("图片状态：当前蛋白暂无导入图片")
-        else:
-            self.import_status_label.setText(
-                f"图片状态：已导入 {total_count} 个视野，完整视野 {complete_count} 个"
-            )
     # -------------------------
     # 蛋白配置
     # -------------------------
@@ -436,13 +336,13 @@ class AnalysisWindow(QWidget):
         self.sample_no_label.setText(str(case_data.get("sample_no", "")))
         self.test_date_label.setText(str(case_data.get("test_date", "")))
 
-        self.update_case_summary_label()
         self.refresh_protein_status()
         self.on_protein_changed()
 
         self.append_log(
             f"已载入病例：{case_data.get('case_no', '')} - {case_data.get('patient_name', '')}"
         )
+
     def get_current_case_no(self):
         if not self.current_case:
             return ""
@@ -704,7 +604,6 @@ class AnalysisWindow(QWidget):
 
     def refresh_table(self, image_items):
         self.table.setRowCount(len(image_items))
-        self.update_import_status_label(image_items)
 
         for row_index, item in enumerate(image_items):
             values = [
@@ -727,6 +626,7 @@ class AnalysisWindow(QWidget):
                         table_item.setForeground(Qt.red)
 
                 self.table.setItem(row_index, col_index, table_item)
+
     # -------------------------
     # 后台分析
     # -------------------------
@@ -1059,17 +959,8 @@ class AnalysisWindow(QWidget):
             self.btn_run_cp.setEnabled(self.get_complete_image_count(self.imported_images) > 0)
 
     def append_log(self, message: str):
-        message = str(message)
+        self.log_edit.append(str(message))
 
-        self.log_edit.append(message)
-
-        if hasattr(self, "last_log_label"):
-            short_message = message.replace("\n", " ").strip()
-
-            if len(short_message) > 120:
-                short_message = short_message[:120] + "..."
-
-            self.last_log_label.setText(f"最近状态：{short_message}")
     def _short_path(self, path_text: str):
         if not path_text:
             return ""
