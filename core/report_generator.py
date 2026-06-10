@@ -168,23 +168,6 @@ class ReportGenerator:
 
         y = H - 22 * mm
 
-        # LOGO
-        logo_file = self._prepare_image_for_report(self.logo_path, "logo_safe.png")
-        if logo_file:
-            try:
-                c.drawImage(
-                    str(logo_file),
-                    left,
-                    y - 7 * mm,
-                    width=18 * mm,
-                    height=18 * mm,
-                    preserveAspectRatio=True,
-                    anchor="c",
-                    mask="auto",
-                )
-            except Exception:
-                pass
-
         # 标题
         c.setFont(self.font_name, 16)
         c.setFillColor(blue)
@@ -423,43 +406,74 @@ class ReportGenerator:
             value = case_data.get(key, 0)
             return value in [1, "1", True, "true", "True", "是"]
 
-        test_date = str(case_data.get("test_date", "") or "")
-        collect_time = str(case_data.get("collect_time", "") or "")
-        receive_time = str(case_data.get("receive_time", "") or "")
+        def time_only(value):
+            """
+            报告中只显示时分秒，不显示日期。
+            兼容：
+            1. 14:31:04
+            2. 2026-06-09 14:31:04
+            3. 2026/06/09 14:31:04
+            4. 2026-06-09T14:31:04
+            """
+            text = str(value or "").strip()
 
-        if collect_time:
-            sample_time = f"{test_date} {collect_time}".strip()
-        else:
-            sample_time = test_date
+            if not text:
+                return ""
 
-        if receive_time:
-            test_time = f"{test_date} {receive_time}".strip()
-        else:
-            test_time = test_date
+            text = text.replace("T", " ")
+
+            # 如果是完整日期时间，取最后一段时间
+            if " " in text:
+                text = text.split()[-1]
+
+            # 去掉可能存在的小数秒
+            if "." in text:
+                text = text.split(".")[0]
+
+            # 如果是 HH:MM:SS，直接返回
+            parts = text.split(":")
+            if len(parts) >= 3:
+                return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+
+            # 如果是 HH:MM，补秒
+            if len(parts) == 2:
+                return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:00"
+
+            return text
+
+        collect_time = time_only(case_data.get("collect_time", ""))
+        receive_time = time_only(case_data.get("receive_time", ""))
 
         return {
             "姓名": case_data.get("patient_name", ""),
             "样本号": case_data.get("sample_no", ""),
             "病历号": case_data.get("case_no", ""),
+
             "年龄": case_data.get("age", ""),
             "性别": case_data.get("sex", "男"),
             "节欲天数": case_data.get("abstinence_days", ""),
+
             "取样方式": case_data.get("collect_method", ""),
-            "取样时间": sample_time,
-            "检测时间": test_time,
+            "取样时间": collect_time,
+            "检测时间": receive_time,
+
             "外观": case_data.get("appearance", ""),
             "气味": case_data.get("smell", ""),
             "凝集程度": case_data.get("agglutination", ""),
+
             "粘稠度": case_data.get("viscosity", ""),
             "精液量": case_data.get("semen_volume", ""),
             "PH值": case_data.get("ph_value", ""),
+
             "液化时间": case_data.get("liquefaction_time", ""),
             "液化效果": case_data.get("liquefaction_status", ""),
             "颜色": case_data.get("color", ""),
+
             "精子浓度": case_data.get("sperm_concentration", ""),
             "精子总数": case_data.get("sperm_total", ""),
             "前向运动": case_data.get("forward_motility", ""),
             "总活力": case_data.get("total_motility", ""),
+
             "结论_正常": bool_value("conclusion_normal"),
             "结论_少精子症": bool_value("conclusion_oligo"),
             "结论_弱精子症": bool_value("conclusion_astheno"),
