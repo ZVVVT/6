@@ -23,18 +23,21 @@ class CaseDetailWindow(QWidget):
     start_analysis_requested = Signal(dict)
     report_requested = Signal(dict)
 
-    def reload_config(self):
-        self.config.load()
-        self.config.ensure_default_config()
-
     def __init__(self, database, parent=None):
         super().__init__(parent)
 
         self.database = database
         self.config = ConfigManager()
+        self.config.ensure_default_config()
+
         self.current_case = None
 
         self.init_ui()
+
+    def reload_config(self):
+        self.config.load()
+        self.config.ensure_default_config()
+        self.refresh_analysis_table()
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -202,23 +205,28 @@ class CaseDetailWindow(QWidget):
         main_layout.addLayout(button_layout)
 
         # -------------------------
-        # 蛋白分析结果
+        # 蛋白检测状态总览
         # -------------------------
-        analysis_group = QGroupBox("已分析蛋白结果")
+        analysis_group = QGroupBox("蛋白检测状态总览")
         analysis_layout = QVBoxLayout(analysis_group)
 
+        self.analysis_summary_label = QLabel("未选择病例")
+        self.analysis_summary_label.setStyleSheet("color: #666666;")
+        analysis_layout.addWidget(self.analysis_summary_label)
+
         self.analysis_table = QTableWidget()
-        self.analysis_table.setColumnCount(9)
+        self.analysis_table.setColumnCount(10)
         self.analysis_table.setHorizontalHeaderLabels([
             "蛋白名称",
             "表达部位",
+            "检测状态",
             "视野数",
             "精子总数",
             "阳性/共定位数",
             "标定率(%)",
             "荧光强度",
-            "状态",
             "分析时间",
+            "输出目录",
         ])
 
         self.analysis_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -230,7 +238,9 @@ class CaseDetailWindow(QWidget):
         header.setSectionResizeMode(QHeaderView.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.Stretch)
 
         analysis_layout.addWidget(self.analysis_table)
 
@@ -354,35 +364,118 @@ class CaseDetailWindow(QWidget):
 
     def clear_detail(self):
         self.status_label.setText("未选择病例")
+        self.analysis_summary_label.setText("未选择病例")
         self.analysis_table.setRowCount(0)
 
     def refresh_analysis_table(self):
         if not self.current_case:
+            self.analysis_summary_label.setText("未选择病例")
             self.analysis_table.setRowCount(0)
             return
 
         case_id = self.current_case.get("id")
-        rows = self.database.get_protein_analysis_by_case(case_id)
+        if not case_id:
+            self.analysis_summary_label.setText("当前病例缺少数据库 ID")
+            self.analysis_table.setRowCount(0)
+            return
 
-        self.analysis_table.setRowCount(len(rows))
+        try:
+            analysis_rows = self.database.get_protein_analysis_by_case(case_id)
+        except Exception as e:
+            self.analysis_summary_label.setText(f"读取蛋白分析结果失败：{e}")
+            self.analysis_table.setRowCount(0)
+            return
 
-        for row_index, row in enumerate(rows):
-            values = [
-                row.get("protein_name", ""),
-                row.get("protein_part", ""),
-                row.get("total_fields", 0),
-                row.get("total_sperm_count", 0),
-                row.get("positive_count", 0),
-                self.fmt(row.get("expression_rate", 0)),
-                self.fmt(row.get("mean_intensity", 0)),
-                row.get("status", ""),
-                row.get("created_at", ""),
-            ]
+        analysis_map = self.build_analysis_map(analysis_rows)
+        protein_items = self.config.get_protein_items()
+
+        self.analysis_table.setRowCount(len(protein_items))
+
+        completed_count = 0
+
+        for row_index, protein in enumerate(protein_items):
+            key = protein.get("key", "")
+            name = protein.get("name", key)
+            part = protein.get("part", "")
+
+            analysis = analysis_map.get(key)
+
+            if analysis:
+                completed_count += 1
+
+                values = [
+                    name,
+                    part,
+                    "已完成",
+                    analysis.get("total_fields", 0),
+                    analysis.get("total_sperm_count", 0),
+                    analysis.get("positive_count", 0),
+                    self.fmt(analysis.get("expression_rate", 0)),
+                    self.fmt(analysis.get("mean_intensity", 0)),
+                    analysis.get("created_at", ""),
+                    analysis.get("output_folder", ""),
+                ]
+                status_color = Qt.darkGreen
+            else:
+                values = [
+                    name,
+                    part,
+                    "未检测",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                ]
+                status_color = Qt.gray
 
             for col_index, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 item.setTextAlignment(Qt.AlignCenter)
+
+                if col_index == 2:
+                    item.setForeground(status_color)
+
                 self.analysis_table.setItem(row_index, col_index, item)
+
+        total_count = len(protein_items)
+        uncompleted_count = max(total_count - completed_count, 0)
+
+        self.analysis_summary_label.setText(
+            f"蛋白检测进度：已完成 {completed_count} / {total_count}，未检测 {uncompleted_count}"
+        )
+
+    def build_analysis_map(self, analysis_rows):
+        analysis_map = {}
+
+        for row in analysis_rows:
+            protein_name = str(row.get("protein_name", "") or "").strip()
+
+            if not protein_name:
+                continue
+
+            protein_key = self.config.normalize_protein_key(protein_name)
+
+            if not protein_key:
+                continue
+
+            # 如果以后出现同一蛋白多条记录，优先保留 id 最大的新记录
+            old_row = analysis_map.get(protein_key)
+            if old_row is None:
+                analysis_map[protein_key] = row
+                continue
+
+            try:
+                old_id = int(old_row.get("id", 0))
+                new_id = int(row.get("id", 0))
+                if new_id >= old_id:
+                    analysis_map[protein_key] = row
+            except Exception:
+                analysis_map[protein_key] = row
+
+        return analysis_map
 
     def start_analysis(self):
         if not self.current_case:
