@@ -1,7 +1,7 @@
 from pathlib import Path
 import re
 
-from PySide6.QtCore import Qt, QUrl, QTimer, QEvent
+from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget,
@@ -47,7 +47,7 @@ class ResultViewer(QWidget):
         self.current_field_no = None
         self.current_image_path = None
         self.current_pixmap = None
-        self.current_image_mode = "g"
+        self.current_image_mode = "colocalized"
         self.zoom_factor = 1.0
         self.view_mode = "height"  # height / fit / original / zoom
 
@@ -73,14 +73,16 @@ class ResultViewer(QWidget):
         image_top_bar.setContentsMargins(0, 0, 0, 0)
         image_top_bar.setSpacing(6)
 
-        self.btn_show_g = QPushButton("G识别图")
-        self.btn_show_r = QPushButton("R识别图")
         self.btn_show_colocalized = QPushButton("共定位图")
+        self.btn_show_r = QPushButton("R识别图")
+        self.btn_show_g = QPushButton("G识别图")
+        self.btn_show_other = QPushButton("其他图片")
 
         for btn in [
-            self.btn_show_g,
-            self.btn_show_r,
             self.btn_show_colocalized,
+            self.btn_show_r,
+            self.btn_show_g,
+            self.btn_show_other,
         ]:
             btn.setObjectName("imageModeButton")
             btn.setMinimumHeight(28)
@@ -101,9 +103,10 @@ class ResultViewer(QWidget):
             }
         """)
 
-        image_top_bar.addWidget(self.btn_show_g)
-        image_top_bar.addWidget(self.btn_show_r)
         image_top_bar.addWidget(self.btn_show_colocalized)
+        image_top_bar.addWidget(self.btn_show_r)
+        image_top_bar.addWidget(self.btn_show_g)
+        image_top_bar.addWidget(self.btn_show_other)
         image_top_bar.addWidget(self.image_info_label, 1)
 
         canvas_layout.addLayout(image_top_bar)
@@ -161,8 +164,6 @@ class ResultViewer(QWidget):
         """)
 
         self.scroll_area.setWidget(self.image_label)
-        # 监听图像画布尺寸变化：首次进入页面、从其他页面切回、窗口大小变化时，自动重新适配图片。
-        self.scroll_area.viewport().installEventFilter(self)
         canvas_layout.addWidget(self.scroll_area, 1)
 
         main_splitter.addWidget(canvas_group)
@@ -374,9 +375,10 @@ class ResultViewer(QWidget):
         self.btn_open_dir.clicked.connect(self.open_output_dir)
         self.btn_open_image.clicked.connect(self.open_current_image)
 
-        self.btn_show_g.clicked.connect(lambda: self.switch_image_mode("g"))
-        self.btn_show_r.clicked.connect(lambda: self.switch_image_mode("r"))
         self.btn_show_colocalized.clicked.connect(lambda: self.switch_image_mode("colocalized"))
+        self.btn_show_r.clicked.connect(lambda: self.switch_image_mode("r"))
+        self.btn_show_g.clicked.connect(lambda: self.switch_image_mode("g"))
+        self.btn_show_other.clicked.connect(lambda: self.switch_image_mode("other"))
 
         self.btn_height_fit.clicked.connect(self.show_height_fit)
         self.btn_fit.clicked.connect(self.show_fit_to_window)
@@ -554,11 +556,6 @@ class ResultViewer(QWidget):
                 continue
 
             mode = self.classify_image_mode(path.name)
-
-            # 只显示 G识别图、R识别图、共定位图；其他图片不进入核查列表
-            if mode not in {"g", "r", "colocalized"}:
-                continue
-
             field_no = self.extract_field_no(path.name)
             priority = self.get_image_priority(path.name)
 
@@ -608,29 +605,25 @@ class ResultViewer(QWidget):
         if "_g_g_objects" in name or "_g_objects" in name or "_g_" in name:
             return "g"
 
-        return None
+        return "other"
 
     def get_image_priority(self, file_name: str):
         name = file_name.lower()
 
-        # 图片查看顺序：G识别图 → R识别图 → 共定位图
-        if ("_g_g_objects" in name or "_g_objects" in name) and "origoverlay" in name:
+        if "colocalized" in name and "origoverlay" in name:
             return 0
 
-        if ("_r_r_objects" in name or "_r_objects" in name) and "origoverlay" in name:
+        if "_r_r_objects" in name and "origoverlay" in name:
             return 1
 
-        if "colocalized" in name and "origoverlay" in name:
+        if "_g_g_objects" in name and "origoverlay" in name:
             return 2
 
-        if "_g_" in name:
+        if "origoverlay" in name:
             return 3
 
-        if "_r_" in name:
+        if name.endswith(".png"):
             return 4
-
-        if "colocalized" in name:
-            return 5
 
         return 9
 
@@ -737,7 +730,7 @@ class ResultViewer(QWidget):
         self.image_label.setText("")
 
         self.update_summary_label()
-        self.schedule_image_refit()
+        self.update_image_display()
 
     def update_image_display(self):
         if self.current_pixmap is None:
@@ -923,37 +916,13 @@ class ResultViewer(QWidget):
             return "R识别图"
         if mode == "g":
             return "G识别图"
-        return ""
-
-    def schedule_image_refit(self):
-        """
-        延迟刷新图片适配。
-        QStackedWidget 页面切换、首次进入蛋白分析页、窗口从全屏变为窗口时，
-        QScrollArea 的 viewport 尺寸可能还没更新完成。
-        因此连续延迟几次重新计算，保证默认视图下图片最终按当前窗口大小居中适配。
-        """
-        if self.current_pixmap is None:
-            return
-
-        QTimer.singleShot(0, self.update_image_display)
-        QTimer.singleShot(60, self.update_image_display)
-        QTimer.singleShot(160, self.update_image_display)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.schedule_image_refit()
-
-    def eventFilter(self, obj, event):
-        if obj == self.scroll_area.viewport() and event.type() == QEvent.Resize:
-            if self.current_pixmap is not None and self.view_mode in {"height", "fit"}:
-                self.schedule_image_refit()
-        return super().eventFilter(obj, event)
+        return "其他图片"
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
         if self.current_pixmap is not None and self.view_mode in {"height", "fit"}:
-            self.schedule_image_refit()
+            self.update_image_display()
 
     # -------------------------
     # 打开文件

@@ -1,7 +1,7 @@
 from pathlib import Path
 import re
 
-from PySide6.QtCore import Qt, QUrl, QTimer, QEvent
+from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget,
@@ -161,8 +161,6 @@ class ResultViewer(QWidget):
         """)
 
         self.scroll_area.setWidget(self.image_label)
-        # 监听图像画布尺寸变化：首次进入页面、从其他页面切回、窗口大小变化时，自动重新适配图片。
-        self.scroll_area.viewport().installEventFilter(self)
         canvas_layout.addWidget(self.scroll_area, 1)
 
         main_splitter.addWidget(canvas_group)
@@ -737,7 +735,7 @@ class ResultViewer(QWidget):
         self.image_label.setText("")
 
         self.update_summary_label()
-        self.schedule_image_refit()
+        self.update_image_display()
 
     def update_image_display(self):
         if self.current_pixmap is None:
@@ -925,35 +923,11 @@ class ResultViewer(QWidget):
             return "G识别图"
         return ""
 
-    def schedule_image_refit(self):
-        """
-        延迟刷新图片适配。
-        QStackedWidget 页面切换、首次进入蛋白分析页、窗口从全屏变为窗口时，
-        QScrollArea 的 viewport 尺寸可能还没更新完成。
-        因此连续延迟几次重新计算，保证默认视图下图片最终按当前窗口大小居中适配。
-        """
-        if self.current_pixmap is None:
-            return
-
-        QTimer.singleShot(0, self.update_image_display)
-        QTimer.singleShot(60, self.update_image_display)
-        QTimer.singleShot(160, self.update_image_display)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.schedule_image_refit()
-
-    def eventFilter(self, obj, event):
-        if obj == self.scroll_area.viewport() and event.type() == QEvent.Resize:
-            if self.current_pixmap is not None and self.view_mode in {"height", "fit"}:
-                self.schedule_image_refit()
-        return super().eventFilter(obj, event)
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
         if self.current_pixmap is not None and self.view_mode in {"height", "fit"}:
-            self.schedule_image_refit()
+            self.update_image_display()
 
     # -------------------------
     # 打开文件
