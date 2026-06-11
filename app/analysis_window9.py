@@ -251,7 +251,6 @@ class AnalysisWindow(QWidget):
         self.btn_run_cp.clicked.connect(self.run_cellprofiler)
         self.btn_toggle_import_panel.clicked.connect(self.toggle_import_panel)
         self.btn_toggle_log_panel.clicked.connect(self.toggle_log_panel)
-        self.table.itemSelectionChanged.connect(self.on_import_table_selection_changed)
 
         self.on_protein_changed()
 
@@ -284,26 +283,6 @@ class AnalysisWindow(QWidget):
             self.btn_toggle_log_panel.setToolTip("展开运行日志")
             self.log_group.setMaximumHeight(32)
             self.log_group.setMinimumHeight(32)
-
-    def on_import_table_selection_changed(self):
-        selected_rows = self.table.selectionModel().selectedRows()
-
-        if not selected_rows:
-            return
-
-        row = selected_rows[0].row()
-        field_item = self.table.item(row, 0)
-
-        if field_item is None:
-            return
-
-        field_no = field_item.text().strip()
-
-        if not field_no:
-            return
-
-        if hasattr(self.result_viewer, "set_current_field"):
-            self.result_viewer.set_current_field(field_no)
 
     def set_common_style(self):
         self.setStyleSheet("""

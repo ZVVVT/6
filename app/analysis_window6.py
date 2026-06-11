@@ -144,37 +144,16 @@ class AnalysisWindow(QWidget):
         # 图像核查工作区：页面主体
         # -------------------------
         self.result_viewer = ResultViewer()
-        self.result_viewer.setMinimumHeight(600)
+        self.result_viewer.setMinimumHeight(560)
         main_layout.addWidget(self.result_viewer, 10)
 
         # -------------------------
-        # 底部：导入图片列表，默认折叠
-        # 折叠时只保留一行标题，尽量释放图像核查区域空间
+        # 底部：导入图片列表，常驻但限制高度
         # -------------------------
-        self.import_group = QWidget()
-        self.import_group.setObjectName("collapsePanel")
-        import_layout = QVBoxLayout(self.import_group)
-        import_layout.setContentsMargins(8, 4, 8, 4)
-        import_layout.setSpacing(3)
-
-        import_header_layout = QHBoxLayout()
-        import_header_layout.setContentsMargins(0, 0, 0, 0)
-        import_header_layout.setSpacing(6)
-
-        self.import_panel_title_label = QLabel("导入图片列表")
-        self.import_panel_title_label.setObjectName("collapsePanelTitle")
-        self.import_panel_summary_label = QLabel("已导入 0 个视野，完整视野 0 个")
-        self.import_panel_summary_label.setObjectName("collapsePanelSummary")
-        self.btn_toggle_import_panel = QPushButton("+")
-        self.btn_toggle_import_panel.setObjectName("collapseToggleButton")
-        self.btn_toggle_import_panel.setToolTip("展开导入图片列表")
-        self.btn_toggle_import_panel.setFixedSize(22, 20)
-
-        import_header_layout.addWidget(self.import_panel_title_label)
-        import_header_layout.addSpacing(12)
-        import_header_layout.addWidget(self.import_panel_summary_label, 1)
-        import_header_layout.addWidget(self.btn_toggle_import_panel, 0, Qt.AlignVCenter)
-        import_layout.addLayout(import_header_layout)
+        import_group = QGroupBox("导入图片列表")
+        import_layout = QVBoxLayout(import_group)
+        import_layout.setContentsMargins(8, 8, 8, 8)
+        import_layout.setSpacing(4)
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
@@ -191,8 +170,7 @@ class AnalysisWindow(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.setMaximumHeight(88)
-        self.table.setVisible(False)
+        self.table.setMaximumHeight(92)
 
         table_header = self.table.horizontalHeader()
         table_header.setSectionResizeMode(QHeaderView.Stretch)
@@ -200,110 +178,31 @@ class AnalysisWindow(QWidget):
         table_header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
 
         import_layout.addWidget(self.table)
-        self.import_group.setMaximumHeight(32)
-        self.import_group.setMinimumHeight(32)
-        main_layout.addWidget(self.import_group)
+        main_layout.addWidget(import_group)
 
         # -------------------------
-        # 底部：运行日志，默认折叠
-        # 折叠时只保留一行最近状态
+        # 底部：运行日志，常驻但限制高度
         # -------------------------
-        self.log_group = QWidget()
-        self.log_group.setObjectName("collapsePanel")
-        log_layout = QVBoxLayout(self.log_group)
-        log_layout.setContentsMargins(8, 4, 8, 4)
-        log_layout.setSpacing(3)
-
-        log_header_layout = QHBoxLayout()
-        log_header_layout.setContentsMargins(0, 0, 0, 0)
-        log_header_layout.setSpacing(6)
-
-        self.log_panel_title_label = QLabel("运行日志")
-        self.log_panel_title_label.setObjectName("collapsePanelTitle")
-        self.log_panel_summary_label = QLabel("最近状态：-")
-        self.log_panel_summary_label.setObjectName("collapsePanelSummary")
-        self.btn_toggle_log_panel = QPushButton("+")
-        self.btn_toggle_log_panel.setObjectName("collapseToggleButton")
-        self.btn_toggle_log_panel.setToolTip("展开运行日志")
-        self.btn_toggle_log_panel.setFixedSize(22, 20)
-
-        log_header_layout.addWidget(self.log_panel_title_label)
-        log_header_layout.addSpacing(12)
-        log_header_layout.addWidget(self.log_panel_summary_label, 1)
-        log_header_layout.addWidget(self.btn_toggle_log_panel, 0, Qt.AlignVCenter)
-        log_layout.addLayout(log_header_layout)
+        log_group = QGroupBox("运行日志")
+        log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(8, 8, 8, 8)
+        log_layout.setSpacing(4)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        self.log_edit.setMaximumHeight(72)
+        self.log_edit.setMaximumHeight(78)
         self.log_edit.setPlaceholderText("运行日志")
-        self.log_edit.setVisible(False)
 
         log_layout.addWidget(self.log_edit)
-        self.log_group.setMaximumHeight(32)
-        self.log_group.setMinimumHeight(32)
-        main_layout.addWidget(self.log_group)
+        main_layout.addWidget(log_group)
 
         self.set_common_style()
 
         self.btn_select_folder.clicked.connect(self.select_folder)
         self.btn_import.clicked.connect(self.import_images)
         self.btn_run_cp.clicked.connect(self.run_cellprofiler)
-        self.btn_toggle_import_panel.clicked.connect(self.toggle_import_panel)
-        self.btn_toggle_log_panel.clicked.connect(self.toggle_log_panel)
-        self.table.itemSelectionChanged.connect(self.on_import_table_selection_changed)
 
         self.on_protein_changed()
-
-    def toggle_import_panel(self):
-        visible = not self.table.isVisible()
-        self.table.setVisible(visible)
-
-        if visible:
-            self.btn_toggle_import_panel.setText("-")
-            self.btn_toggle_import_panel.setToolTip("折叠导入图片列表")
-            self.import_group.setMaximumHeight(128)
-            self.import_group.setMinimumHeight(0)
-        else:
-            self.btn_toggle_import_panel.setText("+")
-            self.btn_toggle_import_panel.setToolTip("展开导入图片列表")
-            self.import_group.setMaximumHeight(32)
-            self.import_group.setMinimumHeight(32)
-
-    def toggle_log_panel(self):
-        visible = not self.log_edit.isVisible()
-        self.log_edit.setVisible(visible)
-
-        if visible:
-            self.btn_toggle_log_panel.setText("-")
-            self.btn_toggle_log_panel.setToolTip("折叠运行日志")
-            self.log_group.setMaximumHeight(116)
-            self.log_group.setMinimumHeight(0)
-        else:
-            self.btn_toggle_log_panel.setText("+")
-            self.btn_toggle_log_panel.setToolTip("展开运行日志")
-            self.log_group.setMaximumHeight(32)
-            self.log_group.setMinimumHeight(32)
-
-    def on_import_table_selection_changed(self):
-        selected_rows = self.table.selectionModel().selectedRows()
-
-        if not selected_rows:
-            return
-
-        row = selected_rows[0].row()
-        field_item = self.table.item(row, 0)
-
-        if field_item is None:
-            return
-
-        field_no = field_item.text().strip()
-
-        if not field_no:
-            return
-
-        if hasattr(self.result_viewer, "set_current_field"):
-            self.result_viewer.set_current_field(field_no)
 
     def set_common_style(self):
         self.setStyleSheet("""
@@ -325,28 +224,6 @@ class AnalysisWindow(QWidget):
                 left: 10px;
                 padding: 0 6px;
                 color: #1f4e79;
-            }
-            QWidget#collapsePanel {
-                background-color: #ffffff;
-                border: 1px solid #d9e2ef;
-                border-radius: 6px;
-            }
-            QLabel#collapsePanelTitle {
-                color: #1f4e79;
-                font-weight: bold;
-                background-color: transparent;
-            }
-            QLabel#collapsePanelSummary {
-                color: #666666;
-                background-color: transparent;
-            }
-            QPushButton#collapseToggleButton {
-                min-width: 22px;
-                max-width: 22px;
-                min-height: 20px;
-                max-height: 20px;
-                padding: 0px;
-                font-weight: bold;
             }
             QLabel {
                 background-color: transparent;
@@ -411,14 +288,11 @@ class AnalysisWindow(QWidget):
         complete_count = self.get_complete_image_count(image_items)
 
         if total_count <= 0:
-            text = "当前蛋白暂无导入图片"
-            self.import_status_label.setText(f"图片状态：{text}")
+            self.import_status_label.setText("图片状态：当前蛋白暂无导入图片")
         else:
-            text = f"已导入 {total_count} 个视野，完整视野 {complete_count} 个"
-            self.import_status_label.setText(f"图片状态：{text}")
-
-        if hasattr(self, "import_panel_summary_label"):
-            self.import_panel_summary_label.setText(text)
+            self.import_status_label.setText(
+                f"图片状态：已导入 {total_count} 个视野，完整视野 {complete_count} 个"
+            )
 
     def load_protein_combo(self):
         self.protein_combo.clear()
@@ -1224,16 +1098,13 @@ class AnalysisWindow(QWidget):
         message = str(message)
         self.log_edit.append(message)
 
-        short_message = message.replace("\n", " ").strip()
-
-        if len(short_message) > 120:
-            short_message = short_message[:120] + "..."
-
         if hasattr(self, "last_log_label"):
-            self.last_log_label.setText(f"最近状态：{short_message}")
+            short_message = message.replace("\n", " ").strip()
 
-        if hasattr(self, "log_panel_summary_label"):
-            self.log_panel_summary_label.setText(f"最近状态：{short_message}")
+            if len(short_message) > 120:
+                short_message = short_message[:120] + "..."
+
+            self.last_log_label.setText(f"最近状态：{short_message}")
 
     def _short_path(self, path_text: str):
         if not path_text:

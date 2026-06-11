@@ -1,7 +1,6 @@
 from pathlib import Path
-import re
 
-from PySide6.QtCore import Qt, QUrl, QTimer
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget,
@@ -38,13 +37,8 @@ class ResultViewer(QWidget):
         self.output_dir = None
         self.files = []
         self.summary_data = None
-        self.summary_rows = []
-        self.summary_total = {}
 
         self.image_files = []
-        self.image_groups = {}
-        self.field_order = []
-        self.current_field_no = None
         self.current_image_path = None
         self.current_pixmap = None
         self.current_image_mode = "colocalized"
@@ -73,6 +67,19 @@ class ResultViewer(QWidget):
         image_top_bar.setContentsMargins(0, 0, 0, 0)
         image_top_bar.setSpacing(6)
 
+        self.image_info_label = QLabel("当前暂无识别图片")
+        self.image_info_label.setMinimumHeight(30)
+        self.image_info_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.image_info_label.setStyleSheet("""
+            QLabel {
+                background-color: #1f1f1f;
+                color: #e6e6e6;
+                padding-left: 10px;
+                font-weight: bold;
+                border-radius: 3px;
+            }
+        """)
+
         self.btn_show_colocalized = QPushButton("共定位图")
         self.btn_show_r = QPushButton("R识别图")
         self.btn_show_g = QPushButton("G识别图")
@@ -88,65 +95,25 @@ class ResultViewer(QWidget):
             btn.setMinimumHeight(28)
             btn.setMinimumWidth(86)
 
-        self.image_info_label = QLabel("当前暂无识别图片")
-        self.image_info_label.setMinimumHeight(30)
-        self.image_info_label.setAlignment(Qt.AlignCenter)
-        self.image_info_label.setStyleSheet("""
-            QLabel {
-                background-color: #f7f9fc;
-                color: #333333;
-                padding-left: 10px;
-                padding-right: 10px;
-                font-weight: bold;
-                border: 1px solid #d9e2ef;
-                border-radius: 4px;
-            }
-        """)
-
+        image_top_bar.addWidget(self.image_info_label, 1)
         image_top_bar.addWidget(self.btn_show_colocalized)
         image_top_bar.addWidget(self.btn_show_r)
         image_top_bar.addWidget(self.btn_show_g)
         image_top_bar.addWidget(self.btn_show_other)
-        image_top_bar.addWidget(self.image_info_label, 1)
 
         canvas_layout.addLayout(image_top_bar)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(False)
         self.scroll_area.setAlignment(Qt.AlignCenter)
-        # 默认核查模式隐藏滚动条，只有 1:1 / 放大缩小时再显示
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setStyleSheet("""
             QScrollArea {
-                background-color: #f5f7fb;
-                border: 1px solid #d9e2ef;
+                background-color: #202020;
+                border: 1px solid #202020;
                 border-radius: 4px;
             }
-            QScrollBar:vertical {
-                background: #f1f5fa;
-                width: 9px;
-                margin: 0px;
-                border-radius: 4px;
-            }
-            QScrollBar:horizontal {
-                background: #f1f5fa;
-                height: 9px;
-                margin: 0px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-                background: #b9c7d8;
-                border-radius: 4px;
-                min-height: 24px;
-                min-width: 24px;
-            }
-            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-                background: #8fa9c5;
-            }
-            QScrollBar::add-line, QScrollBar::sub-line {
-                width: 0px;
-                height: 0px;
+            QScrollBar:vertical, QScrollBar:horizontal {
+                background: #2b2b2b;
             }
         """)
 
@@ -157,8 +124,8 @@ class ResultViewer(QWidget):
         self.image_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.image_label.setStyleSheet("""
             QLabel {
-                background-color: #ffffff;
-                color: #666666;
+                background-color: #111111;
+                color: #cccccc;
                 font-size: 16px;
             }
         """)
@@ -218,8 +185,8 @@ class ResultViewer(QWidget):
         zoom_row.addWidget(self.btn_zoom_out)
 
         nav_row = QHBoxLayout()
-        self.btn_prev_image = QPushButton("上一视野")
-        self.btn_next_image = QPushButton("下一视野")
+        self.btn_prev_image = QPushButton("上一张")
+        self.btn_next_image = QPushButton("下一张")
         nav_row.addWidget(self.btn_prev_image)
         nav_row.addWidget(self.btn_next_image)
 
@@ -242,6 +209,9 @@ class ResultViewer(QWidget):
         self.summary_label.setStyleSheet("font-size: 14px; color: #333333; line-height: 150%;")
         result_layout.addWidget(self.summary_label)
 
+        self.btn_toggle_summary_table = QPushButton("查看每视野明细")
+        result_layout.addWidget(self.btn_toggle_summary_table)
+
         self.summary_table = QTableWidget()
         self.summary_table.setColumnCount(5)
         self.summary_table.setHorizontalHeaderLabels([
@@ -256,7 +226,7 @@ class ResultViewer(QWidget):
         self.summary_table.setAlternatingRowColors(True)
         self.summary_table.verticalHeader().setVisible(False)
         self.summary_table.setMaximumHeight(150)
-        self.summary_table.setVisible(True)
+        self.summary_table.setVisible(False)
 
         summary_header = self.summary_table.horizontalHeader()
         summary_header.setSectionResizeMode(QHeaderView.Stretch)
@@ -361,6 +331,7 @@ class ResultViewer(QWidget):
         self.btn_zoom_out.clicked.connect(self.zoom_out)
         self.btn_prev_image.clicked.connect(self.show_prev_image)
         self.btn_next_image.clicked.connect(self.show_next_image)
+        self.btn_toggle_summary_table.clicked.connect(self.toggle_summary_table)
 
     # -------------------------
     # 对外接口
@@ -374,19 +345,15 @@ class ResultViewer(QWidget):
         self.output_dir = None
         self.files = []
         self.summary_data = None
-        self.summary_rows = []
-        self.summary_total = {}
 
         self.image_files = []
-        self.image_groups = {}
-        self.field_order = []
-        self.current_field_no = None
         self.current_image_path = None
         self.current_pixmap = None
 
         self.summary_label.setText(message)
         self.summary_table.setRowCount(0)
-        self.summary_table.setVisible(True)
+        self.summary_table.setVisible(False)
+        self.btn_toggle_summary_table.setText("查看每视野明细")
 
         self.output_dir_label.setText("输出目录：未设置")
         self.file_summary_label.setText("文件统计：-")
@@ -421,8 +388,6 @@ class ResultViewer(QWidget):
     def refresh_summary(self, parser: ResultParser):
         summary_result = parser.parse_image_summary()
         self.summary_data = summary_result
-        self.summary_rows = []
-        self.summary_total = {}
 
         if not summary_result.get("success"):
             self.summary_label.setText(f"分析结果汇总：\n{summary_result.get('message')}")
@@ -431,9 +396,6 @@ class ResultViewer(QWidget):
 
         rows = summary_result.get("rows", [])
         total = summary_result.get("total", {})
-
-        self.summary_rows = rows
-        self.summary_total = total
 
         self.summary_table.setRowCount(len(rows) + 1)
 
@@ -466,7 +428,23 @@ class ResultViewer(QWidget):
             table_item.setBackground(Qt.lightGray)
             self.summary_table.setItem(total_row, col_index, table_item)
 
-        self.update_summary_label()
+        self.summary_label.setText(
+            "分析结果汇总：\n\n"
+            f"视野数：{total.get('field_count', 0)}\n"
+            f"精子总数：{total.get('sperm_count', 0)}\n"
+            f"阳性/共定位数：{total.get('positive_count', 0)}\n"
+            f"标定率：{total.get('expression_rate', 0)}%\n"
+            f"荧光强度：{total.get('mean_intensity', 0)}"
+        )
+
+    def toggle_summary_table(self):
+        visible = not self.summary_table.isVisible()
+        self.summary_table.setVisible(visible)
+
+        if visible:
+            self.btn_toggle_summary_table.setText("隐藏每视野明细")
+        else:
+            self.btn_toggle_summary_table.setText("查看每视野明细")
 
     # -------------------------
     # 文件扫描：不显示文件列表，只用于找图片
@@ -491,8 +469,6 @@ class ResultViewer(QWidget):
 
     def refresh_image_list(self):
         self.image_files = []
-        self.image_groups = {}
-        self.field_order = []
 
         image_suffixes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
@@ -502,43 +478,25 @@ class ResultViewer(QWidget):
             if path.suffix.lower() not in image_suffixes:
                 continue
 
-            mode = self.classify_image_mode(path.name)
-            field_no = self.extract_field_no(path.name)
-            priority = self.get_image_priority(path.name)
-
-            image_item = {
+            self.image_files.append({
                 "path": path,
                 "name": path.name,
-                "mode": mode,
-                "field_no": field_no,
-                "priority": priority,
-            }
+                "mode": self.classify_image_mode(path.name),
+                "priority": self.get_image_priority(path.name),
+            })
 
-            self.image_files.append(image_item)
-            self.image_groups.setdefault(field_no, {}).setdefault(mode, []).append(image_item)
-
-        for field_no, mode_map in self.image_groups.items():
-            for mode, items in mode_map.items():
-                items.sort(key=lambda x: (x["priority"], x["name"]))
-
-        self.field_order = sorted(self.image_groups.keys(), key=self.natural_sort_key)
-        self.image_files.sort(key=lambda x: (self.natural_sort_key(x["field_no"]), x["priority"], x["name"]))
+        self.image_files.sort(key=lambda x: (x["priority"], x["name"]))
 
         if not self.image_files:
-            self.current_field_no = None
             self.current_image_path = None
             self.current_pixmap = None
             self.image_info_label.setText("当前暂无识别图片")
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText("当前蛋白暂无识别图片。")
             self.image_label.resize(1100, 650)
-            self.update_summary_label()
             return
 
-        if self.current_field_no not in self.image_groups:
-            self.current_field_no = self.field_order[0] if self.field_order else None
-
-        self.show_current_image()
+        self.show_best_image_for_mode(self.current_image_mode)
 
     def classify_image_mode(self, file_name: str):
         name = file_name.lower()
@@ -574,79 +532,25 @@ class ResultViewer(QWidget):
 
         return 9
 
-    def extract_field_no(self, file_name: str):
-        stem = Path(file_name).stem
-
-        markers = [
-            "_G_G_colocalized",
-            "_G_G_objects",
-            "_R_R_objects",
-            "_G_objects",
-            "_R_objects",
-            "_DIC",
-            "_Merge",
-            "_G",
-            "_R",
-        ]
-
-        left = stem
-        for marker in markers:
-            if marker in stem:
-                left = stem.split(marker)[0]
-                break
-
-        if "_" in left:
-            return left.split("_", 1)[1].strip() or left
-
-        return left.strip() or stem
-
-    @staticmethod
-    def natural_sort_key(value):
-        text = str(value or "")
-        parts = re.split(r"(\d+)", text)
-        return [int(p) if p.isdigit() else p.lower() for p in parts]
-
     def switch_image_mode(self, mode: str):
         self.current_image_mode = mode
-        self.show_current_image()
+        self.show_best_image_for_mode(mode)
 
-    def set_current_field(self, field_no):
-        field_text = str(field_no or "").strip()
-
-        if not field_text:
-            return
-
-        if field_text not in self.image_groups:
-            # 兼容 Image.csv 用 1.0/2.0，而文件名用 1024/2048 的情况。
-            # 这里不强制切换，避免点到无对应图片的行时报错。
-            return
-
-        self.current_field_no = field_text
-        self.show_current_image()
-
-    def show_current_image(self):
-        if not self.image_groups or not self.current_field_no:
+    def show_best_image_for_mode(self, mode: str):
+        if not self.image_files:
             self.image_label.setPixmap(QPixmap())
-            self.image_info_label.setText("当前暂无识别图片")
             self.image_label.setText("当前蛋白暂无识别图片。")
             self.image_label.resize(1100, 650)
-            self.update_summary_label()
             return
 
-        field_map = self.image_groups.get(self.current_field_no, {})
-        candidates = field_map.get(self.current_image_mode, [])
+        candidates = [item for item in self.image_files if item["mode"] == mode]
 
         if not candidates:
-            mode_name = self.get_mode_display_name(self.current_image_mode)
-            self.current_image_path = None
-            self.current_pixmap = None
+            mode_name = self.get_mode_display_name(mode)
             self.image_label.setPixmap(QPixmap())
-            self.image_info_label.setText(
-                f"当前视野：{self.current_field_no}　当前类型：{mode_name}　文件：暂无"
-            )
-            self.image_label.setText(f"当前视野没有 {mode_name}。")
+            self.image_info_label.setText(f"{mode_name}：暂无图片")
+            self.image_label.setText(f"当前输出目录没有 {mode_name}。")
             self.image_label.resize(1100, 650)
-            self.update_summary_label()
             return
 
         self.load_image(candidates[0]["path"])
@@ -669,14 +573,9 @@ class ResultViewer(QWidget):
         self.current_image_path = image_path
         self.current_pixmap = pixmap
 
-        field_no = self.current_field_no or self.extract_field_no(image_path.name)
-        mode_name = self.get_mode_display_name(self.current_image_mode)
-        self.image_info_label.setText(
-            f"当前视野：{field_no}　当前类型：{mode_name}　文件：{image_path.name}"
-        )
+        self.image_info_label.setText(f"当前图片：{image_path.name}")
         self.image_label.setText("")
 
-        self.update_summary_label()
         self.update_image_display()
 
     def update_image_display(self):
@@ -684,50 +583,25 @@ class ResultViewer(QWidget):
             return
 
         viewport_size = self.scroll_area.viewport().size()
-        viewport_width = max(viewport_size.width(), 100)
-        viewport_height = max(viewport_size.height(), 100)
 
-        # 默认核查模式：不显示滚动条，图片始终在画布内居中。
-        # height 模式允许图片按高度铺满，横向超出部分会居中裁切，而不是出现难看的滚动条。
-        if self.view_mode in {"height", "fit"}:
-            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.image_label.setAlignment(Qt.AlignCenter)
-
-            if self.view_mode == "height":
-                target_height = max(viewport_height - 12, 100)
-                scale = target_height / max(self.current_pixmap.height(), 1)
-                target_width = max(int(self.current_pixmap.width() * scale), 1)
-                scaled = self.current_pixmap.scaled(
-                    target_width,
-                    target_height,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-            else:
-                target_width = max(viewport_width - 12, 100)
-                target_height = max(viewport_height - 12, 100)
-                scaled = self.current_pixmap.scaled(
-                    target_width,
-                    target_height,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-
-            # QLabel 大小固定为当前画布大小，pixmap 由 QLabel 居中绘制。
-            # 这样窗口从全屏变小后，不会保留旧滚动偏移，图片仍然居中。
-            self.image_label.setMinimumSize(0, 0)
-            self.image_label.resize(viewport_width, viewport_height)
+        if self.view_mode == "height":
+            target_height = max(viewport_size.height() - 12, 100)
+            scale = target_height / max(self.current_pixmap.height(), 1)
+            width = max(int(self.current_pixmap.width() * scale), 1)
+            height = max(int(self.current_pixmap.height() * scale), 1)
+        elif self.view_mode == "fit":
+            target_width = max(viewport_size.width() - 12, 100)
+            target_height = max(viewport_size.height() - 12, 100)
+            scaled = self.current_pixmap.scaled(
+                target_width,
+                target_height,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
             self.image_label.setPixmap(scaled)
-            self.center_scrollbars()
+            self.image_label.resize(scaled.size())
             return
-
-        # 1:1 / 放大缩小：允许滚动条，用于查看局部细节。
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.image_label.setAlignment(Qt.AlignCenter)
-
-        if self.view_mode == "original":
+        elif self.view_mode == "original":
             width = self.current_pixmap.width()
             height = self.current_pixmap.height()
         else:
@@ -735,24 +609,13 @@ class ResultViewer(QWidget):
             height = int(self.current_pixmap.height() * self.zoom_factor)
 
         scaled = self.current_pixmap.scaled(
-            max(width, 1),
-            max(height, 1),
+            width,
+            height,
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation,
         )
-        self.image_label.setMinimumSize(0, 0)
         self.image_label.setPixmap(scaled)
         self.image_label.resize(scaled.size())
-
-        # 延迟到布局更新后再居中滚动条。
-        QTimer.singleShot(0, self.center_scrollbars)
-
-    def center_scrollbars(self):
-        h_bar = self.scroll_area.horizontalScrollBar()
-        v_bar = self.scroll_area.verticalScrollBar()
-
-        h_bar.setValue((h_bar.maximum() + h_bar.minimum()) // 2)
-        v_bar.setValue((v_bar.maximum() + v_bar.minimum()) // 2)
 
     def show_height_fit(self):
         self.view_mode = "height"
@@ -788,73 +651,24 @@ class ResultViewer(QWidget):
         self.update_image_display()
 
     def show_prev_image(self):
-        self.show_neighbor_field(-1)
+        self.show_neighbor_image(-1)
 
     def show_next_image(self):
-        self.show_neighbor_field(1)
+        self.show_neighbor_image(1)
 
-    def show_neighbor_field(self, step: int):
-        if not self.field_order or not self.current_field_no:
+    def show_neighbor_image(self, step: int):
+        if not self.image_files or not self.current_image_path:
             return
 
+        paths = [item["path"] for item in self.image_files]
+
         try:
-            index = self.field_order.index(self.current_field_no)
+            index = paths.index(self.current_image_path)
         except ValueError:
             index = 0
 
-        new_index = (index + step) % len(self.field_order)
-        self.current_field_no = self.field_order[new_index]
-        self.show_current_image()
-
-    def get_current_summary_row(self):
-        if not self.summary_rows or not self.current_field_no:
-            return None
-
-        # 优先按当前视野号直接匹配。
-        for row in self.summary_rows:
-            image_number = str(row.get("image_number", "")).strip()
-            if image_number == str(self.current_field_no):
-                return row
-
-        # 再按图片文件排序顺序与 Image.csv 行顺序匹配。
-        try:
-            index = self.field_order.index(self.current_field_no)
-        except ValueError:
-            index = -1
-
-        if 0 <= index < len(self.summary_rows):
-            return self.summary_rows[index]
-
-        return None
-
-    def update_summary_label(self):
-        total = self.summary_total or {}
-        current_row = self.get_current_summary_row()
-
-        if current_row:
-            current_text = (
-                f"当前视野：{self.current_field_no}\n"
-                f"精子数：{current_row.get('sperm_count', 0)}\n"
-                f"阳性/共定位数：{current_row.get('positive_count', 0)}\n"
-                f"标定率：{current_row.get('expression_rate', 0)}%\n"
-                f"荧光强度：{current_row.get('mean_intensity', 0)}"
-            )
-        else:
-            current_text = f"当前视野：{self.current_field_no or '-'}\n暂无当前视野统计。"
-
-        if total:
-            total_text = (
-                f"\n\n合计：\n"
-                f"视野数：{total.get('field_count', 0)}\n"
-                f"精子总数：{total.get('sperm_count', 0)}\n"
-                f"阳性/共定位数：{total.get('positive_count', 0)}\n"
-                f"标定率：{total.get('expression_rate', 0)}%\n"
-                f"荧光强度：{total.get('mean_intensity', 0)}"
-            )
-        else:
-            total_text = ""
-
-        self.summary_label.setText(current_text + total_text)
+        new_index = (index + step) % len(paths)
+        self.load_image(paths[new_index])
 
     def get_mode_display_name(self, mode: str):
         if mode == "colocalized":
