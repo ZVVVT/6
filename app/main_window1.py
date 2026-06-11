@@ -19,6 +19,7 @@ from core.database import Database
 
 
 class MainWindow(QMainWindow):
+    
     def on_config_saved(self):
         if hasattr(self.page_analysis, "reload_config"):
             self.page_analysis.reload_config()
@@ -30,15 +31,12 @@ class MainWindow(QMainWindow):
             self.page_detail.reload_config()
 
         self.statusBar().showMessage("系统配置已刷新，无需重启。")
-
+    
     def __init__(self):
         super().__init__()
 
         self.setWindowTitle("人精子蛋白质量分析软件")
-
-        # 默认窗口尺寸按蛋白分析页面设置，避免页面切换时窗口跳变
-        self.resize(1650, 1000)
-        self.setMinimumSize(1650, 1000)
+        self.resize(1650, 950)
 
         self.database = Database("data/analysis.db")
         self.current_case = None
@@ -51,19 +49,42 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # -------------------------
-        # 左侧功能菜单
-        # -------------------------
         side_frame = QFrame()
-        side_frame.setObjectName("SideMenu")
         side_frame.setFixedWidth(180)
+        side_frame.setStyleSheet("""
+            QFrame {
+                background-color: #f4f6f8;
+                border-right: 1px solid #dcdfe6;
+            }
+            QPushButton {
+                height: 38px;
+                text-align: left;
+                padding-left: 18px;
+                border: none;
+                background-color: transparent;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #e6f0ff;
+            }
+            QPushButton:checked {
+                background-color: #d8e8ff;
+                font-weight: bold;
+            }
+            QPushButton:disabled {
+                color: #aaaaaa;
+            }
+            QLabel {
+                padding-left: 14px;
+            }
+        """)
 
         side_layout = QVBoxLayout(side_frame)
         side_layout.setContentsMargins(0, 16, 0, 16)
-        side_layout.setSpacing(4)
+        side_layout.setSpacing(6)
 
         title_label = QLabel("功能菜单")
-        title_label.setObjectName("SideTitle")
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; padding-bottom: 8px;")
         side_layout.addWidget(title_label)
 
         self.btn_cases = QPushButton("病例管理")
@@ -81,24 +102,18 @@ class MainWindow(QMainWindow):
         ]
 
         for btn in self.menu_buttons:
-            btn.setObjectName("SideButton")
             btn.setCheckable(True)
             side_layout.addWidget(btn)
 
         side_layout.addStretch()
 
-        # -------------------------
-        # 右侧页面堆栈
-        # -------------------------
         self.stack = QStackedWidget()
-        self.stack.setObjectName("PageStack")
 
         self.page_cases = CaseManagerWindow(self.database)
         self.page_detail = CaseDetailWindow(self.database)
         self.page_analysis = AnalysisWindow(self.database)
         self.page_reports = ReportWindow(self.database)
         self.page_settings = SettingsWindow()
-
         self.page_settings.config_saved.connect(self.on_config_saved)
 
         self.stack.addWidget(self.page_cases)
@@ -123,6 +138,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         self.set_case_related_buttons_enabled(False)
+
         self.statusBar().showMessage("系统就绪")
         self.switch_page(self.page_cases, self.btn_cases)
 
@@ -146,7 +162,6 @@ class MainWindow(QMainWindow):
             return
 
         case_id = case_data.get("id")
-
         if case_id:
             fresh_case = self.database.get_case(case_id)
             if fresh_case:
@@ -162,11 +177,8 @@ class MainWindow(QMainWindow):
 
         case_no = case_data.get("case_no", "")
         patient_name = case_data.get("patient_name", "")
-        sample_no = case_data.get("sample_no", "")
 
-        self.statusBar().showMessage(
-            f"当前选择病例：{case_no} - {patient_name}    样本号：{sample_no}"
-        )
+        self.statusBar().showMessage(f"当前选择病例：{case_no} - {patient_name}")
 
     def open_analysis_for_case(self, case_data):
         if not case_data:
@@ -191,10 +203,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(30, 30, 30, 30)
 
         title_label = QLabel(title)
-        title_label.setObjectName("PageTitle")
+        title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
 
         message_label = QLabel(message)
-        message_label.setObjectName("SectionHint")
+        message_label.setStyleSheet("font-size: 14px; color: #666666;")
         message_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         message_label.setWordWrap(True)
 
