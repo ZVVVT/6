@@ -173,8 +173,8 @@ class ResultViewer(QWidget):
         # -------------------------
         right_panel = QWidget()
         right_panel.setObjectName("rightPanel")
-        right_panel.setMaximumWidth(340)
-        right_panel.setMinimumWidth(305)
+        right_panel.setMaximumWidth(320)
+        right_panel.setMinimumWidth(290)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(8)
@@ -190,23 +190,14 @@ class ResultViewer(QWidget):
         self.output_dir_label.setStyleSheet("color: #555555;")
         output_layout.addWidget(self.output_dir_label)
 
-        output_btn_row1 = QHBoxLayout()
-        output_btn_row2 = QHBoxLayout()
-
-        self.btn_refresh = QPushButton("刷新结果")
-        self.btn_open_dir = QPushButton("打开输出目录")
-        self.btn_open_image = QPushButton("打开当前图片")
-
-        self.btn_refresh.setToolTip("刷新当前输出结果")
-        self.btn_open_dir.setToolTip("打开输出目录")
-        self.btn_open_image.setToolTip("打开当前图片")
-
-        output_btn_row1.addWidget(self.btn_refresh)
-        output_btn_row2.addWidget(self.btn_open_dir)
-        output_btn_row2.addWidget(self.btn_open_image)
-
-        output_layout.addLayout(output_btn_row1)
-        output_layout.addLayout(output_btn_row2)
+        output_btn_layout = QHBoxLayout()
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_open_dir = QPushButton("打开目录")
+        self.btn_open_image = QPushButton("打开图片")
+        output_btn_layout.addWidget(self.btn_refresh)
+        output_btn_layout.addWidget(self.btn_open_dir)
+        output_btn_layout.addWidget(self.btn_open_image)
+        output_layout.addLayout(output_btn_layout)
 
         right_layout.addWidget(output_group)
 
@@ -246,10 +237,10 @@ class ResultViewer(QWidget):
         result_layout.setContentsMargins(8, 8, 8, 8)
         result_layout.setSpacing(6)
 
-        # 表格已经包含当前视野和合计数据，文字摘要不再常驻显示，避免重复占空间。
         self.summary_label = QLabel("当前还没有结果。")
         self.summary_label.setWordWrap(True)
-        self.summary_label.setVisible(False)
+        self.summary_label.setStyleSheet("font-size: 14px; color: #333333; line-height: 150%;")
+        result_layout.addWidget(self.summary_label)
 
         self.summary_table = QTableWidget()
         self.summary_table.setColumnCount(5)
@@ -264,27 +255,24 @@ class ResultViewer(QWidget):
         self.summary_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.summary_table.setAlternatingRowColors(True)
         self.summary_table.verticalHeader().setVisible(False)
+        self.summary_table.setMaximumHeight(150)
         self.summary_table.setVisible(True)
-        self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.summary_table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
-        self.summary_table.setMaximumHeight(190)
 
         summary_header = self.summary_table.horizontalHeader()
         summary_header.setSectionResizeMode(QHeaderView.Stretch)
 
         result_layout.addWidget(self.summary_table)
 
-        # 文件统计属于开发/排查信息，界面不再常驻显示；需要查看文件时打开输出目录即可。
         self.file_summary_label = QLabel("文件统计：-")
         self.file_summary_label.setWordWrap(True)
-        self.file_summary_label.setVisible(False)
+        self.file_summary_label.setStyleSheet("color: #666666;")
+        result_layout.addWidget(self.file_summary_label)
 
         right_layout.addWidget(result_group, 1)
         right_layout.addStretch()
 
         main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([1480, 320])
+        main_splitter.setSizes([1500, 300])
 
         main_layout.addWidget(main_splitter, 1)
 
@@ -346,20 +334,6 @@ class ResultViewer(QWidget):
                 gridline-color: #d9e2ef;
                 border: 1px solid #d9e2ef;
             }
-            QTableWidget QScrollBar:vertical {
-                background: #f1f5fa;
-                width: 7px;
-                margin: 0px;
-            }
-            QTableWidget QScrollBar::handle:vertical {
-                background: #c3cfdd;
-                border-radius: 3px;
-                min-height: 20px;
-            }
-            QTableWidget QScrollBar::add-line:vertical,
-            QTableWidget QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
             QHeaderView::section {
                 background-color: #eef3f9;
                 border: 1px solid #d9e2ef;
@@ -413,7 +387,6 @@ class ResultViewer(QWidget):
         self.summary_label.setText(message)
         self.summary_table.setRowCount(0)
         self.summary_table.setVisible(True)
-        self.adjust_summary_table_height()
 
         self.output_dir_label.setText("输出目录：未设置")
         self.file_summary_label.setText("文件统计：-")
@@ -454,7 +427,6 @@ class ResultViewer(QWidget):
         if not summary_result.get("success"):
             self.summary_label.setText(f"分析结果汇总：\n{summary_result.get('message')}")
             self.summary_table.setRowCount(0)
-            self.adjust_summary_table_height()
             return
 
         rows = summary_result.get("rows", [])
@@ -495,31 +467,6 @@ class ResultViewer(QWidget):
             self.summary_table.setItem(total_row, col_index, table_item)
 
         self.update_summary_label()
-        self.adjust_summary_table_height()
-
-    def adjust_summary_table_height(self):
-        """
-        右侧每视野明细表按行数自动调整高度。
-        少量视野时不显示难看的滚动条；视野较多时再允许滚动。
-        """
-        row_count = self.summary_table.rowCount()
-
-        if row_count <= 0:
-            self.summary_table.setFixedHeight(0)
-            self.summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            return
-
-        header_height = self.summary_table.horizontalHeader().height()
-        row_height = self.summary_table.verticalHeader().defaultSectionSize()
-        visible_rows = min(row_count, 5)
-        target_height = header_height + row_height * visible_rows + 8
-
-        if row_count <= 5:
-            self.summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        else:
-            self.summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        self.summary_table.setFixedHeight(max(70, min(target_height, 190)))
 
     # -------------------------
     # 文件扫描：不显示文件列表，只用于找图片

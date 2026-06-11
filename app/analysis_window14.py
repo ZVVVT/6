@@ -126,15 +126,21 @@ class AnalysisWindow(QWidget):
 
         operation_layout.addLayout(row2_layout)
 
-        # 下面三个状态信息已经分别在蛋白项目按钮、底部导入图片列表、底部运行日志中显示，
-        # 这里保留 QLabel 对象给原有逻辑更新使用，但不再放到界面里，避免信息重复。
+        row3_layout = QHBoxLayout()
+
         self.import_status_label = QLabel("图片状态：当前蛋白暂无导入图片")
-        self.import_status_label.setVisible(False)
+        self.import_status_label.setStyleSheet("color: #555555;")
 
         self.last_log_label = QLabel("最近状态：-")
-        self.last_log_label.setVisible(False)
+        self.last_log_label.setStyleSheet("color: #666666;")
 
-        self.protein_status_label.setVisible(False)
+        row3_layout.addWidget(self.protein_status_label)
+        row3_layout.addSpacing(18)
+        row3_layout.addWidget(self.import_status_label)
+        row3_layout.addSpacing(18)
+        row3_layout.addWidget(self.last_log_label, 1)
+
+        operation_layout.addLayout(row3_layout)
 
         main_layout.addWidget(operation_group)
 
@@ -373,24 +379,6 @@ class AnalysisWindow(QWidget):
                 background-color: #f4fff6;
                 border: 1px solid #8fd19e;
                 color: #198754;
-            }
-            QPushButton#proteinProjectButton[state="imported"] {
-                background-color: #fff8e1;
-                border: 1px solid #f0c36d;
-                color: #8a5a00;
-            }
-            QPushButton#proteinProjectButton[state="failed"],
-            QPushButton#proteinProjectButton[state="currentFailed"] {
-                background-color: #fff1f0;
-                border: 1px solid #ff9a94;
-                color: #c62828;
-                font-weight: bold;
-            }
-            QPushButton#proteinProjectButton[state="currentImported"] {
-                background-color: #d8eaff;
-                border: 1px solid #4f8fce;
-                color: #1f4e79;
-                font-weight: bold;
             }
             QPushButton#proteinProjectButton[state="todo"] {
                 background-color: #ffffff;
@@ -649,79 +637,8 @@ class AnalysisWindow(QWidget):
 
         self.update_protein_buttons()
 
-    def get_failed_protein_key_set(self):
-        """返回当前病例中状态为失败/异常的蛋白 key 集合。
-
-        当前版本主要预留给以后保存失败记录时使用；如果数据库暂时没有失败记录，
-        这个集合就是空的，不影响现有流程。
-        """
-        if not self.current_case:
-            return set()
-
-        case_id = self.current_case.get("id")
-
-        if not case_id:
-            return set()
-
-        try:
-            rows = self.database.get_protein_analysis_by_case(case_id)
-        except Exception:
-            return set()
-
-        failed_keys = set()
-
-        for row in rows:
-            status = str(row.get("status", "") or "").strip()
-            if status not in {"失败", "异常", "错误", "failed", "error"}:
-                continue
-
-            row_name = str(row.get("protein_name", "") or "").strip()
-            row_key = self.config.normalize_protein_key(row_name)
-
-            if row_key:
-                failed_keys.add(row_key)
-
-        return failed_keys
-
-    def get_protein_import_state(self, protein_key: str):
-        """判断某个蛋白是否已经导入图片。
-
-        返回：
-        - none：没有导入图片
-        - imported：已导入并且至少有一个完整 R/G 视野
-        - incomplete：有图片但没有完整 R/G 视野
-        """
-        if not self.current_case:
-            return "none"
-
-        case_no = self.get_current_case_no()
-
-        if not case_no:
-            return "none"
-
-        raw_folder = self.config.get_workspace_root() / case_no / "raw_images" / protein_key
-
-        if not raw_folder.exists():
-            return "none"
-
-        try:
-            image_items = self.load_images_from_raw_folder(raw_folder, protein_key)
-        except Exception:
-            return "none"
-
-        if not image_items:
-            return "none"
-
-        complete_count = self.get_complete_image_count(image_items)
-
-        if complete_count > 0:
-            return "imported"
-
-        return "incomplete"
-
     def update_protein_buttons(self):
         analyzed_names = self.get_analyzed_protein_name_set() if self.current_case else set()
-        failed_keys = self.get_failed_protein_key_set() if self.current_case else set()
         current_key = self.get_current_protein_key()
 
         for item in self.config.get_protein_items():
@@ -733,32 +650,17 @@ class AnalysisWindow(QWidget):
                 continue
 
             is_done = name in analyzed_names or key in analyzed_names
-            is_failed = key in failed_keys
-            import_state = self.get_protein_import_state(key)
-            is_imported = import_state in {"imported", "incomplete"}
             is_current = key == current_key
 
-            if is_failed and is_current:
-                button.setText(f"{name} 当前!")
-                button.setProperty("state", "currentFailed")
-            elif is_failed:
-                button.setText(f"{name} !")
-                button.setProperty("state", "failed")
-            elif is_current and is_done:
+            if is_current and is_done:
                 button.setText(f"{name} 当前√")
                 button.setProperty("state", "currentDone")
-            elif is_current and is_imported:
-                button.setText(f"{name} 当前待分析")
-                button.setProperty("state", "currentImported")
             elif is_current:
                 button.setText(f"{name} 当前")
                 button.setProperty("state", "current")
             elif is_done:
                 button.setText(f"{name} √")
                 button.setProperty("state", "done")
-            elif is_imported:
-                button.setText(f"{name} 待分析")
-                button.setProperty("state", "imported")
             else:
                 button.setText(f"{name} -")
                 button.setProperty("state", "todo")
@@ -907,8 +809,6 @@ class AnalysisWindow(QWidget):
             if hasattr(self.result_viewer, "clear_results"):
                 self.result_viewer.clear_results(f"{protein_name} 暂无分析结果。")
             self.append_log(f"{protein_name} 暂无分析结果。")
-
-        self.update_protein_buttons()
 
     def load_images_from_raw_folder(self, raw_folder: Path, protein_key: str):
         support_exts = {
@@ -1086,7 +986,6 @@ class AnalysisWindow(QWidget):
         self.append_log(f"图片已复制到：{target_folder}")
 
         self.btn_run_cp.setEnabled(complete_count > 0)
-        self.update_protein_buttons()
 
         QMessageBox.information(
             self,

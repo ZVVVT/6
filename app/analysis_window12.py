@@ -41,8 +41,6 @@ class AnalysisWindow(QWidget):
         self.current_cp_output_dir = None
         self.current_raw_image_folder = None
         self._suspend_protein_changed = False
-        self.current_protein_key = None
-        self.protein_buttons = {}
 
         self.init_ui()
 
@@ -84,10 +82,9 @@ class AnalysisWindow(QWidget):
         operation_layout.setSpacing(6)
 
         row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(8)
 
-        self.protein_buttons_layout = QHBoxLayout()
-        self.protein_buttons_layout.setSpacing(6)
+        self.protein_combo = QComboBox()
+        self.load_protein_combo()
 
         self.protein_part_label = QLabel("表达部位：-")
         self.pipeline_label = QLabel("Pipeline：-")
@@ -95,18 +92,17 @@ class AnalysisWindow(QWidget):
         self.protein_status_label.setStyleSheet("color: #666666;")
 
         self.btn_next_protein = QPushButton("下一个未分析")
+
+        self.protein_combo.currentIndexChanged.connect(self.on_protein_changed)
         self.btn_next_protein.clicked.connect(self.select_next_unanalyzed_protein)
 
-        row1_layout.addWidget(QLabel("检测项目："))
-        row1_layout.addLayout(self.protein_buttons_layout)
-        row1_layout.addSpacing(10)
+        row1_layout.addWidget(QLabel("蛋白名称："))
+        row1_layout.addWidget(self.protein_combo)
         row1_layout.addWidget(self.protein_part_label)
         row1_layout.addWidget(self.pipeline_label, 1)
         row1_layout.addWidget(self.btn_next_protein)
 
         operation_layout.addLayout(row1_layout)
-
-        self.load_protein_combo()
 
         row2_layout = QHBoxLayout()
 
@@ -126,15 +122,21 @@ class AnalysisWindow(QWidget):
 
         operation_layout.addLayout(row2_layout)
 
-        # 下面三个状态信息已经分别在蛋白项目按钮、底部导入图片列表、底部运行日志中显示，
-        # 这里保留 QLabel 对象给原有逻辑更新使用，但不再放到界面里，避免信息重复。
+        row3_layout = QHBoxLayout()
+
         self.import_status_label = QLabel("图片状态：当前蛋白暂无导入图片")
-        self.import_status_label.setVisible(False)
+        self.import_status_label.setStyleSheet("color: #555555;")
 
         self.last_log_label = QLabel("最近状态：-")
-        self.last_log_label.setVisible(False)
+        self.last_log_label.setStyleSheet("color: #666666;")
 
-        self.protein_status_label.setVisible(False)
+        row3_layout.addWidget(self.protein_status_label)
+        row3_layout.addSpacing(18)
+        row3_layout.addWidget(self.import_status_label)
+        row3_layout.addSpacing(18)
+        row3_layout.addWidget(self.last_log_label, 1)
+
+        operation_layout.addLayout(row3_layout)
 
         main_layout.addWidget(operation_group)
 
@@ -349,54 +351,6 @@ class AnalysisWindow(QWidget):
             QLabel {
                 background-color: transparent;
             }
-            QPushButton#proteinProjectButton {
-                min-height: 28px;
-                min-width: 76px;
-                padding: 2px 10px;
-                border-radius: 14px;
-                border: 1px solid #b8c7da;
-                background-color: #ffffff;
-                color: #333333;
-            }
-            QPushButton#proteinProjectButton:hover {
-                background-color: #eef5ff;
-                border-color: #7aa7d9;
-            }
-            QPushButton#proteinProjectButton[state="current"],
-            QPushButton#proteinProjectButton[state="currentDone"] {
-                background-color: #d8eaff;
-                border: 1px solid #4f8fce;
-                color: #1f4e79;
-                font-weight: bold;
-            }
-            QPushButton#proteinProjectButton[state="done"] {
-                background-color: #f4fff6;
-                border: 1px solid #8fd19e;
-                color: #198754;
-            }
-            QPushButton#proteinProjectButton[state="imported"] {
-                background-color: #fff8e1;
-                border: 1px solid #f0c36d;
-                color: #8a5a00;
-            }
-            QPushButton#proteinProjectButton[state="failed"],
-            QPushButton#proteinProjectButton[state="currentFailed"] {
-                background-color: #fff1f0;
-                border: 1px solid #ff9a94;
-                color: #c62828;
-                font-weight: bold;
-            }
-            QPushButton#proteinProjectButton[state="currentImported"] {
-                background-color: #d8eaff;
-                border: 1px solid #4f8fce;
-                color: #1f4e79;
-                font-weight: bold;
-            }
-            QPushButton#proteinProjectButton[state="todo"] {
-                background-color: #ffffff;
-                border: 1px solid #cfd8e6;
-                color: #666666;
-            }
             QLineEdit, QTextEdit, QTableWidget {
                 background-color: #ffffff;
                 border: 1px solid #cfd8e6;
@@ -409,11 +363,29 @@ class AnalysisWindow(QWidget):
                 border: 1px solid #b8c7da;
                 border-radius: 4px;
                 padding-left: 8px;
-                padding-right: 6px;
+                padding-right: 22px;
             }
             QComboBox:hover {
                 border-color: #7aa7d9;
                 background-color: #f8fbff;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 22px;
+                border-left: 1px solid #d9e2ef;
+                border-top-right-radius: 4px;
+                border-bottom-right-radius: 4px;
+                background-color: #f4f7fb;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #4a5f73;
+                margin-right: 7px;
             }
             QComboBox QAbstractItemView {
                 background-color: #ffffff;
@@ -486,69 +458,29 @@ class AnalysisWindow(QWidget):
             self.import_panel_summary_label.setText(text)
 
     def load_protein_combo(self):
-        """构建 HEL-1~HEL-5 横向检测项目按钮。
+        self.protein_combo.clear()
 
-        这里保留函数名 load_protein_combo，是为了兼容原来 reload_config()
-        的调用；实际界面已经不再使用下拉框。
-        """
-        # 清空旧按钮
-        while self.protein_buttons_layout.count():
-            item = self.protein_buttons_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        self.protein_buttons = {}
         protein_items = self.config.get_protein_items()
-        protein_keys = [str(item.get("key", "")) for item in protein_items if item.get("key", "")]
-
-        if protein_keys and self.current_protein_key not in protein_keys:
-            self.current_protein_key = protein_keys[0]
 
         for item in protein_items:
-            key = str(item.get("key", "") or "")
-            name = str(item.get("name", key) or key)
-            part = str(item.get("part", "") or "")
+            key = item.get("key", "")
+            name = item.get("name", key)
+            part = item.get("part", "")
 
-            if not key:
-                continue
+            # 下拉框只显示蛋白名称，表达部位在右侧单独显示，避免重复和拥挤。
+            self.protein_combo.addItem(name, key)
 
-            button = QPushButton(name)
-            button.setObjectName("proteinProjectButton")
-            button.setCheckable(True)
-            button.setToolTip(f"{name} / {part}" if part else name)
-            button.clicked.connect(lambda checked=False, k=key: self.set_current_protein_key(k))
-
-            self.protein_buttons[key] = button
-            self.protein_buttons_layout.addWidget(button)
-
-        self.protein_buttons_layout.addStretch()
-        self.update_protein_buttons()
-
-    def set_current_protein_key(self, protein_key: str):
-        if not protein_key:
-            return
-
-        if self.current_protein_key == protein_key and not self._suspend_protein_changed:
-            # 当前蛋白重复点击时不重新刷日志，但仍确保按钮状态正确。
-            self.update_protein_buttons()
-            return
-
-        self.current_protein_key = protein_key
-        self.update_protein_buttons()
-        self.on_protein_changed()
+            index = self.protein_combo.count() - 1
+            if part:
+                self.protein_combo.setItemData(index, f"{name} / {part}", Qt.ToolTipRole)
 
     def get_current_protein_key(self):
-        if self.current_protein_key:
-            return str(self.current_protein_key)
+        key = self.protein_combo.currentData()
 
-        protein_items = self.config.get_protein_items()
-        if protein_items:
-            key = str(protein_items[0].get("key", "") or "")
-            self.current_protein_key = key
-            return key
+        if key:
+            return str(key)
 
-        return ""
+        return self.config.normalize_protein_key(self.protein_combo.currentText())
 
     def get_current_protein_name(self):
         key = self.get_current_protein_key()
@@ -630,168 +562,41 @@ class AnalysisWindow(QWidget):
         return None
 
     def refresh_protein_status(self):
-        analyzed_names = self.get_analyzed_protein_name_set() if self.current_case else set()
+        if not self.current_case:
+            self.protein_status_label.setText("已分析：-")
+            return
+
+        analyzed_names = self.get_analyzed_protein_name_set()
+
         status_items = []
 
         for item in self.config.get_protein_items():
-            key = str(item.get("key", "") or "")
-            name = str(item.get("name", key) or key)
+            key = item.get("key", "")
+            name = item.get("name", key)
 
             if name in analyzed_names or key in analyzed_names:
                 status_items.append(f"{name} √")
             else:
                 status_items.append(f"{name} -")
 
-        if not self.current_case:
-            self.protein_status_label.setText("已分析：-")
-        else:
-            self.protein_status_label.setText("已分析：" + "　".join(status_items))
-
-        self.update_protein_buttons()
-
-    def get_failed_protein_key_set(self):
-        """返回当前病例中状态为失败/异常的蛋白 key 集合。
-
-        当前版本主要预留给以后保存失败记录时使用；如果数据库暂时没有失败记录，
-        这个集合就是空的，不影响现有流程。
-        """
-        if not self.current_case:
-            return set()
-
-        case_id = self.current_case.get("id")
-
-        if not case_id:
-            return set()
-
-        try:
-            rows = self.database.get_protein_analysis_by_case(case_id)
-        except Exception:
-            return set()
-
-        failed_keys = set()
-
-        for row in rows:
-            status = str(row.get("status", "") or "").strip()
-            if status not in {"失败", "异常", "错误", "failed", "error"}:
-                continue
-
-            row_name = str(row.get("protein_name", "") or "").strip()
-            row_key = self.config.normalize_protein_key(row_name)
-
-            if row_key:
-                failed_keys.add(row_key)
-
-        return failed_keys
-
-    def get_protein_import_state(self, protein_key: str):
-        """判断某个蛋白是否已经导入图片。
-
-        返回：
-        - none：没有导入图片
-        - imported：已导入并且至少有一个完整 R/G 视野
-        - incomplete：有图片但没有完整 R/G 视野
-        """
-        if not self.current_case:
-            return "none"
-
-        case_no = self.get_current_case_no()
-
-        if not case_no:
-            return "none"
-
-        raw_folder = self.config.get_workspace_root() / case_no / "raw_images" / protein_key
-
-        if not raw_folder.exists():
-            return "none"
-
-        try:
-            image_items = self.load_images_from_raw_folder(raw_folder, protein_key)
-        except Exception:
-            return "none"
-
-        if not image_items:
-            return "none"
-
-        complete_count = self.get_complete_image_count(image_items)
-
-        if complete_count > 0:
-            return "imported"
-
-        return "incomplete"
-
-    def update_protein_buttons(self):
-        analyzed_names = self.get_analyzed_protein_name_set() if self.current_case else set()
-        failed_keys = self.get_failed_protein_key_set() if self.current_case else set()
-        current_key = self.get_current_protein_key()
-
-        for item in self.config.get_protein_items():
-            key = str(item.get("key", "") or "")
-            name = str(item.get("name", key) or key)
-            button = self.protein_buttons.get(key)
-
-            if button is None:
-                continue
-
-            is_done = name in analyzed_names or key in analyzed_names
-            is_failed = key in failed_keys
-            import_state = self.get_protein_import_state(key)
-            is_imported = import_state in {"imported", "incomplete"}
-            is_current = key == current_key
-
-            if is_failed and is_current:
-                button.setText(f"{name} 当前!")
-                button.setProperty("state", "currentFailed")
-            elif is_failed:
-                button.setText(f"{name} !")
-                button.setProperty("state", "failed")
-            elif is_current and is_done:
-                button.setText(f"{name} 当前√")
-                button.setProperty("state", "currentDone")
-            elif is_current and is_imported:
-                button.setText(f"{name} 当前待分析")
-                button.setProperty("state", "currentImported")
-            elif is_current:
-                button.setText(f"{name} 当前")
-                button.setProperty("state", "current")
-            elif is_done:
-                button.setText(f"{name} √")
-                button.setProperty("state", "done")
-            elif is_imported:
-                button.setText(f"{name} 待分析")
-                button.setProperty("state", "imported")
-            else:
-                button.setText(f"{name} -")
-                button.setProperty("state", "todo")
-
-            button.setChecked(is_current)
-            button.style().unpolish(button)
-            button.style().polish(button)
-            button.update()
+        self.protein_status_label.setText("已分析：" + "　".join(status_items))
 
     def select_next_unanalyzed_protein(self):
-        protein_items = self.config.get_protein_items()
-
-        if not protein_items:
+        if self.protein_combo.count() <= 0:
             return
 
         analyzed_names = self.get_analyzed_protein_name_set()
-        keys = [str(item.get("key", "") or "") for item in protein_items]
-        current_key = self.get_current_protein_key()
 
-        try:
-            current_index = keys.index(current_key)
-        except ValueError:
-            current_index = 0
-
-        total = len(keys)
+        current_index = self.protein_combo.currentIndex()
+        total = self.protein_combo.count()
 
         for offset in range(1, total + 1):
             index = (current_index + offset) % total
-            key = keys[index]
+            key = str(self.protein_combo.itemData(index))
             name = self.config.get_protein_display_name(key)
 
             if name not in analyzed_names and key not in analyzed_names:
-                self.set_current_protein_key(key)
+                self.protein_combo.setCurrentIndex(index)
                 self.append_log(f"已切换到下一个未分析蛋白：{name}")
                 return
 
@@ -809,8 +614,13 @@ class AnalysisWindow(QWidget):
 
         self._suspend_protein_changed = True
         try:
-            self.current_protein_key = current_key
             self.load_protein_combo()
+
+            if current_key:
+                for index in range(self.protein_combo.count()):
+                    if self.protein_combo.itemData(index) == current_key:
+                        self.protein_combo.setCurrentIndex(index)
+                        break
         finally:
             self._suspend_protein_changed = False
 
@@ -907,8 +717,6 @@ class AnalysisWindow(QWidget):
             if hasattr(self.result_viewer, "clear_results"):
                 self.result_viewer.clear_results(f"{protein_name} 暂无分析结果。")
             self.append_log(f"{protein_name} 暂无分析结果。")
-
-        self.update_protein_buttons()
 
     def load_images_from_raw_folder(self, raw_folder: Path, protein_key: str):
         support_exts = {
@@ -1086,7 +894,6 @@ class AnalysisWindow(QWidget):
         self.append_log(f"图片已复制到：{target_folder}")
 
         self.btn_run_cp.setEnabled(complete_count > 0)
-        self.update_protein_buttons()
 
         QMessageBox.information(
             self,
@@ -1441,8 +1248,7 @@ class AnalysisWindow(QWidget):
         self.btn_select_folder.setEnabled(not running)
         self.btn_import.setEnabled(not running)
         self.btn_next_protein.setEnabled(not running)
-        for button in self.protein_buttons.values():
-            button.setEnabled(not running)
+        self.protein_combo.setEnabled(not running)
 
         if running:
             self.btn_run_cp.setEnabled(False)

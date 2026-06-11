@@ -36,7 +36,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("人精子蛋白质量分析软件")
-        self.resize(1280, 820)
+        self.resize(1650, 950)
 
         self.database = Database("data/analysis.db")
         self.current_case = None

@@ -173,8 +173,8 @@ class ResultViewer(QWidget):
         # -------------------------
         right_panel = QWidget()
         right_panel.setObjectName("rightPanel")
-        right_panel.setMaximumWidth(340)
-        right_panel.setMinimumWidth(305)
+        right_panel.setMaximumWidth(320)
+        right_panel.setMinimumWidth(290)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(8)
@@ -193,9 +193,9 @@ class ResultViewer(QWidget):
         output_btn_row1 = QHBoxLayout()
         output_btn_row2 = QHBoxLayout()
 
-        self.btn_refresh = QPushButton("刷新结果")
-        self.btn_open_dir = QPushButton("打开输出目录")
-        self.btn_open_image = QPushButton("打开当前图片")
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_open_dir = QPushButton("目录")
+        self.btn_open_image = QPushButton("图片")
 
         self.btn_refresh.setToolTip("刷新当前输出结果")
         self.btn_open_dir.setToolTip("打开输出目录")
@@ -246,10 +246,10 @@ class ResultViewer(QWidget):
         result_layout.setContentsMargins(8, 8, 8, 8)
         result_layout.setSpacing(6)
 
-        # 表格已经包含当前视野和合计数据，文字摘要不再常驻显示，避免重复占空间。
         self.summary_label = QLabel("当前还没有结果。")
         self.summary_label.setWordWrap(True)
-        self.summary_label.setVisible(False)
+        self.summary_label.setStyleSheet("font-size: 14px; color: #333333; line-height: 150%;")
+        result_layout.addWidget(self.summary_label)
 
         self.summary_table = QTableWidget()
         self.summary_table.setColumnCount(5)
@@ -268,23 +268,23 @@ class ResultViewer(QWidget):
         self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.summary_table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
-        self.summary_table.setMaximumHeight(190)
+        self.summary_table.setMaximumHeight(170)
 
         summary_header = self.summary_table.horizontalHeader()
         summary_header.setSectionResizeMode(QHeaderView.Stretch)
 
         result_layout.addWidget(self.summary_table)
 
-        # 文件统计属于开发/排查信息，界面不再常驻显示；需要查看文件时打开输出目录即可。
         self.file_summary_label = QLabel("文件统计：-")
         self.file_summary_label.setWordWrap(True)
-        self.file_summary_label.setVisible(False)
+        self.file_summary_label.setStyleSheet("color: #666666;")
+        result_layout.addWidget(self.file_summary_label)
 
         right_layout.addWidget(result_group, 1)
         right_layout.addStretch()
 
         main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([1480, 320])
+        main_splitter.setSizes([1500, 300])
 
         main_layout.addWidget(main_splitter, 1)
 
@@ -519,7 +519,7 @@ class ResultViewer(QWidget):
         else:
             self.summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        self.summary_table.setFixedHeight(max(70, min(target_height, 190)))
+        self.summary_table.setFixedHeight(max(70, min(target_height, 170)))
 
     # -------------------------
     # 文件扫描：不显示文件列表，只用于找图片
