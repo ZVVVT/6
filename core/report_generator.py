@@ -381,18 +381,18 @@ class ReportGenerator:
                             pass
 
         # 页脚
-        c.setFillColor(colors.grey)
-        c.setFont(self.font_name, 8)
-        c.drawString(
-            left,
-            16 * mm,
-            "备注：本报告由软件根据 MvImageID / CellProfiler 后台分析结果自动生成。",
-        )
-        c.drawRightString(
-            right,
-            16 * mm,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        )
+#         c.setFillColor(colors.grey)
+#         c.setFont(self.font_name, 8)
+#         c.drawString(
+#             left,
+#             16 * mm,
+#             "备注：本报告由软件根据 MvImageID / CellProfiler 后台分析结果自动生成。",
+#         )
+#         c.drawRightString(
+#             right,
+#             16 * mm,
+#             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+#         )
 
         c.showPage()
         c.save()

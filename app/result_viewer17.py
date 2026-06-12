@@ -255,7 +255,7 @@ class ResultViewer(QWidget):
         self.summary_table.setHorizontalHeaderLabels([
             "视野",
             "精子数",
-            "共定位数",
+            "阳性数",
             "标定率",
             "荧光",
         ])
@@ -895,7 +895,7 @@ class ResultViewer(QWidget):
             current_text = (
                 f"当前视野：{self.current_field_no}\n"
                 f"精子数：{current_row.get('sperm_count', 0)}\n"
-                f"共定位数：{current_row.get('positive_count', 0)}\n"
+                f"阳性/共定位数：{current_row.get('positive_count', 0)}\n"
                 f"标定率：{current_row.get('expression_rate', 0)}%\n"
                 f"荧光强度：{current_row.get('mean_intensity', 0)}"
             )
@@ -907,7 +907,7 @@ class ResultViewer(QWidget):
                 f"\n\n合计：\n"
                 f"视野数：{total.get('field_count', 0)}\n"
                 f"精子总数：{total.get('sperm_count', 0)}\n"
-                f"共定位数：{total.get('positive_count', 0)}\n"
+                f"阳性/共定位数：{total.get('positive_count', 0)}\n"
                 f"标定率：{total.get('expression_rate', 0)}%\n"
                 f"荧光强度：{total.get('mean_intensity', 0)}"
             )

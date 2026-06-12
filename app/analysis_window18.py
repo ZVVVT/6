@@ -1242,24 +1242,7 @@ class AnalysisWindow(QWidget):
             QMessageBox.critical(self, "错误", f"准备输入目录失败：\n{e}")
             return
 
-        # 覆盖/重新分析时，必须先清空当前蛋白的旧输出目录。
-        # 否则旧图片会和本次新图片混在一起，被界面误识别为多个视野。
-        # 这里只清空当前病例下的当前蛋白目录，不影响其他蛋白结果。
-        try:
-            if cp_output_dir.exists():
-                shutil.rmtree(cp_output_dir)
-                self.append_log(f"已清空当前蛋白旧输出目录：{cp_output_dir}")
-
-            cp_output_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "错误",
-                f"清空当前蛋白输出目录失败：\n{cp_output_dir}\n\n错误信息：{e}\n\n"
-                "请确认输出目录中的图片、CSV、PDF 没有被其他程序打开。"
-            )
-            return
-
+        cp_output_dir.mkdir(parents=True, exist_ok=True)
         self.current_cp_output_dir = cp_output_dir
 
         self.append_log(f"准备以源码环境方式运行分析：{protein_name}")

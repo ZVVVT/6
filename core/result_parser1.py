@@ -40,6 +40,7 @@ class ResultParser:
                 file_type = "其他"
 
             stat = file_path.stat()
+
             files.append({
                 "name": file_path.name,
                 "type": file_type,
@@ -54,6 +55,7 @@ class ResultParser:
 
     def get_file_summary(self) -> dict:
         files = self.scan_files()
+
         summary = {
             "total": len(files),
             "image": 0,
@@ -111,19 +113,9 @@ class ResultParser:
 
         csv_files = list(self.output_dir.rglob("*.csv"))
 
-        # 头部/普通管道可能输出 G_colocalized.csv
         for file_path in csv_files:
-            if "g_colocalized" in file_path.name.lower():
-                return file_path
-
-        # 尾部管道可能输出 R_colocalized.csv
-        for file_path in csv_files:
-            if "r_colocalized" in file_path.name.lower():
-                return file_path
-
-        # 兜底：任何包含 colocalized 的对象表
-        for file_path in csv_files:
-            if "colocalized" in file_path.name.lower():
+            name = file_path.name.lower()
+            if "g_colocalized" in name:
                 return file_path
 
         return None
@@ -158,62 +150,26 @@ class ResultParser:
         for _, row in df.iterrows():
             image_number = self._get_value(row, "ImageNumber", default="")
 
-            # 分母：红色头部精子数。优先 Count_R_objects，兼容少数管道可能用其他名称。
-            r_count = self._get_float_any(row, [
-                "Count_R_objects",
-                "Count_R_Objects",
-                "Count_R",
-            ])
+            r_count = self._get_float(row, "Count_R_objects")
+            g_colocalized_count = self._get_float(row, "Count_G_colocalized")
+            g_objects_count = self._get_float(row, "Count_G_objects")
+            r_objects_run = self._get_float(row, "Count_R_objects_Run")
+            g_objects_run = self._get_float(row, "Count_G_objects_Run")
 
-            # 阳性/共定位数：不同 Pipeline 输出字段不同。
-            # 头部/普通管道常见 Count_G_colocalized；尾部管道常见 Count_R_colocalized。
-            # 这里统一兼容，避免尾部分析显示为 0。
-            colocalized_count = self._get_float_any(row, [
-                "Count_R_colocalized",
-                "Count_G_colocalized",
-                "Count_colocalized",
-                "Count_Colocalized",
-            ])
-
-            g_objects_count = self._get_float_any(row, [
-                "Count_G_objects",
-                "Count_G_Objects",
-                "Count_G",
-            ])
-
-            r_objects_run = self._get_float_any(row, [
-                "Count_R_objects_Run",
-                "Count_R_Objects_Run",
-            ])
-
-            g_objects_run = self._get_float_any(row, [
-                "Count_G_objects_Run",
-                "Count_G_Objects_Run",
-            ])
-
-            # 总绿色强度：对象名可能是 G_colocalized，也可能是 R_colocalized。
-            total_intensity = self._get_float_any(row, [
-                "Intensity_TotalIntensity_G_Gray_R_colocalized",
-                "Intensity_TotalIntensity_G_Gray_G_colocalized",
-                "Intensity_TotalIntensity_G_R_colocalized",
-                "Intensity_TotalIntensity_G_G_colocalized",
-                "Intensity_TotalIntensity_G_colocalized",
-            ])
-
-            # Pipeline 已经计算好的结果，优先使用。
+            total_intensity = self._get_float(row, "Intensity_TotalIntensity_G_Gray_G_colocalized")
             cp_rate = self._get_float(row, "Math_ColocalizationRate")
             cp_intensity = self._get_float(row, "Math_FluorescenceIntensity")
 
             if cp_rate is not None:
                 expression_rate = cp_rate * 100 if cp_rate <= 1 else cp_rate
-            elif r_count and colocalized_count is not None:
-                expression_rate = colocalized_count / r_count * 100
+            elif r_count:
+                expression_rate = g_colocalized_count / r_count * 100
             else:
                 expression_rate = 0
 
             if cp_intensity is not None:
                 mean_intensity = cp_intensity
-            elif total_intensity is not None and r_count:
+            elif r_count:
                 mean_intensity = total_intensity / r_count
             else:
                 mean_intensity = 0
@@ -221,7 +177,7 @@ class ResultParser:
             rows.append({
                 "image_number": int(image_number) if str(image_number).isdigit() else image_number,
                 "sperm_count": int(r_count or 0),
-                "positive_count": int(colocalized_count or 0),
+                "positive_count": int(g_colocalized_count or 0),
                 "expression_rate": round(expression_rate or 0, 2),
                 "mean_intensity": round(mean_intensity or 0, 2),
                 "total_green_intensity": round(total_intensity or 0, 2),
@@ -236,19 +192,9 @@ class ResultParser:
 
         if total_sperm_count > 0:
             total_expression_rate = total_positive_count / total_sperm_count * 100
+            total_mean_intensity = total_green_intensity / total_sperm_count
         else:
             total_expression_rate = 0
-
-        # 总荧光强度优先用总强度 / 总精子数。
-        # 如果该 Pipeline 没有输出 TotalIntensity 字段，则用每视野 Math_FluorescenceIntensity 按精子数加权平均。
-        if total_sperm_count > 0 and total_green_intensity > 0:
-            total_mean_intensity = total_green_intensity / total_sperm_count
-        elif total_sperm_count > 0:
-            weighted_sum = sum(item["mean_intensity"] * item["sperm_count"] for item in rows)
-            total_mean_intensity = weighted_sum / total_sperm_count if weighted_sum > 0 else 0
-        elif rows:
-            total_mean_intensity = sum(item["mean_intensity"] for item in rows) / len(rows)
-        else:
             total_mean_intensity = 0
 
         total = {
@@ -273,7 +219,7 @@ class ResultParser:
 
         result = {
             "success": False,
-            "message": "未找到 colocalized 对象 CSV。",
+            "message": "未找到 G_colocalized.csv。",
             "object_csv": "",
             "object_count": 0,
             "columns": [],
@@ -317,11 +263,3 @@ class ResultParser:
             return float(value)
         except Exception:
             return None
-
-    @classmethod
-    def _get_float_any(cls, row, column_names: list):
-        for column_name in column_names:
-            value = cls._get_float(row, column_name)
-            if value is not None:
-                return value
-        return None

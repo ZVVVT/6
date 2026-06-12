@@ -265,7 +265,7 @@ ExpandOrShrinkObjects(扩展或收缩对象):[module_num:16|svn_version:'Unknown
     选择输入对象:R_objects
     命名输出对象:R_search
     选择要执行的操作:Expand objects by a specified number of pixels
-    扩张或收缩的像素数:100
+    扩张或收缩的像素数:50
     是否填补对象内的孔洞，以便对象收缩为单个点？:No
     用于扩张或收缩的测量值:None
 

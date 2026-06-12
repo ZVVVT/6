@@ -178,9 +178,9 @@ class AnalysisWindow(QWidget):
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
             "视野",
-            "G",
-            "R",
-            "DIC",
+            "R/PI",
+            "G/FITC",
+            "DIC/相差",
             "Merge",
             "状态",
         ])
@@ -1104,8 +1104,8 @@ class AnalysisWindow(QWidget):
         for row_index, item in enumerate(image_items):
             values = [
                 item.get("field_no", ""),
-                self._short_path(item.get("G", "")),
                 self._short_path(item.get("R", "")),
+                self._short_path(item.get("G", "")),
                 self._short_path(item.get("DIC", "")),
                 self._short_path(item.get("Merge", "")),
                 item.get("status", ""),
@@ -1175,7 +1175,7 @@ class AnalysisWindow(QWidget):
                 f"分析时间：{created_at}\n"
                 f"视野数：{total_fields}\n"
                 f"精子总数：{total_sperm_count}\n"
-                f"共定位数：{positive_count}\n"
+                f"阳性/共定位数：{positive_count}\n"
                 f"标定率：{expression_rate}%\n\n"
                 "继续运行会用新的分析结果替换该蛋白旧结果。\n"
                 "不会影响当前病例下其他蛋白的结果。\n\n"
@@ -1242,24 +1242,7 @@ class AnalysisWindow(QWidget):
             QMessageBox.critical(self, "错误", f"准备输入目录失败：\n{e}")
             return
 
-        # 覆盖/重新分析时，必须先清空当前蛋白的旧输出目录。
-        # 否则旧图片会和本次新图片混在一起，被界面误识别为多个视野。
-        # 这里只清空当前病例下的当前蛋白目录，不影响其他蛋白结果。
-        try:
-            if cp_output_dir.exists():
-                shutil.rmtree(cp_output_dir)
-                self.append_log(f"已清空当前蛋白旧输出目录：{cp_output_dir}")
-
-            cp_output_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "错误",
-                f"清空当前蛋白输出目录失败：\n{cp_output_dir}\n\n错误信息：{e}\n\n"
-                "请确认输出目录中的图片、CSV、PDF 没有被其他程序打开。"
-            )
-            return
-
+        cp_output_dir.mkdir(parents=True, exist_ok=True)
         self.current_cp_output_dir = cp_output_dir
 
         self.append_log(f"准备以源码环境方式运行分析：{protein_name}")
@@ -1445,7 +1428,7 @@ class AnalysisWindow(QWidget):
             f"{protein_name} 结果已保存到数据库："
             f"视野数 {total.get('field_count', 0)}，"
             f"精子总数 {total.get('sperm_count', 0)}，"
-            f"共定位数 {total.get('positive_count', 0)}，"
+            f"阳性/共定位数 {total.get('positive_count', 0)}，"
             f"标定率 {total.get('expression_rate', 0)}%，"
             f"荧光强度 {total.get('mean_intensity', 0)}。"
         )
