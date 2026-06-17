@@ -29,28 +29,28 @@ image_ext = .png
 [Protein]
 protein1 = head
 protein2 = head
-protein3 = tail
+protein3 = head
 protein4 = head
-protein5 = head
+protein5 = tail
 protein6 = head
 
 [ProteinOrder]
 keys = protein1,protein2,protein3,protein4,protein5
 
 [ProteinNames]
-protein1 = Q9BYW3
-protein2 = P10323
-protein3 = Q96P56
-protein4 = Q8IYV9
-protein5 = W5XKT8
+protein1 = HEL-1
+protein2 = HEL-2
+protein3 = HEL-3
+protein4 = HEL-4
+protein5 = HEL-5
 protein6 = HEL-6
 
 [ProteinPipelines]
 protein1 = E:/Output/3/CPP.cppipe
-protein2 = E:/Output/3/CPP.cppipe
-protein3 = F:/sperm_protein_analyzer/CPP6.cppipe
-protein4 = E:/Output/3/CPP.cppipe
-protein5 = E:/Output/3/CPP.cppipe
+protein2 = 
+protein3 = 
+protein4 = 
+protein5 = F:/sperm_protein_analyzer/CPP6.cppipe
 protein6 = 
 
 [ProteinReferenceIntensityMin]

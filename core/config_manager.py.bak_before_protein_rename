@@ -67,39 +67,19 @@ class ConfigManager:
 
     def normalize_protein_key(self, protein_name_or_key: str) -> str:
         value = str(protein_name_or_key or "").strip()
+
         if not value:
             return ""
 
-        # 直接传入内部编号 protein1~protein5 时，直接返回
         if self.get("Protein", value, ""):
             return value
-
-        # 兼容历史显示名称和当前标准蛋白编号，避免恢复默认或历史数据导致结果无法对应
-        alias_map = {
-            "HEL-1": "protein1",
-            "HEL-2": "protein2",
-            "HEL-3": "protein3",
-            "HEL-4": "protein4",
-            "HEL-5": "protein5",
-            "Q9BYW3": "protein1",
-            "P10323": "protein2",
-            "Q96P56": "protein3",
-            "Q8IYV9": "protein4",
-            "W5XKT8": "protein5",
-        }
-        if value in alias_map:
-            return alias_map[value]
-
-        value_upper = value.upper()
-        for name, key in alias_map.items():
-            if value_upper == name.upper():
-                return key
 
         for key in self.get_protein_keys():
             if value == self.get_protein_display_name(key):
                 return key
 
         return value.lower()
+
     def get_protein_display_name(self, protein_key: str) -> str:
         protein_key = str(protein_key or "").strip()
         return self.get("ProteinNames", protein_key, protein_key)
@@ -212,11 +192,11 @@ class ConfigManager:
                 "keys": "protein1,protein2,protein3,protein4,protein5",
             },
             "ProteinNames": {
-                "protein1": "Q9BYW3",
-                "protein2": "P10323",
-                "protein3": "Q96P56",
-                "protein4": "Q8IYV9",
-                "protein5": "W5XKT8",
+                "protein1": "HEL-1",
+                "protein2": "HEL-2",
+                "protein3": "HEL-3",
+                "protein4": "HEL-4",
+                "protein5": "HEL-5",
             },
             "ProteinPipelines": {
                 "protein1": "",

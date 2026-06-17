@@ -352,7 +352,7 @@ class SettingsWindow(QWidget):
 
         self.add_protein_row(
             key=f"protein{next_index}",
-            name=f"protein{next_index}",
+            name=f"HEL-{next_index}",
             part="head",
             pipeline="",
             intensity_min="26.0",
@@ -384,11 +384,11 @@ class SettingsWindow(QWidget):
         self.protein_table.setRowCount(0)
 
         defaults = [
-            ("protein1", "Q9BYW3", "head", "", "26.0", "82.88"),
-            ("protein2", "P10323", "head", "", "26.0", "82.88"),
-            ("protein3", "Q96P56", "tail", "", "26.0", "82.88"),
-            ("protein4", "Q8IYV9", "head", "", "26.0", "82.88"),
-            ("protein5", "W5XKT8", "head", "", "26.0", "82.88"),
+            ("protein1", "HEL-1", "head", "", "26.0", "82.88"),
+            ("protein2", "HEL-2", "head", "", "26.0", "82.88"),
+            ("protein3", "HEL-3", "tail", "", "26.0", "82.88"),
+            ("protein4", "HEL-4", "head", "", "26.0", "82.88"),
+            ("protein5", "HEL-5", "head", "", "26.0", "82.88"),
         ]
 
         for item in defaults:
