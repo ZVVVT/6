@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
 )
 
 from core.config_manager import ConfigManager
-from app.batch_analysis_dialog import BatchAnalysisDialog
 
 
 class CaseDetailWindow(QWidget):
@@ -192,14 +191,12 @@ class CaseDetailWindow(QWidget):
 
         self.btn_refresh = QPushButton("刷新详情")
         self.btn_start_analysis = QPushButton("开始蛋白分析")
-        self.btn_batch_analysis = QPushButton("批量蛋白分析")
         self.btn_report = QPushButton("进入报告管理")
         self.btn_open_report = QPushButton("打开报告")
         self.btn_open_workspace = QPushButton("打开病例工作目录")
 
         button_layout.addWidget(self.btn_refresh)
         button_layout.addWidget(self.btn_start_analysis)
-        button_layout.addWidget(self.btn_batch_analysis)
         button_layout.addWidget(self.btn_report)
         button_layout.addWidget(self.btn_open_report)
         button_layout.addWidget(self.btn_open_workspace)
@@ -253,7 +250,6 @@ class CaseDetailWindow(QWidget):
 
         self.btn_refresh.clicked.connect(self.refresh_detail)
         self.btn_start_analysis.clicked.connect(self.start_analysis)
-        self.btn_batch_analysis.clicked.connect(self.open_batch_analysis)
         self.btn_report.clicked.connect(self.go_report)
         self.btn_open_report.clicked.connect(self.open_report)
         self.btn_open_workspace.clicked.connect(self.open_workspace)
@@ -487,16 +483,6 @@ class CaseDetailWindow(QWidget):
             return
 
         self.start_analysis_requested.emit(self.current_case)
-
-    def open_batch_analysis(self):
-        if not self.current_case:
-            QMessageBox.information(self, "提示", "请先在病例管理中选择病例。")
-            return
-
-        dialog = BatchAnalysisDialog(self.database, self.current_case, self)
-        dialog.batch_finished.connect(self.refresh_detail)
-        dialog.exec()
-        self.refresh_detail()
 
     def go_report(self):
         if not self.current_case:
