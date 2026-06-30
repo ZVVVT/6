@@ -1,8 +1,7 @@
-import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QFontDatabase, QIcon
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -20,7 +19,6 @@ from app.case_detail_window import CaseDetailWindow
 from app.case_manager_window import CaseManagerWindow
 from app.report_window import ReportWindow
 from app.settings_window import SettingsWindow
-from app.ui_style import get_app_stylesheet
 from core.config_manager import ConfigManager
 from core.database import Database
 
@@ -29,13 +27,22 @@ class MainWindow(QMainWindow):
     """
     主窗口统一页面骨架。
 
-    这版重点修复：
-    1. 窗口标题不再硬编码。
-    2. 启动时从 config.ini 的 [AppInfo] app_name 读取软件名称。
-    3. 启动时从 config.ini 的 [AppInfo] logo_path 读取窗口 LOGO。
-    4. 系统设置保存后立即重新应用软件名称和 LOGO，无需重启。
-    5. config.ini、assets、data 路径统一按项目根目录解析，避免当前工作目录不同导致读写错文件。
+    本版包含：
+    1. 软件名称 / LOGO 从 config.ini 的 [AppInfo] 读取。
+    2. 系统设置固定到左侧菜单底部。
+    3. 左侧菜单增加 SVG 图标。
+    4. 右侧统一标题栏增加当前页面图标。
+    5. 左侧菜单选中态：浅蓝背景 + 深蓝文字 + 左侧蓝色竖条。
+    6. 鼠标悬停态：浅灰蓝背景。
     """
+
+    PAGE_ICONS = {
+        "病例管理": "case_manager.svg",
+        "病例详情": "case_detail.svg",
+        "蛋白分析": "protein_analysis.svg",
+        "报告管理": "report.svg",
+        "系统设置": "settings.svg",
+    }
 
     def __init__(self):
         super().__init__()
@@ -47,8 +54,7 @@ class MainWindow(QMainWindow):
         self.config_manager = ConfigManager(str(self.project_root / "config.ini"))
         self.config_manager.ensure_default_config()
 
-        # 先应用界面字体与品牌信息，后续保存设置时也会再次调用。
-        self.apply_app_font()
+        # 先应用品牌信息，后续保存设置时也会再次调用。
         self.apply_app_branding()
 
         # 默认窗口尺寸按蛋白分析页面设置，避免页面切换时窗口跳变。
@@ -70,116 +76,25 @@ class MainWindow(QMainWindow):
     # 路径与品牌信息
     # ------------------------------------------------------------------
     def resolve_project_path(self, path_value) -> Path:
-        """把配置中的相对路径解析为项目根目录下的绝对路径。
-
-        空字符串和 "." 在字体配置中表示“系统默认字体”，不能解析成项目根目录。
-        """
+        """把配置中的相对路径解析为项目根目录下的绝对路径。"""
         path_text = str(path_value or "").strip()
         if not path_text or path_text == ".":
-            return Path("")
+            return self.project_root
         path = Path(path_text)
         if path.is_absolute():
             return path
         return self.project_root / path
 
-    def load_configured_font_family(self):
-        """
-        读取并加载配置中的软件界面字体。
+    def icon_path(self, icon_file: str) -> Path:
+        """返回 assets/icons 下图标文件路径。"""
+        return self.project_root / "assets" / "icons" / icon_file
 
-        返回：
-        - 字体族名：font_path 指向有效字体文件且 Qt 加载成功
-        - None：font_path 为空、文件不存在或加载失败，此时使用系统默认字体
-        """
-        font_path_text = str(self.config_manager.get_app_font_path() or "").strip()
-        if not font_path_text or font_path_text == ".":
-            return None
-
-        font_path = self.resolve_project_path(font_path_text)
-        if not font_path.exists() or not font_path.is_file():
-            return None
-
-        font_id = QFontDatabase.addApplicationFont(str(font_path))
-        if font_id == -1:
-            return None
-
-        families = QFontDatabase.applicationFontFamilies(font_id)
-        if not families:
-            return None
-
-        return families[0]
-
-    def _system_font(self) -> QFont:
-        """返回启动时记录的系统默认字体，用于从自定义字体恢复。"""
-        app = QApplication.instance()
-        if app is None:
-            return QFont()
-
-        family = app.property("system_font_family") or app.font().family()
-        point_size = app.property("system_font_point_size") or app.font().pointSize()
-        try:
-            point_size = int(point_size)
-        except Exception:
-            point_size = 10
-
-        font = QFont(str(family))
-        if point_size > 0:
-            font.setPointSize(point_size)
-        return font
-
-    def _normalize_stylesheet_font(self, stylesheet: str, font_family):
-        """
-        自定义字体有效时，替换 QSS 中的 Microsoft YaHei；
-        没有自定义字体时，删除这些字体声明，让 Qt 使用系统默认字体。
-        """
-        if font_family:
-            safe_family = str(font_family).replace('"', "")
-            stylesheet = stylesheet.replace('font-family: "Microsoft YaHei";', f'font-family: "{safe_family}";')
-            stylesheet = stylesheet.replace("font-family: Microsoft YaHei;", f'font-family: "{safe_family}";')
-            return stylesheet
-
-        return re.sub(
-            r'\s*font-family\s*:\s*(?:"Microsoft YaHei"|Microsoft YaHei)\s*;\s*',
-            '\n',
-            stylesheet,
-        )
-
-    def apply_app_font(self):
-        """应用配置中的界面字体，并刷新全局 QSS 与主窗口内部样式。"""
-        try:
-            self.config_manager.load()
-        except Exception:
-            pass
-
-        app = QApplication.instance()
-        if app is None:
-            return
-
-        custom_family = self.load_configured_font_family()
-        if custom_family:
-            font_size = self.config_manager.get_app_font_size()
-            app.setFont(QFont(custom_family, font_size))
-            app.setProperty("app_font_custom", True)
-            app.setProperty("app_font_family", custom_family)
-            app.setProperty("app_font_size", font_size)
-        else:
-            system_font = self._system_font()
-            app.setFont(system_font)
-            app.setProperty("app_font_custom", False)
-            app.setProperty("app_font_family", system_font.family())
-            app.setProperty("app_font_size", system_font.pointSize())
-
-        # 重新应用全局 QSS。无自定义字体时，去掉写死字体，使用系统默认字体。
-        try:
-            stylesheet = get_app_stylesheet()
-            app.setStyleSheet(self._normalize_stylesheet_font(stylesheet, custom_family))
-        except Exception:
-            pass
-
-        # 主窗口自己的标题栏 / 左侧菜单样式也要重新应用。
-        try:
-            self.apply_unified_style()
-        except Exception:
-            pass
+    def load_icon(self, icon_file: str) -> QIcon:
+        """安全加载图标。文件不存在时返回空 QIcon，不影响程序运行。"""
+        path = self.icon_path(icon_file)
+        if path.exists():
+            return QIcon(str(path))
+        return QIcon()
 
     def apply_app_branding(self):
         """
@@ -230,7 +145,7 @@ class MainWindow(QMainWindow):
         side_frame.setFixedWidth(180)
 
         side_layout = QVBoxLayout(side_frame)
-        side_layout.setContentsMargins(0, 16, 0, 16)
+        side_layout.setContentsMargins(0, 16, 0, 12)
         side_layout.setSpacing(4)
 
         title_label = QLabel("功能菜单")
@@ -251,7 +166,14 @@ class MainWindow(QMainWindow):
             self.btn_settings,
         ]
 
-        # 上方：日常业务流程入口
+        # 图标绑定。
+        self.apply_side_button_icon(self.btn_cases, "病例管理")
+        self.apply_side_button_icon(self.btn_detail, "病例详情")
+        self.apply_side_button_icon(self.btn_analysis, "蛋白分析")
+        self.apply_side_button_icon(self.btn_reports, "报告管理")
+        self.apply_side_button_icon(self.btn_settings, "系统设置")
+
+        # 上方：日常业务流程入口。
         business_buttons = [
             self.btn_cases,
             self.btn_detail,
@@ -260,16 +182,14 @@ class MainWindow(QMainWindow):
         ]
 
         for btn in business_buttons:
-            btn.setObjectName("SideButton")
-            btn.setCheckable(True)
+            self.prepare_side_button(btn)
             side_layout.addWidget(btn)
 
-        # 中间留白，把低频的“系统设置”固定到底部
+        # 中间留白，把低频的“系统设置”固定到左侧底部。
         side_layout.addStretch(1)
 
-        # 底部：系统设置入口
-        self.btn_settings.setObjectName("SideButton")
-        self.btn_settings.setCheckable(True)
+        # 底部：系统设置入口。
+        self.prepare_side_button(self.btn_settings)
         side_layout.addWidget(self.btn_settings)
 
         # -------------------------
@@ -287,7 +207,12 @@ class MainWindow(QMainWindow):
 
         header_layout = QHBoxLayout(self.header_frame)
         header_layout.setContentsMargins(18, 0, 18, 0)
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(10)
+
+        self.header_icon_label = QLabel()
+        self.header_icon_label.setObjectName("UnifiedPageIcon")
+        self.header_icon_label.setFixedSize(26, 26)
+        self.header_icon_label.setAlignment(Qt.AlignCenter)
 
         self.header_title_label = QLabel("病例管理")
         self.header_title_label.setObjectName("UnifiedPageTitle")
@@ -298,6 +223,7 @@ class MainWindow(QMainWindow):
         self.header_context_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.header_context_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
+        header_layout.addWidget(self.header_icon_label)
         header_layout.addWidget(self.header_title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.header_context_label)
@@ -351,6 +277,35 @@ class MainWindow(QMainWindow):
         # 防止某些页面初始化过程中间接覆盖标题，最后再应用一次。
         self.apply_app_branding()
 
+    def prepare_side_button(self, button: QPushButton):
+        """统一左侧菜单按钮属性。"""
+        button.setObjectName("SideButton")
+        button.setCheckable(True)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setIconSize(QSize(18, 18))
+        button.setMinimumHeight(42)
+
+    def apply_side_button_icon(self, button: QPushButton, page_title: str):
+        icon_file = self.PAGE_ICONS.get(page_title, "")
+        if not icon_file:
+            return
+        icon = self.load_icon(icon_file)
+        if not icon.isNull():
+            button.setIcon(icon)
+            button.setIconSize(QSize(18, 18))
+
+    def set_header_icon(self, page_title: str):
+        icon_file = self.PAGE_ICONS.get(page_title, "")
+        icon = self.load_icon(icon_file) if icon_file else QIcon()
+        if icon.isNull():
+            self.header_icon_label.clear()
+            self.header_icon_label.hide()
+            return
+
+        pixmap = icon.pixmap(QSize(24, 24))
+        self.header_icon_label.setPixmap(pixmap)
+        self.header_icon_label.show()
+
     def register_page(self, page: QWidget, button: QPushButton, title: str):
         self.stack.addWidget(page)
         self._page_title_map[page] = title
@@ -386,63 +341,54 @@ class MainWindow(QMainWindow):
     # 统一样式
     # ------------------------------------------------------------------
     def apply_unified_style(self):
-        app = QApplication.instance()
-        font_family = "Microsoft YaHei"
-        if app is not None:
-            font_family = app.font().family() or font_family
-        font_family = font_family.replace('"', "")
-
-        stylesheet = """
+        self.setStyleSheet(
+            """
             QFrame#SideMenu {
-                background-color: #f2f6fb;
+                background-color: #f3f6fb;
                 border-right: 1px solid #d9e2ef;
             }
 
             QLabel#SideTitle {
                 color: #1f2d3d;
-                font-family: "__APP_FONT_FAMILY__";
-                font-size: 16px;
+                font-size: 17px;
                 font-weight: 700;
-                padding: 0 0 10px 18px;
+                padding: 8px 18px 12px 18px;
             }
 
             QPushButton#SideButton {
-                min-height: 40px;
+                min-height: 42px;
+                padding: 0px 14px 0px 14px;
                 border: none;
                 border-left: 4px solid transparent;
                 border-radius: 0px;
                 background-color: transparent;
-                color: #26384d;
-                font-family: "__APP_FONT_FAMILY__";
+                color: #263645;
                 font-size: 14px;
                 font-weight: 500;
                 text-align: left;
-                padding-left: 14px;
-                padding-right: 8px;
             }
 
             QPushButton#SideButton:hover {
-                background-color: #eaf1f9;
+                background-color: #eef4fb;
                 color: #1f4e79;
             }
 
             QPushButton#SideButton:checked {
                 background-color: #dcecff;
                 color: #0f4c81;
+                border-left: 4px solid #2f80ed;
                 font-weight: 700;
-                border-left: 4px solid #2f80ed;
-            }
-
-            QPushButton#SideButton:checked:hover {
-                background-color: #d6e8ff;
-                color: #0f4c81;
-                border-left: 4px solid #2f80ed;
             }
 
             QPushButton#SideButton:disabled {
                 background-color: transparent;
-                color: #9aa8b5;
+                color: #a8b3c1;
                 border-left: 4px solid transparent;
+            }
+
+            QPushButton#SideButton:disabled:hover {
+                background-color: transparent;
+                color: #a8b3c1;
             }
 
             QFrame#ContentFrame {
@@ -456,26 +402,23 @@ class MainWindow(QMainWindow):
 
             QLabel#UnifiedPageTitle {
                 color: #1f4e79;
-                font-family: "__APP_FONT_FAMILY__";
                 font-size: 22px;
                 font-weight: 700;
             }
 
             QLabel#UnifiedPageContext {
                 color: #4d5b6a;
-                font-family: "__APP_FONT_FAMILY__";
                 font-size: 13px;
             }
             """
-        self.setStyleSheet(stylesheet.replace("__APP_FONT_FAMILY__", font_family))
+        )
 
     # ------------------------------------------------------------------
     # 配置刷新
     # ------------------------------------------------------------------
     def on_config_saved(self):
-        # 保存设置后立即重新读取 [AppInfo]，刷新字体、窗口标题和 LOGO。
+        # 保存设置后立即重新读取 [AppInfo] 并刷新窗口标题 / LOGO。
         self.config_manager.load()
-        self.apply_app_font()
         self.apply_app_branding()
 
         if hasattr(self.page_analysis, "reload_config"):
@@ -507,6 +450,7 @@ class MainWindow(QMainWindow):
         page = self.stack.currentWidget()
         title = self._page_title_map.get(page, "")
         self.header_title_label.setText(title)
+        self.set_header_icon(title)
         self.refresh_header_context()
 
     def refresh_header_context(self):
