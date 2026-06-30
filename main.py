@@ -20,9 +20,12 @@ def project_root() -> Path:
 
 
 def resolve_project_path(root: Path, path_value) -> Path:
-    """把配置里的相对路径解析为项目根目录下的绝对路径。"""
+    """把配置里的相对路径解析为项目根目录下的绝对路径。
+
+    空字符串和 "." 不代表项目目录，在字体配置中表示“系统默认字体”。
+    """
     path_text = str(path_value or "").strip()
-    if not path_text:
+    if not path_text or path_text == ".":
         return Path("")
     path = Path(path_text)
     if path.is_absolute():
@@ -40,7 +43,7 @@ def load_custom_font_family(root: Path, config_manager: ConfigManager) -> Option
     3. 只有字体文件存在且 Qt 成功加载时，才返回字体族名。
     """
     font_path_text = str(config_manager.get_app_font_path() or "").strip()
-    if not font_path_text:
+    if not font_path_text or font_path_text == ".":
         return None
 
     font_path = resolve_project_path(root, font_path_text)

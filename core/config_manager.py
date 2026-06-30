@@ -61,14 +61,20 @@ class ConfigManager:
             logo_path = r"assets\logo.png"
         return Path(logo_path)
 
-    def get_app_font_path(self) -> Path:
+    def get_app_font_path(self) -> str:
         """软件界面字体文件路径。
 
-        为空时表示使用系统默认字体。
-        只有配置了字体文件，且文件存在并能被 Qt 加载时，软件才会使用该字体。
+        返回规则：
+        - 空字符串：使用系统默认字体。
+        - 非空字符串：尝试按该路径加载字体文件。
+
+        注意：这里不能返回 Path("")，因为 Path("") 会显示成 "."，
+        并在路径检查时被解析成项目根目录，导致误报。
         """
         font_path = self.get("AppInfo", "font_path", "").strip()
-        return Path(font_path) if font_path else Path("")
+        if font_path in ("", "."):
+            return ""
+        return font_path
 
     def get_app_font_size(self) -> int:
         """软件界面字号，限制在 8~18，避免用户误填导致界面异常。"""

@@ -70,8 +70,14 @@ class MainWindow(QMainWindow):
     # 路径与品牌信息
     # ------------------------------------------------------------------
     def resolve_project_path(self, path_value) -> Path:
-        """把配置中的相对路径解析为项目根目录下的绝对路径。"""
-        path = Path(str(path_value or "").strip())
+        """把配置中的相对路径解析为项目根目录下的绝对路径。
+
+        空字符串和 "." 在字体配置中表示“系统默认字体”，不能解析成项目根目录。
+        """
+        path_text = str(path_value or "").strip()
+        if not path_text or path_text == ".":
+            return Path("")
+        path = Path(path_text)
         if path.is_absolute():
             return path
         return self.project_root / path
@@ -85,7 +91,7 @@ class MainWindow(QMainWindow):
         - None：font_path 为空、文件不存在或加载失败，此时使用系统默认字体
         """
         font_path_text = str(self.config_manager.get_app_font_path() or "").strip()
-        if not font_path_text:
+        if not font_path_text or font_path_text == ".":
             return None
 
         font_path = self.resolve_project_path(font_path_text)

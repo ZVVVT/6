@@ -38,8 +38,14 @@ class SettingsWindow(QWidget):
         self.load_config()
 
     def resolve_project_path(self, path_text: str) -> Path:
-        """把配置中的相对路径解析为项目根目录下的绝对路径。"""
-        path = Path(str(path_text or "").strip())
+        """把配置中的相对路径解析为项目根目录下的绝对路径。
+
+        空字符串和 "." 不应被解析成项目根目录。
+        """
+        text = str(path_text or "").strip()
+        if not text or text == ".":
+            return Path("")
+        path = Path(text)
         if path.is_absolute():
             return path
         return self.project_root / path
@@ -310,7 +316,8 @@ class SettingsWindow(QWidget):
 
         self.app_name_edit.setText(self.config.get_app_name())
         self.app_logo_path_edit.setText(str(self.config.get_app_logo_path()))
-        self.app_font_path_edit.setText(str(self.config.get_app_font_path()))
+        # 字体路径为空表示使用系统默认字体。不能显示为 "."。
+        self.app_font_path_edit.setText(str(self.config.get_app_font_path() or ""))
         self.app_font_size_spin.setValue(self.config.get_app_font_size())
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
@@ -494,8 +501,8 @@ class SettingsWindow(QWidget):
         self.app_font_size_spin.setValue(10)
 
     def prepare_app_font_for_save(self, font_path_text: str) -> str:
-        if not font_path_text:
-            # 空路径表示使用系统默认字体，不复制、不强制使用内置字体。
+        if not font_path_text or font_path_text.strip() == ".":
+            # 空路径 / . 表示使用系统默认字体，不复制、不强制使用内置字体。
             return ""
 
         src = Path(font_path_text)
@@ -712,7 +719,7 @@ class SettingsWindow(QWidget):
 
         checks = [
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
-            ("界面字体", self.app_font_path_edit.text().strip(), "file_optional"),
+            ("界面字体", self.app_font_path_edit.text().strip(), "font_optional"),
             ("源码目录", self.source_project_dir_edit.text().strip(), "dir"),
             ("虚拟环境 Activate.ps1", self.venv_activate_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
@@ -745,6 +752,18 @@ class SettingsWindow(QWidget):
             QMessageBox.warning(self, "检查完成", "部分路径存在问题，请查看检查结果。")
 
     def _check_one_path(self, path_text: str, check_type: str):
+        path_text = str(path_text or "").strip()
+
+        if check_type == "font_optional":
+            if not path_text or path_text == ".":
+                return True, "系统默认字体"
+            path = Path(path_text)
+            if not path.is_absolute():
+                path = self.resolve_project_path(str(path))
+            if path.exists() and path.is_file():
+                return True, str(path)
+            return False, f"字体文件不存在：{path}"
+
         if not path_text:
             if check_type == "file_optional":
                 return True, "未设置，已跳过。"
