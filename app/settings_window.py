@@ -1,23 +1,25 @@
+import shutil
 from pathlib import Path
-from PySide6.QtCore import Signal
 
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QFormLayout,
-    QLabel,
-    QPushButton,
-    QLineEdit,
     QFileDialog,
-    QMessageBox,
+    QComboBox,
+    QFormLayout,
     QGroupBox,
-    QTextEdit,
-    QTabWidget,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QHeaderView,
-    QComboBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from core.config_manager import ConfigManager
@@ -25,12 +27,11 @@ from core.config_manager import ConfigManager
 
 class SettingsWindow(QWidget):
     config_saved = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
-
         self.config = ConfigManager()
         self.config.ensure_default_config()
-
         self.init_ui()
         self.load_config()
 
@@ -44,13 +45,13 @@ class SettingsWindow(QWidget):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs, 1)
 
+        self.init_app_info_tab()
         self.init_runtime_tab()
         self.init_workspace_tab()
         self.init_image_rule_tab()
         self.init_protein_tab()
 
         btn_layout = QHBoxLayout()
-
         self.btn_reload = QPushButton("重新加载")
         self.btn_test = QPushButton("检查路径")
         self.btn_save = QPushButton("保存设置")
@@ -59,7 +60,6 @@ class SettingsWindow(QWidget):
         btn_layout.addWidget(self.btn_test)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_save)
-
         main_layout.addLayout(btn_layout)
 
         self.log_edit = QTextEdit()
@@ -72,9 +72,57 @@ class SettingsWindow(QWidget):
         self.btn_test.clicked.connect(self.check_paths)
         self.btn_save.clicked.connect(self.save_config)
 
-    # -------------------------
+    # ------------------------------------------------------------------
     # Tab 初始化
-    # -------------------------
+    # ------------------------------------------------------------------
+    def init_app_info_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        group = QGroupBox("软件名称与 LOGO")
+        form = QFormLayout(group)
+
+        self.app_name_edit = QLineEdit()
+        self.app_logo_path_edit = QLineEdit()
+        self.app_logo_path_edit.setReadOnly(True)
+
+        self.logo_preview_label = QLabel()
+        self.logo_preview_label.setFixedSize(80, 80)
+        self.logo_preview_label.setAlignment(Qt.AlignCenter)
+        self.logo_preview_label.setStyleSheet(
+            "border: 1px solid #d9e2ef; background: white; color: #999999;"
+        )
+        self.logo_preview_label.setText("无 LOGO")
+
+        logo_row = QWidget()
+        logo_layout = QHBoxLayout(logo_row)
+        logo_layout.setContentsMargins(0, 0, 0, 0)
+        logo_layout.setSpacing(8)
+        self.btn_select_app_logo = QPushButton("选择 LOGO")
+        self.btn_reset_app_info = QPushButton("恢复默认")
+        logo_layout.addWidget(self.app_logo_path_edit, 1)
+        logo_layout.addWidget(self.btn_select_app_logo)
+        logo_layout.addWidget(self.btn_reset_app_info)
+
+        form.addRow("软件名称：", self.app_name_edit)
+        form.addRow("LOGO 预览：", self.logo_preview_label)
+        form.addRow("LOGO 图片：", logo_row)
+
+        hint = QLabel(
+            "说明：这里控制窗口左上角标题、任务栏图标和左侧品牌区。"
+            "保存后立即生效；报告 LOGO 暂不受这里影响。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666666;")
+
+        layout.addWidget(group)
+        layout.addWidget(hint)
+        layout.addStretch()
+
+        self.btn_select_app_logo.clicked.connect(self.select_app_logo_path)
+        self.btn_reset_app_info.clicked.connect(self.reset_app_info)
+
+        self.tabs.addTab(tab, "软件信息")
 
     def init_runtime_tab(self):
         tab = QWidget()
@@ -103,7 +151,6 @@ class SettingsWindow(QWidget):
 
         layout.addWidget(group)
         layout.addStretch()
-
         self.tabs.addTab(tab, "运行环境")
 
     def init_workspace_tab(self):
@@ -121,11 +168,10 @@ class SettingsWindow(QWidget):
         form.addRow("病例工作目录：", self._with_button(self.workspace_root_edit, "选择", self.select_workspace_root))
         form.addRow("数据库文件：", self._with_button(self.database_edit, "选择", self.select_database_file))
         form.addRow("报告目录：", self._with_button(self.report_dir_edit, "选择", self.select_report_dir))
-        form.addRow("LOGO 图片：", self._with_button(self.logo_path_edit, "选择", self.select_logo_path))
+        form.addRow("报告 LOGO 图片：", self._with_button(self.logo_path_edit, "选择", self.select_logo_path))
 
         layout.addWidget(group)
         layout.addStretch()
-
         self.tabs.addTab(tab, "工作目录")
 
     def init_image_rule_tab(self):
@@ -149,7 +195,6 @@ class SettingsWindow(QWidget):
 
         layout.addWidget(group)
         layout.addStretch()
-
         self.tabs.addTab(tab, "图片规则")
 
     def init_protein_tab(self):
@@ -166,16 +211,17 @@ class SettingsWindow(QWidget):
 
         self.protein_table = QTableWidget()
         self.protein_table.setColumnCount(7)
-        self.protein_table.setHorizontalHeaderLabels([
-            "内部编号",
-            "显示名称",
-            "表达部位",
-            "自定义 Pipeline",
-            "荧光强度下限",
-            "标定率下限(%)",
-            "选择",
-        ])
-
+        self.protein_table.setHorizontalHeaderLabels(
+            [
+                "内部编号",
+                "显示名称",
+                "表达部位",
+                "自定义 Pipeline",
+                "荧光强度下限",
+                "标定率下限(%)",
+                "选择",
+            ]
+        )
         self.protein_table.setAlternatingRowColors(True)
         self.protein_table.verticalHeader().setVisible(False)
 
@@ -190,7 +236,6 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.protein_table, 1)
 
         button_layout = QHBoxLayout()
-
         self.btn_reset_protein_defaults = QPushButton("恢复默认蛋白配置")
         self.btn_add_protein_row = QPushButton("增加一行")
         self.btn_remove_protein_row = QPushButton("删除选中行")
@@ -199,7 +244,6 @@ class SettingsWindow(QWidget):
         button_layout.addWidget(self.btn_add_protein_row)
         button_layout.addWidget(self.btn_remove_protein_row)
         button_layout.addStretch()
-
         layout.addLayout(button_layout)
 
         self.btn_reset_protein_defaults.clicked.connect(self.reset_protein_defaults)
@@ -219,16 +263,18 @@ class SettingsWindow(QWidget):
 
         layout.addWidget(line_edit, 1)
         layout.addWidget(button)
-
         return widget
 
-    # -------------------------
+    # ------------------------------------------------------------------
     # 加载 / 保存
-    # -------------------------
-
+    # ------------------------------------------------------------------
     def load_config(self):
         self.config.load()
         self.config.ensure_default_config()
+
+        self.app_name_edit.setText(self.config.get_app_name())
+        self.app_logo_path_edit.setText(str(self.config.get_app_logo_path()))
+        self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
         self.powershell_edit.setText(self.config.get("CellProfiler", "powershell_exe", "powershell.exe"))
         self.source_project_dir_edit.setText(self.config.get("CellProfiler", "source_project_dir", ""))
@@ -251,10 +297,21 @@ class SettingsWindow(QWidget):
         self.image_ext_edit.setText(self.config.get("ImageRule", "image_ext", ".tif"))
 
         self.load_protein_table()
-
         self.append_log("配置已重新加载。")
 
     def save_config(self):
+        app_name = self.app_name_edit.text().strip()
+        if not app_name:
+            QMessageBox.warning(self, "提示", "软件名称不能为空。")
+            return
+
+        app_logo_path = self.prepare_app_logo_for_save(self.app_logo_path_edit.text().strip())
+
+        self.config.set("AppInfo", "app_name", app_name)
+        self.config.set("AppInfo", "logo_path", app_logo_path)
+        # 同步旧字段，避免其他旧代码仍读取 [Software] name。
+        self.config.set("Software", "name", app_name)
+
         self.config.set("CellProfiler", "run_mode", "source")
         self.config.set("CellProfiler", "powershell_exe", self.powershell_edit.text().strip())
         self.config.set("CellProfiler", "source_project_dir", self.source_project_dir_edit.text().strip())
@@ -268,7 +325,6 @@ class SettingsWindow(QWidget):
         self.config.set("Workspace", "root_dir", self.workspace_root_edit.text().strip())
         self.config.set("Workspace", "database", self.database_edit.text().strip())
         self.config.set("Workspace", "report_dir", self.report_dir_edit.text().strip())
-
         self.config.set("Report", "logo_path", self.logo_path_edit.text().strip())
 
         self.config.set("ImageRule", "r_suffix", self.r_suffix_edit.text().strip())
@@ -291,18 +347,99 @@ class SettingsWindow(QWidget):
         QMessageBox.information(
             self,
             "成功",
-            "系统设置已保存。\n\n蛋白分析、报告管理等页面已自动刷新配置。"
+            "系统设置已保存。\n\n软件名称、LOGO、蛋白分析、报告管理等页面已自动刷新配置。",
         )
         self.append_log("系统设置已保存到 config.ini。")
         self.config_saved.emit()
 
-    # -------------------------
-    # 蛋白配置表
-    # -------------------------
+    # ------------------------------------------------------------------
+    # 软件信息
+    # ------------------------------------------------------------------
+    def select_app_logo_path(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择软件 LOGO 图片",
+            "",
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.ico);;所有文件 (*.*)",
+        )
+        if path:
+            self.app_logo_path_edit.setText(path)
+            self.update_logo_preview(path)
 
+    def reset_app_info(self):
+        reply = QMessageBox.question(
+            self,
+            "确认恢复",
+            "确定要恢复默认软件名称和 LOGO 吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.app_name_edit.setText("人精子蛋白质量分析软件")
+        self.app_logo_path_edit.setText(r"assets\logo.png")
+        self.update_logo_preview(self.app_logo_path_edit.text().strip())
+
+    def prepare_app_logo_for_save(self, logo_path_text: str) -> str:
+        if not logo_path_text:
+            return r"assets\logo.png"
+
+        src = Path(logo_path_text)
+        if not src.is_absolute():
+            src_abs = Path.cwd() / src
+        else:
+            src_abs = src
+
+        if not src_abs.exists() or not src_abs.is_file():
+            # 不强制阻止保存，主窗口会自动回退为无图标显示。
+            return logo_path_text
+
+        assets_dir = Path("assets")
+        assets_dir.mkdir(parents=True, exist_ok=True)
+
+        suffix = src_abs.suffix.lower() or ".png"
+        if suffix not in [".png", ".jpg", ".jpeg", ".bmp", ".ico"]:
+            suffix = ".png"
+
+        dst = assets_dir / f"custom_app_logo{suffix}"
+
+        try:
+            if src_abs.resolve() != dst.resolve():
+                shutil.copy2(src_abs, dst)
+            return str(dst)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "提示",
+                f"复制 LOGO 到 assets 目录失败，将继续使用原路径：\n{e}",
+            )
+            return logo_path_text
+
+    def update_logo_preview(self, path_text: str):
+        path = Path(path_text or "")
+        if path and not path.is_absolute():
+            path = Path.cwd() / path
+
+        if not path.exists() or not path.is_file():
+            self.logo_preview_label.setPixmap(QPixmap())
+            self.logo_preview_label.setText("无 LOGO")
+            return
+
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.logo_preview_label.setPixmap(QPixmap())
+            self.logo_preview_label.setText("无法预览")
+            return
+
+        pixmap = pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.logo_preview_label.setText("")
+        self.logo_preview_label.setPixmap(pixmap)
+
+    # ------------------------------------------------------------------
+    # 蛋白配置表
+    # ------------------------------------------------------------------
     def load_protein_table(self):
         self.protein_table.setRowCount(0)
-
         for item in self.config.get_protein_items():
             self.add_protein_row(
                 key=item.get("key", ""),
@@ -330,10 +467,8 @@ class SettingsWindow(QWidget):
 
         part_combo = QComboBox()
         part_combo.addItems(["head", "tail"])
-
         if part not in ["head", "tail"]:
             part = "head"
-
         part_combo.setCurrentText(part)
         self.protein_table.setCellWidget(row, 2, part_combo)
 
@@ -349,7 +484,6 @@ class SettingsWindow(QWidget):
 
     def add_empty_protein_row(self):
         next_index = self.protein_table.rowCount() + 1
-
         self.add_protein_row(
             key=f"protein{next_index}",
             name=f"protein{next_index}",
@@ -361,7 +495,6 @@ class SettingsWindow(QWidget):
 
     def remove_selected_protein_row(self):
         selected_rows = self.protein_table.selectionModel().selectedRows()
-
         if not selected_rows:
             QMessageBox.information(self, "提示", "请先选择要删除的蛋白行。")
             return
@@ -377,12 +510,10 @@ class SettingsWindow(QWidget):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
-
         if reply != QMessageBox.Yes:
             return
 
         self.protein_table.setRowCount(0)
-
         defaults = [
             ("protein1", "Q9BYW3", "head", "", "26.0", "82.88"),
             ("protein2", "P10323", "head", "", "26.0", "82.88"),
@@ -390,26 +521,22 @@ class SettingsWindow(QWidget):
             ("protein4", "Q8IYV9", "head", "", "26.0", "82.88"),
             ("protein5", "W5XKT8", "head", "", "26.0", "82.88"),
         ]
-
         for item in defaults:
             self.add_protein_row(*item)
 
     def select_protein_pipeline_for_button(self, button):
         row = self.find_button_row(button)
-
         if row < 0:
             QMessageBox.warning(self, "提示", "无法定位当前蛋白行。")
             return
 
         current_path = self.get_table_text(row, 3)
-
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择该蛋白的 Pipeline",
             current_path,
             "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
         )
-
         if path:
             self.protein_table.setItem(row, 3, QTableWidgetItem(path))
 
@@ -436,13 +563,10 @@ class SettingsWindow(QWidget):
 
             if not key:
                 return False, f"第 {row + 1} 行内部编号不能为空。"
-
             if key in seen_keys:
                 return False, f"内部编号重复：{key}"
-
             if not name:
                 return False, f"第 {row + 1} 行显示名称不能为空。"
-
             if part not in ["head", "tail"]:
                 return False, f"第 {row + 1} 行表达部位必须是 head 或 tail。"
 
@@ -469,21 +593,20 @@ class SettingsWindow(QWidget):
             return False, "蛋白配置不能为空。"
 
         self.config.set("ProteinOrder", "keys", ",".join(keys))
-
         return True, "蛋白配置保存成功。"
 
     def get_table_text(self, row, col):
         item = self.protein_table.item(row, col)
         return item.text() if item else ""
 
-    # -------------------------
+    # ------------------------------------------------------------------
     # 路径检查
-    # -------------------------
-
+    # ------------------------------------------------------------------
     def check_paths(self):
         self.log_edit.clear()
 
         checks = [
+            ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
             ("源码目录", self.source_project_dir_edit.text().strip(), "dir"),
             ("虚拟环境 Activate.ps1", self.venv_activate_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
@@ -492,21 +615,18 @@ class SettingsWindow(QWidget):
             ("病例工作目录", self.workspace_root_edit.text().strip(), "dir_create"),
             ("数据库文件", self.database_edit.text().strip(), "parent_create"),
             ("报告目录", self.report_dir_edit.text().strip(), "dir_create"),
-            ("LOGO 图片", self.logo_path_edit.text().strip(), "file_optional"),
+            ("报告 LOGO 图片", self.logo_path_edit.text().strip(), "file_optional"),
         ]
 
         for row in range(self.protein_table.rowCount()):
             key = self.get_table_text(row, 0).strip()
             pipeline = self.get_table_text(row, 3).strip()
-
             if pipeline:
                 checks.append((f"{key} 自定义 Pipeline", pipeline, "file"))
 
         all_ok = True
-
         for name, path_text, check_type in checks:
             ok, message = self._check_one_path(path_text, check_type)
-
             if ok:
                 self.append_log(f"√ {name}：{message}")
             else:
@@ -525,6 +645,8 @@ class SettingsWindow(QWidget):
             return False, "路径为空。"
 
         path = Path(path_text)
+        if not path.is_absolute():
+            path = Path.cwd() / path
 
         if check_type == "file":
             if path.exists() and path.is_file():
@@ -557,10 +679,9 @@ class SettingsWindow(QWidget):
 
         return False, "未知检查类型。"
 
-    # -------------------------
+    # ------------------------------------------------------------------
     # 文件/文件夹选择
-    # -------------------------
-
+    # ------------------------------------------------------------------
     def select_powershell(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -644,7 +765,7 @@ class SettingsWindow(QWidget):
     def select_logo_path(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择 LOGO 图片",
+            "选择报告 LOGO 图片",
             "",
             "Image Files (*.png *.jpg *.jpeg *.bmp);;所有文件 (*.*)",
         )

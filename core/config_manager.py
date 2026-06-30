@@ -33,6 +33,37 @@ class ConfigManager:
         except Exception:
             return default
 
+    # ------------------------------------------------------------------
+    # 软件品牌信息
+    # ------------------------------------------------------------------
+    def get_app_name(self) -> str:
+        """
+        软件窗口标题和左侧品牌区使用的名称。
+
+        优先读取新版 [AppInfo]，兼容旧版 [Software]。
+        """
+        name = self.get("AppInfo", "app_name", "").strip()
+        if name:
+            return name
+        name = self.get("Software", "name", "").strip()
+        return name or "人精子蛋白质量分析软件"
+
+    def get_app_logo_path(self) -> Path:
+        """
+        软件窗口图标和左侧品牌区使用的 LOGO。
+
+        注意：报告 LOGO 仍然走 [Report] logo_path，避免把之前取消报告 LOGO 的逻辑又牵回来。
+        """
+        logo_path = self.get("AppInfo", "logo_path", "").strip()
+        if not logo_path:
+            logo_path = self.get("Software", "logo_path", "").strip()
+        if not logo_path:
+            logo_path = r"assets\logo.png"
+        return Path(logo_path)
+
+    # ------------------------------------------------------------------
+    # 工作目录 / 图片规则 / 蛋白配置
+    # ------------------------------------------------------------------
     def get_workspace_root(self) -> Path:
         return Path(self.get("Workspace", "root_dir", "workspace/cases"))
 
@@ -62,7 +93,6 @@ class ConfigManager:
         for key in keys:
             if self.get("Protein", key, ""):
                 valid_keys.append(key)
-
         return valid_keys or ["protein1", "protein2", "protein3", "protein4", "protein5"]
 
     def normalize_protein_key(self, protein_name_or_key: str) -> str:
@@ -70,11 +100,11 @@ class ConfigManager:
         if not value:
             return ""
 
-        # 直接传入内部编号 protein1~protein5 时，直接返回
+        # 直接传入内部编号 protein1~protein5 时，直接返回。
         if self.get("Protein", value, ""):
             return value
 
-        # 兼容历史显示名称和当前标准蛋白编号，避免恢复默认或历史数据导致结果无法对应
+        # 兼容历史显示名称和当前标准蛋白编号，避免恢复默认或历史数据导致结果无法对应。
         alias_map = {
             "HEL-1": "protein1",
             "HEL-2": "protein2",
@@ -100,6 +130,7 @@ class ConfigManager:
                 return key
 
         return value.lower()
+
     def get_protein_display_name(self, protein_key: str) -> str:
         protein_key = str(protein_key or "").strip()
         return self.get("ProteinNames", protein_key, protein_key)
@@ -110,18 +141,15 @@ class ConfigManager:
 
     def get_pipeline_by_protein(self, protein_name_or_key: str) -> Path:
         protein_key = self.normalize_protein_key(protein_name_or_key)
-
         custom_pipeline = self.get("ProteinPipelines", protein_key, "").strip()
         if custom_pipeline:
             return Path(custom_pipeline)
 
         protein_part = self.get_protein_part(protein_key)
-
         if protein_part == "tail":
             pipeline = self.get("CellProfiler", "tail_pipeline", "")
         else:
             pipeline = self.get("CellProfiler", "head_pipeline", "")
-
         return Path(pipeline)
 
     def get_protein_intensity_min(self, protein_name_or_key: str) -> float:
@@ -134,22 +162,24 @@ class ConfigManager:
 
     def get_protein_items(self) -> list:
         items = []
-
         for key in self.get_protein_keys():
             custom_pipeline = self.get("ProteinPipelines", key, "").strip()
-
-            items.append({
-                "key": key,
-                "name": self.get_protein_display_name(key),
-                "part": self.get_protein_part(key),
-                "pipeline": str(self.get_pipeline_by_protein(key)),
-                "custom_pipeline": custom_pipeline,
-                "intensity_min": self.get_protein_intensity_min(key),
-                "rate_min": self.get_protein_rate_min(key),
-            })
-
+            items.append(
+                {
+                    "key": key,
+                    "name": self.get_protein_display_name(key),
+                    "part": self.get_protein_part(key),
+                    "pipeline": str(self.get_pipeline_by_protein(key)),
+                    "custom_pipeline": custom_pipeline,
+                    "intensity_min": self.get_protein_intensity_min(key),
+                    "rate_min": self.get_protein_rate_min(key),
+                }
+            )
         return items
 
+    # ------------------------------------------------------------------
+    # MvImageID / CellProfiler 配置
+    # ------------------------------------------------------------------
     def get_powershell_exe(self) -> str:
         return self.get("CellProfiler", "powershell_exe", "powershell.exe")
 
@@ -157,7 +187,9 @@ class ConfigManager:
         return Path(self.get("CellProfiler", "source_project_dir", r"F:\MvImageID"))
 
     def get_venv_activate(self) -> Path:
-        return Path(self.get("CellProfiler", "venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1"))
+        return Path(
+            self.get("CellProfiler", "venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1")
+        )
 
     def get_module_name(self) -> str:
         return self.get("CellProfiler", "module_name", "MvImageID")
@@ -169,14 +201,22 @@ class ConfigManager:
         return Path(self.get("CellProfiler", "log_file", r"F:\MvImageID\run.log"))
 
     def get_logo_path(self) -> Path:
+        """报告 LOGO 路径。为兼容旧代码保留，不用于软件窗口图标。"""
         return Path(self.get("Report", "logo_path", ""))
 
+    # ------------------------------------------------------------------
+    # 默认配置
+    # ------------------------------------------------------------------
     def ensure_default_config(self):
         defaults = {
             "Software": {
                 "name": "人精子蛋白质量分析软件",
                 "version": "1.0.0",
                 "company": "公司名称",
+            },
+            "AppInfo": {
+                "app_name": "人精子蛋白质量分析软件",
+                "logo_path": r"assets\logo.png",
             },
             "CellProfiler": {
                 "run_mode": "source",
@@ -245,12 +285,10 @@ class ConfigManager:
         }
 
         changed = False
-
         for section, values in defaults.items():
             if not self.config.has_section(section):
                 self.config.add_section(section)
                 changed = True
-
             for key, value in values.items():
                 if not self.config.has_option(section, key):
                     self.config.set(section, key, value)
