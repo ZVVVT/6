@@ -1,7 +1,8 @@
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -19,6 +20,7 @@ from app.case_detail_window import CaseDetailWindow
 from app.case_manager_window import CaseManagerWindow
 from app.report_window import ReportWindow
 from app.settings_window import SettingsWindow
+from app.ui_style import get_app_stylesheet
 from core.config_manager import ConfigManager
 from core.database import Database
 
@@ -45,7 +47,8 @@ class MainWindow(QMainWindow):
         self.config_manager = ConfigManager(str(self.project_root / "config.ini"))
         self.config_manager.ensure_default_config()
 
-        # 先应用品牌信息，后续保存设置时也会再次调用。
+        # 先应用界面字体与品牌信息，后续保存设置时也会再次调用。
+        self.apply_app_font()
         self.apply_app_branding()
 
         # 默认窗口尺寸按蛋白分析页面设置，避免页面切换时窗口跳变。
@@ -72,6 +75,105 @@ class MainWindow(QMainWindow):
         if path.is_absolute():
             return path
         return self.project_root / path
+
+    def load_configured_font_family(self):
+        """
+        读取并加载配置中的软件界面字体。
+
+        返回：
+        - 字体族名：font_path 指向有效字体文件且 Qt 加载成功
+        - None：font_path 为空、文件不存在或加载失败，此时使用系统默认字体
+        """
+        font_path_text = str(self.config_manager.get_app_font_path() or "").strip()
+        if not font_path_text:
+            return None
+
+        font_path = self.resolve_project_path(font_path_text)
+        if not font_path.exists() or not font_path.is_file():
+            return None
+
+        font_id = QFontDatabase.addApplicationFont(str(font_path))
+        if font_id == -1:
+            return None
+
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        if not families:
+            return None
+
+        return families[0]
+
+    def _system_font(self) -> QFont:
+        """返回启动时记录的系统默认字体，用于从自定义字体恢复。"""
+        app = QApplication.instance()
+        if app is None:
+            return QFont()
+
+        family = app.property("system_font_family") or app.font().family()
+        point_size = app.property("system_font_point_size") or app.font().pointSize()
+        try:
+            point_size = int(point_size)
+        except Exception:
+            point_size = 10
+
+        font = QFont(str(family))
+        if point_size > 0:
+            font.setPointSize(point_size)
+        return font
+
+    def _normalize_stylesheet_font(self, stylesheet: str, font_family):
+        """
+        自定义字体有效时，替换 QSS 中的 Microsoft YaHei；
+        没有自定义字体时，删除这些字体声明，让 Qt 使用系统默认字体。
+        """
+        if font_family:
+            safe_family = str(font_family).replace('"', "")
+            stylesheet = stylesheet.replace('font-family: "Microsoft YaHei";', f'font-family: "{safe_family}";')
+            stylesheet = stylesheet.replace("font-family: Microsoft YaHei;", f'font-family: "{safe_family}";')
+            return stylesheet
+
+        return re.sub(
+            r'\s*font-family\s*:\s*(?:"Microsoft YaHei"|Microsoft YaHei)\s*;\s*',
+            '\n',
+            stylesheet,
+        )
+
+    def apply_app_font(self):
+        """应用配置中的界面字体，并刷新全局 QSS 与主窗口内部样式。"""
+        try:
+            self.config_manager.load()
+        except Exception:
+            pass
+
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        custom_family = self.load_configured_font_family()
+        if custom_family:
+            font_size = self.config_manager.get_app_font_size()
+            app.setFont(QFont(custom_family, font_size))
+            app.setProperty("app_font_custom", True)
+            app.setProperty("app_font_family", custom_family)
+            app.setProperty("app_font_size", font_size)
+        else:
+            system_font = self._system_font()
+            app.setFont(system_font)
+            app.setProperty("app_font_custom", False)
+            app.setProperty("app_font_family", system_font.family())
+            app.setProperty("app_font_size", system_font.pointSize())
+
+        # 重新应用全局 QSS。无自定义字体时，去掉写死字体，使用系统默认字体。
+        try:
+            stylesheet = get_app_stylesheet()
+            app.setStyleSheet(self._normalize_stylesheet_font(stylesheet, custom_family))
+        except Exception:
+            pass
+
+        # 主窗口自己的标题栏 / 左侧菜单样式也要重新应用。
+        try:
+            self.apply_unified_style()
+        except Exception:
+            pass
 
     def apply_app_branding(self):
         """
@@ -278,8 +380,13 @@ class MainWindow(QMainWindow):
     # 统一样式
     # ------------------------------------------------------------------
     def apply_unified_style(self):
-        self.setStyleSheet(
-            """
+        app = QApplication.instance()
+        font_family = "Microsoft YaHei"
+        if app is not None:
+            font_family = app.font().family() or font_family
+        font_family = font_family.replace('"', "")
+
+        stylesheet = """
             QFrame#SideMenu {
                 background-color: #f2f6fb;
                 border-right: 1px solid #d9e2ef;
@@ -287,7 +394,7 @@ class MainWindow(QMainWindow):
 
             QLabel#SideTitle {
                 color: #1f2d3d;
-                font-family: Microsoft YaHei;
+                font-family: "__APP_FONT_FAMILY__";
                 font-size: 16px;
                 font-weight: 700;
                 padding: 0 0 10px 18px;
@@ -300,7 +407,7 @@ class MainWindow(QMainWindow):
                 border-radius: 0px;
                 background-color: transparent;
                 color: #26384d;
-                font-family: Microsoft YaHei;
+                font-family: "__APP_FONT_FAMILY__";
                 font-size: 14px;
                 font-weight: 500;
                 text-align: left;
@@ -343,25 +450,26 @@ class MainWindow(QMainWindow):
 
             QLabel#UnifiedPageTitle {
                 color: #1f4e79;
-                font-family: Microsoft YaHei;
+                font-family: "__APP_FONT_FAMILY__";
                 font-size: 22px;
                 font-weight: 700;
             }
 
             QLabel#UnifiedPageContext {
                 color: #4d5b6a;
-                font-family: Microsoft YaHei;
+                font-family: "__APP_FONT_FAMILY__";
                 font-size: 13px;
             }
             """
-        )
+        self.setStyleSheet(stylesheet.replace("__APP_FONT_FAMILY__", font_family))
 
     # ------------------------------------------------------------------
     # 配置刷新
     # ------------------------------------------------------------------
     def on_config_saved(self):
-        # 关键修复：保存设置后立即重新读取 [AppInfo] 并刷新窗口标题 / LOGO。
+        # 保存设置后立即重新读取 [AppInfo]，刷新字体、窗口标题和 LOGO。
         self.config_manager.load()
+        self.apply_app_font()
         self.apply_app_branding()
 
         if hasattr(self.page_analysis, "reload_config"):

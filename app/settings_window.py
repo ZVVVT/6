@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -30,10 +31,25 @@ class SettingsWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.config = ConfigManager()
+        self.project_root = Path(__file__).resolve().parents[1]
+        self.config = ConfigManager(str(self.project_root / "config.ini"))
         self.config.ensure_default_config()
         self.init_ui()
         self.load_config()
+
+    def resolve_project_path(self, path_text: str) -> Path:
+        """把配置中的相对路径解析为项目根目录下的绝对路径。"""
+        path = Path(str(path_text or "").strip())
+        if path.is_absolute():
+            return path
+        return self.project_root / path
+
+    def to_project_relative_text(self, path: Path) -> str:
+        """尽量把项目内路径保存为相对路径，方便打包和迁移。"""
+        try:
+            return str(path.resolve().relative_to(self.project_root.resolve()))
+        except Exception:
+            return str(path)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -85,6 +101,12 @@ class SettingsWindow(QWidget):
         self.app_name_edit = QLineEdit()
         self.app_logo_path_edit = QLineEdit()
         self.app_logo_path_edit.setReadOnly(True)
+        self.app_font_path_edit = QLineEdit()
+        self.app_font_path_edit.setReadOnly(True)
+        self.app_font_size_spin = QSpinBox()
+        self.app_font_size_spin.setRange(8, 18)
+        self.app_font_size_spin.setValue(10)
+        self.app_font_size_spin.setSuffix(" pt")
 
         self.logo_preview_label = QLabel()
         self.logo_preview_label.setFixedSize(80, 80)
@@ -104,13 +126,25 @@ class SettingsWindow(QWidget):
         logo_layout.addWidget(self.btn_select_app_logo)
         logo_layout.addWidget(self.btn_reset_app_info)
 
+        font_row = QWidget()
+        font_layout = QHBoxLayout(font_row)
+        font_layout.setContentsMargins(0, 0, 0, 0)
+        font_layout.setSpacing(8)
+        self.btn_select_app_font = QPushButton("选择字体")
+        self.btn_reset_app_font = QPushButton("默认字体")
+        font_layout.addWidget(self.app_font_path_edit, 1)
+        font_layout.addWidget(self.btn_select_app_font)
+        font_layout.addWidget(self.btn_reset_app_font)
+
         form.addRow("软件名称：", self.app_name_edit)
         form.addRow("LOGO 预览：", self.logo_preview_label)
         form.addRow("LOGO 图片：", logo_row)
+        form.addRow("界面字体：", font_row)
+        form.addRow("界面字号：", self.app_font_size_spin)
 
         hint = QLabel(
-            "说明：这里控制窗口左上角标题、任务栏图标和左侧品牌区。"
-            "保存后立即生效；报告 LOGO 暂不受这里影响。"
+            "说明：这里控制窗口标题、任务栏图标、左侧品牌区和软件界面字体。"
+            "字体路径为空或字体文件找不到时，会使用系统默认字体；报告字体和报告 LOGO 暂不受这里影响。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666666;")
@@ -120,6 +154,8 @@ class SettingsWindow(QWidget):
         layout.addStretch()
 
         self.btn_select_app_logo.clicked.connect(self.select_app_logo_path)
+        self.btn_select_app_font.clicked.connect(self.select_app_font_path)
+        self.btn_reset_app_font.clicked.connect(self.reset_app_font)
         self.btn_reset_app_info.clicked.connect(self.reset_app_info)
 
         self.tabs.addTab(tab, "软件信息")
@@ -274,6 +310,8 @@ class SettingsWindow(QWidget):
 
         self.app_name_edit.setText(self.config.get_app_name())
         self.app_logo_path_edit.setText(str(self.config.get_app_logo_path()))
+        self.app_font_path_edit.setText(str(self.config.get_app_font_path()))
+        self.app_font_size_spin.setValue(self.config.get_app_font_size())
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
         self.powershell_edit.setText(self.config.get("CellProfiler", "powershell_exe", "powershell.exe"))
@@ -306,9 +344,13 @@ class SettingsWindow(QWidget):
             return
 
         app_logo_path = self.prepare_app_logo_for_save(self.app_logo_path_edit.text().strip())
+        app_font_path = self.prepare_app_font_for_save(self.app_font_path_edit.text().strip())
+        app_font_size = str(self.app_font_size_spin.value())
 
         self.config.set("AppInfo", "app_name", app_name)
         self.config.set("AppInfo", "logo_path", app_logo_path)
+        self.config.set("AppInfo", "font_path", app_font_path)
+        self.config.set("AppInfo", "font_size", app_font_size)
         # 同步旧字段，避免其他旧代码仍读取 [Software] name。
         self.config.set("Software", "name", app_name)
 
@@ -370,7 +412,7 @@ class SettingsWindow(QWidget):
         reply = QMessageBox.question(
             self,
             "确认恢复",
-            "确定要恢复默认软件名称和 LOGO 吗？",
+            "确定要恢复默认软件名称、LOGO 和界面字体吗？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -378,6 +420,8 @@ class SettingsWindow(QWidget):
             return
         self.app_name_edit.setText("人精子蛋白质量分析软件")
         self.app_logo_path_edit.setText(r"assets\logo.png")
+        self.app_font_path_edit.setText("")
+        self.app_font_size_spin.setValue(10)
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
     def prepare_app_logo_for_save(self, logo_path_text: str) -> str:
@@ -386,7 +430,7 @@ class SettingsWindow(QWidget):
 
         src = Path(logo_path_text)
         if not src.is_absolute():
-            src_abs = Path.cwd() / src
+            src_abs = self.resolve_project_path(str(src))
         else:
             src_abs = src
 
@@ -394,7 +438,7 @@ class SettingsWindow(QWidget):
             # 不强制阻止保存，主窗口会自动回退为无图标显示。
             return logo_path_text
 
-        assets_dir = Path("assets")
+        assets_dir = self.project_root / "assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
 
         suffix = src_abs.suffix.lower() or ".png"
@@ -406,7 +450,7 @@ class SettingsWindow(QWidget):
         try:
             if src_abs.resolve() != dst.resolve():
                 shutil.copy2(src_abs, dst)
-            return str(dst)
+            return self.to_project_relative_text(dst)
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -418,7 +462,7 @@ class SettingsWindow(QWidget):
     def update_logo_preview(self, path_text: str):
         path = Path(path_text or "")
         if path and not path.is_absolute():
-            path = Path.cwd() / path
+            path = self.resolve_project_path(str(path))
 
         if not path.exists() or not path.is_file():
             self.logo_preview_label.setPixmap(QPixmap())
@@ -434,6 +478,67 @@ class SettingsWindow(QWidget):
         pixmap = pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.logo_preview_label.setText("")
         self.logo_preview_label.setPixmap(pixmap)
+
+    def select_app_font_path(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择软件界面字体",
+            "",
+            "Font Files (*.ttf *.otf *.ttc);;所有文件 (*.*)",
+        )
+        if path:
+            self.app_font_path_edit.setText(path)
+
+    def reset_app_font(self):
+        self.app_font_path_edit.setText("")
+        self.app_font_size_spin.setValue(10)
+
+    def prepare_app_font_for_save(self, font_path_text: str) -> str:
+        if not font_path_text:
+            # 空路径表示使用系统默认字体，不复制、不强制使用内置字体。
+            return ""
+
+        src = Path(font_path_text)
+        if not src.is_absolute():
+            src_abs = self.resolve_project_path(str(src))
+        else:
+            src_abs = src
+
+        if not src_abs.exists() or not src_abs.is_file():
+            # 不阻止保存；启动时会自动回退默认字体。
+            return font_path_text
+
+        suffix = src_abs.suffix.lower()
+        if suffix not in [".ttf", ".otf", ".ttc"]:
+            QMessageBox.warning(self, "提示", "字体文件建议使用 .ttf、.otf 或 .ttc 格式。")
+            return font_path_text
+
+        fonts_dir = self.project_root / "assets" / "fonts"
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+
+        # 内置默认字体不重复复制。
+        try:
+            if src_abs.resolve().is_relative_to(fonts_dir.resolve()):
+                return self.to_project_relative_text(src_abs)
+        except Exception:
+            try:
+                src_abs.resolve().relative_to(fonts_dir.resolve())
+                return self.to_project_relative_text(src_abs)
+            except Exception:
+                pass
+
+        dst = fonts_dir / f"custom_app_font{suffix}"
+        try:
+            if src_abs.resolve() != dst.resolve():
+                shutil.copy2(src_abs, dst)
+            return self.to_project_relative_text(dst)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "提示",
+                f"复制字体到 assets/fonts 目录失败，将继续使用原路径：\n{e}",
+            )
+            return font_path_text
 
     # ------------------------------------------------------------------
     # 蛋白配置表
@@ -607,6 +712,7 @@ class SettingsWindow(QWidget):
 
         checks = [
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
+            ("界面字体", self.app_font_path_edit.text().strip(), "file_optional"),
             ("源码目录", self.source_project_dir_edit.text().strip(), "dir"),
             ("虚拟环境 Activate.ps1", self.venv_activate_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
@@ -646,7 +752,7 @@ class SettingsWindow(QWidget):
 
         path = Path(path_text)
         if not path.is_absolute():
-            path = Path.cwd() / path
+            path = self.resolve_project_path(str(path))
 
         if check_type == "file":
             if path.exists() and path.is_file():

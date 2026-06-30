@@ -61,6 +61,24 @@ class ConfigManager:
             logo_path = r"assets\logo.png"
         return Path(logo_path)
 
+    def get_app_font_path(self) -> Path:
+        """软件界面字体文件路径。
+
+        为空时表示使用系统默认字体。
+        只有配置了字体文件，且文件存在并能被 Qt 加载时，软件才会使用该字体。
+        """
+        font_path = self.get("AppInfo", "font_path", "").strip()
+        return Path(font_path) if font_path else Path("")
+
+    def get_app_font_size(self) -> int:
+        """软件界面字号，限制在 8~18，避免用户误填导致界面异常。"""
+        value = self.get("AppInfo", "font_size", "10").strip()
+        try:
+            size = int(float(value))
+        except Exception:
+            size = 10
+        return max(8, min(18, size))
+
     # ------------------------------------------------------------------
     # 工作目录 / 图片规则 / 蛋白配置
     # ------------------------------------------------------------------
@@ -217,6 +235,9 @@ class ConfigManager:
             "AppInfo": {
                 "app_name": "人精子蛋白质量分析软件",
                 "logo_path": r"assets\logo.png",
+                # 为空表示使用系统默认字体；需要自定义字体时再填写字体文件路径。
+                "font_path": "",
+                "font_size": "10",
             },
             "CellProfiler": {
                 "run_mode": "source",
