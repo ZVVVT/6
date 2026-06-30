@@ -143,12 +143,26 @@ class MainWindow(QMainWindow):
             self.btn_settings,
         ]
 
-        for btn in self.menu_buttons:
+        # 上方：日常业务流程入口
+        business_buttons = [
+            self.btn_cases,
+            self.btn_detail,
+            self.btn_analysis,
+            self.btn_reports,
+        ]
+
+        for btn in business_buttons:
             btn.setObjectName("SideButton")
             btn.setCheckable(True)
             side_layout.addWidget(btn)
 
-        side_layout.addStretch()
+        # 中间留白，把低频的“系统设置”固定到左侧底部
+        side_layout.addStretch(1)
+
+        # 底部：系统设置入口
+        self.btn_settings.setObjectName("SideButton")
+        self.btn_settings.setCheckable(True)
+        side_layout.addWidget(self.btn_settings)
 
         # -------------------------
         # 右侧统一页面区域
