@@ -148,9 +148,8 @@ class MainWindow(QMainWindow):
         side_layout.setContentsMargins(0, 16, 0, 12)
         side_layout.setSpacing(4)
 
-        title_label = QLabel("功能菜单")
-        title_label.setObjectName("SideTitle")
-        side_layout.addWidget(title_label)
+        # 左侧导航不再显示“功能菜单”标题，减少重复信息。
+        # 保留顶部留白，让第一个菜单项不会贴边。
 
         self.btn_cases = QPushButton("病例管理")
         self.btn_detail = QPushButton("病例详情")
@@ -348,12 +347,6 @@ class MainWindow(QMainWindow):
                 border-right: 1px solid #d9e2ef;
             }
 
-            QLabel#SideTitle {
-                color: #1f2d3d;
-                font-size: 17px;
-                font-weight: 700;
-                padding: 8px 18px 12px 18px;
-            }
 
             QPushButton#SideButton {
                 min-height: 42px;
