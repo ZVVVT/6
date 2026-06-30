@@ -1,35 +1,304 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import configparser
+import os
 import shutil
 import subprocess
-import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QLineEdit,
     QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
-    QMessageBox,
-    QHeaderView,
-    QProgressBar,
-    QGroupBox,
+    QVBoxLayout,
 )
 
 from core.config_manager import ConfigManager
 from core.image_importer import ImageImporter
 from core.result_parser import ResultParser
 
+
+# =========================
+# 批量文件夹匹配规则
+# =========================
+
+DEFAULT_FOLDER_ALIASES: Dict[str, List[str]] = {
+    "protein1": ["Q9BYW3", "HEL-1", "HEL1", "A", "蛋白1", "protein1", "protein1_Q9BYW3"],
+    "protein2": ["P10323", "HEL-2", "HEL2", "B", "蛋白2", "protein2", "protein2_P10323"],
+    "protein3": ["Q96P56", "HEL-3", "HEL3", "C", "蛋白3", "protein3", "protein3_Q96P56"],
+    "protein4": ["Q8IYV9", "HEL-4", "HEL4", "D", "蛋白4", "protein4", "protein4_Q8IYV9"],
+    "protein5": ["W5XKT8", "HEL-5", "HEL5", "E", "蛋白5", "protein5", "protein5_W5XKT8"],
+}
+
+PROTEIN_DISPLAY_FALLBACK: Dict[str, str] = {
+    "protein1": "Q9BYW3",
+    "protein2": "P10323",
+    "protein3": "Q96P56",
+    "protein4": "Q8IYV9",
+    "protein5": "W5XKT8",
+}
+
+
+class FolderAliasStore:
+    """把批量文件夹匹配名保存到 config.ini 的 [BatchFolderAliases] 中。"""
+
+    SECTION_NAME = "BatchFolderAliases"
+
+    def __init__(self, config_path: Optional[Path] = None):
+        if config_path is None:
+            # app/batch_analysis_dialog.py -> 项目根目录/config.ini
+            config_path = Path(__file__).resolve().parents[1] / "config.ini"
+        self.config_path = Path(config_path)
+
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        return (
+            str(text or "")
+            .strip()
+            .lower()
+            .replace(" ", "")
+            .replace("-", "")
+            .replace("_", "")
+        )
+
+    @staticmethod
+    def split_aliases(text: str) -> List[str]:
+        raw = str(text or "").replace("，", ",").replace(";", ",").replace("；", ",")
+        result: List[str] = []
+        seen = set()
+        for part in raw.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            norm = FolderAliasStore.normalize_text(item)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            result.append(item)
+        return result
+
+    @staticmethod
+    def join_aliases(items: List[str]) -> str:
+        result: List[str] = []
+        seen = set()
+        for item in items:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            norm = FolderAliasStore.normalize_text(text)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            result.append(text)
+        return ",".join(result)
+
+    def _read_config(self) -> configparser.ConfigParser:
+        parser = configparser.ConfigParser()
+        parser.optionxform = str
+        if self.config_path.exists():
+            parser.read(self.config_path, encoding="utf-8")
+        return parser
+
+    def load_aliases(self) -> Dict[str, List[str]]:
+        parser = self._read_config()
+        aliases: Dict[str, List[str]] = {}
+        for key, default_values in DEFAULT_FOLDER_ALIASES.items():
+            values = list(default_values)
+            if parser.has_section(self.SECTION_NAME) and parser.has_option(self.SECTION_NAME, key):
+                custom = self.split_aliases(parser.get(self.SECTION_NAME, key, fallback=""))
+                # 自定义内容放前面，默认兼容内容放后面。
+                values = custom + values
+            aliases[key] = self._unique(values)
+        return aliases
+
+    def save_aliases(self, aliases: Dict[str, List[str]]) -> None:
+        parser = self._read_config()
+        if not parser.has_section(self.SECTION_NAME):
+            parser.add_section(self.SECTION_NAME)
+        for key in sorted(DEFAULT_FOLDER_ALIASES.keys()):
+            parser.set(self.SECTION_NAME, key, self.join_aliases(aliases.get(key, [])))
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.config_path.open("w", encoding="utf-8") as f:
+            parser.write(f)
+
+    def add_alias(self, protein_key: str, alias: str) -> bool:
+        alias = str(alias or "").strip()
+        if not protein_key or not alias:
+            return False
+        aliases = self.load_aliases()
+        items = aliases.setdefault(protein_key, [])
+        norm = self.normalize_text(alias)
+        for old in items:
+            if self.normalize_text(old) == norm:
+                return False
+        items.insert(0, alias)
+        self.save_aliases(aliases)
+        return True
+
+    def add_current_mapping(self, mapping: Dict[str, str]) -> int:
+        aliases = self.load_aliases()
+        changed = 0
+        for protein_key, folder_name in mapping.items():
+            folder_name = str(folder_name or "").strip()
+            if not protein_key or not folder_name:
+                continue
+            items = aliases.setdefault(protein_key, [])
+            norm = self.normalize_text(folder_name)
+            if any(self.normalize_text(old) == norm for old in items):
+                continue
+            items.insert(0, folder_name)
+            changed += 1
+        if changed:
+            self.save_aliases(aliases)
+        return changed
+
+    @staticmethod
+    def _unique(items: List[str]) -> List[str]:
+        result: List[str] = []
+        seen = set()
+        for item in items:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            norm = FolderAliasStore.normalize_text(text)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            result.append(text)
+        return result
+
+
+class FolderAliasDialog(QDialog):
+    """编辑每个蛋白可匹配的文件夹名称。"""
+
+    def __init__(self, protein_items: List[dict], alias_store: FolderAliasStore, parent=None):
+        super().__init__(parent)
+        self.protein_items = protein_items
+        self.alias_store = alias_store
+        self.aliases = self.alias_store.load_aliases()
+
+        self.setWindowTitle("批量文件夹匹配规则")
+        self.resize(900, 420)
+        self.setMinimumSize(800, 360)
+        self.init_ui()
+        self.load_table()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        title = QLabel("批量文件夹匹配规则")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1f4e79;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "每个蛋白可以配置多个文件夹匹配名，用英文逗号或中文逗号分隔。"
+            "例如：Q9BYW3,HEL-1,A,蛋白1。批量分析选择上一级目录后，会按这些名称自动匹配子文件夹。"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #555555;")
+        layout.addWidget(desc)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["内部编号", "显示名称", "批量文件夹匹配名"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        layout.addWidget(self.table, 1)
+
+        btn_layout = QHBoxLayout()
+        self.btn_defaults = QPushButton("恢复推荐匹配名")
+        self.btn_save = QPushButton("保存规则")
+        self.btn_cancel = QPushButton("取消")
+        btn_layout.addWidget(self.btn_defaults)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+        self.btn_defaults.clicked.connect(self.restore_defaults)
+        self.btn_save.clicked.connect(self.save_rules)
+        self.btn_cancel.clicked.connect(self.reject)
+
+    def load_table(self):
+        self.table.setRowCount(len(self.protein_items))
+        for row, protein in enumerate(self.protein_items):
+            key = str(protein.get("key", "") or "").strip()
+            name = str(protein.get("name", "") or "").strip() or PROTEIN_DISPLAY_FALLBACK.get(key, key)
+
+            key_item = QTableWidgetItem(key)
+            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
+            name_item = QTableWidgetItem(name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            alias_item = QTableWidgetItem(FolderAliasStore.join_aliases(self.aliases.get(key, [])))
+
+            self.table.setItem(row, 0, key_item)
+            self.table.setItem(row, 1, name_item)
+            self.table.setItem(row, 2, alias_item)
+
+    def restore_defaults(self):
+        self.aliases = {key: list(values) for key, values in DEFAULT_FOLDER_ALIASES.items()}
+        self.load_table()
+
+    def save_rules(self):
+        new_aliases: Dict[str, List[str]] = {}
+        conflict_map: Dict[str, List[str]] = {}
+
+        for row in range(self.table.rowCount()):
+            key_item = self.table.item(row, 0)
+            alias_item = self.table.item(row, 2)
+            if not key_item:
+                continue
+            key = key_item.text().strip()
+            aliases = FolderAliasStore.split_aliases(alias_item.text() if alias_item else "")
+            new_aliases[key] = aliases
+            for alias in aliases:
+                norm = FolderAliasStore.normalize_text(alias)
+                conflict_map.setdefault(norm, []).append(key)
+
+        conflicts = []
+        for alias_norm, keys in conflict_map.items():
+            unique_keys = sorted(set(keys))
+            if alias_norm and len(unique_keys) > 1:
+                conflicts.append(f"{alias_norm} → {'、'.join(unique_keys)}")
+
+        if conflicts:
+            QMessageBox.warning(
+                self,
+                "匹配名冲突",
+                "以下匹配名同时配置到了多个蛋白，请修改后再保存：\n" + "\n".join(conflicts[:20]),
+            )
+            return
+
+        self.alias_store.save_aliases(new_aliases)
+        QMessageBox.information(self, "提示", "批量文件夹匹配规则已保存。")
+        self.accept()
+
+
+# =========================
+# 批量分析后台线程
+# =========================
 
 class BatchProteinWorker(QThread):
     log_signal = Signal(str)
@@ -107,7 +376,7 @@ class BatchProteinWorker(QThread):
         self.log_signal.emit(f"{protein_name} 分析输入目录：{cp_input_dir}")
         self.log_signal.emit(f"{protein_name} 分析输出目录：{cp_output_dir}")
 
-        # 1. 清空当前蛋白 raw_images，重新导入
+        # 1. 清空当前蛋白 raw_images，重新导入。
         if raw_folder.exists():
             shutil.rmtree(raw_folder)
         raw_folder.mkdir(parents=True, exist_ok=True)
@@ -118,14 +387,12 @@ class BatchProteinWorker(QThread):
             target_folder=str(raw_folder),
             protein_name=protein_key,
         )
-
         complete_items = [item for item in imported_images if item.get("status") == "完整"]
         if not complete_items:
             raise RuntimeError("没有完整的 R/G 视野，无法运行分析。")
-
         self.log_signal.emit(f"{protein_name} 导入完成：共 {len(imported_images)} 个视野，完整视野 {len(complete_items)} 个。")
 
-        # 2. 清空并准备 cp_input
+        # 2. 清空并准备 cp_input。当前 Pipeline 只需要 R/G，DIC/Merge 作为原始记录保存即可。
         if cp_input_dir.exists():
             shutil.rmtree(cp_input_dir)
         cp_input_dir.mkdir(parents=True, exist_ok=True)
@@ -145,15 +412,14 @@ class BatchProteinWorker(QThread):
 
         if copied_count <= 0:
             raise RuntimeError("没有复制任何 R/G 图像到分析输入目录。")
-
         self.log_signal.emit(f"{protein_name} 已准备分析输入图像：{copied_count} 张。")
 
-        # 3. 清空 cp_output，避免覆盖分析时旧图片混入新结果
+        # 3. 清空 cp_output，避免覆盖分析时旧图片混入新结果。
         if cp_output_dir.exists():
             shutil.rmtree(cp_output_dir)
         cp_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 4. 运行 MvImageID / CellProfiler
+        # 4. 运行 MvImageID / CellProfiler。
         self.run_mvimageid(
             protein_key=protein_key,
             protein_name=protein_name,
@@ -161,7 +427,7 @@ class BatchProteinWorker(QThread):
             cp_output_dir=cp_output_dir.resolve(),
         )
 
-        # 5. 解析结果，返回给主线程入库
+        # 5. 解析结果，返回给主线程入库。
         parser = ResultParser(str(cp_output_dir))
         summary_result = parser.parse_image_summary()
         if not summary_result.get("success"):
@@ -200,7 +466,6 @@ class BatchProteinWorker(QThread):
         if not plugins_directory.exists():
             raise FileNotFoundError(f"插件目录不存在：{plugins_directory}")
 
-        # Activate.ps1 所在目录通常就是 Scripts，里面有 python.exe。
         scripts_dir = venv_activate.parent
         python_exe = scripts_dir / "python.exe"
         if not python_exe.exists():
@@ -210,7 +475,6 @@ class BatchProteinWorker(QThread):
 
         local_log_file = cp_output_dir / "run_mvimageid_batch.log"
         command_file = cp_output_dir / "run_mvimageid_batch_command.txt"
-
         command = [
             str(python_exe),
             "-u",
@@ -227,7 +491,6 @@ class BatchProteinWorker(QThread):
             "--plugins-directory",
             str(plugins_directory),
         ]
-
         command_file.write_text("\n".join(command), encoding="utf-8")
 
         self.log_signal.emit(f"{protein_name} Pipeline：{pipeline_file}")
@@ -236,13 +499,12 @@ class BatchProteinWorker(QThread):
         self.log_signal.emit(f"{protein_name} 运行日志：{local_log_file}")
 
         start_time = time.time()
-
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env["PATH"] = str(scripts_dir) + os.pathsep + env.get("PATH", "")
 
-        last_lines = []
+        last_lines: List[str] = []
         with local_log_file.open("w", encoding="utf-8", errors="replace") as log_fp:
             log_fp.write("COMMAND:\n")
             log_fp.write(" ".join(command) + "\n\n")
@@ -270,16 +532,15 @@ class BatchProteinWorker(QThread):
                 log_fp.write(line + "\n")
                 log_fp.flush()
                 last_lines.append(line)
-                if len(last_lines) > 60:
+                if len(last_lines) > 80:
                     last_lines.pop(0)
                 self.log_signal.emit(line)
 
             return_code = process.wait()
 
         elapsed = time.time() - start_time
-
         if return_code != 0:
-            tail = "\n".join(last_lines[-40:])
+            tail = "\n".join(last_lines[-50:])
             raise RuntimeError(
                 f"MvImageID / CellProfiler 运行失败，退出码：{return_code}，用时：{elapsed:.2f} 秒。\n"
                 f"完整日志：{local_log_file}\n"
@@ -288,37 +549,10 @@ class BatchProteinWorker(QThread):
 
         self.log_signal.emit(f"{protein_name} MvImageID / CellProfiler 运行完成，用时：{elapsed:.2f} 秒。")
 
-    @staticmethod
-    def ps_quote(path: Path) -> str:
-        text = str(path)
-        return "'" + text.replace("'", "''") + "'"
 
-    def build_powershell_script(
-        self,
-        source_project_dir: Path,
-        venv_activate: Path,
-        module_name: str,
-        pipeline_file: Path,
-        input_dir: Path,
-        output_dir: Path,
-        plugins_directory: Path,
-        log_file: Path,
-    ) -> str:
-        return f"""
-$ErrorActionPreference = "Stop"
-Add-Type -Namespace Win -Name K -PassThru -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)] public static extern System.IntPtr GetStdHandle(int nStdHandle);[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetConsoleMode(System.IntPtr h, out int m);[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleMode(System.IntPtr h, int m);' | Out-Null
-$h = [Win.K]::GetStdHandle(-10)
-$m = 0
-if ($h -ne [IntPtr]::Zero -and [Win.K]::GetConsoleMode($h, [ref]$m)) {{
-    $m = ($m -bor 0x80 -bor 0x10) -band (-bnot 0x40)
-    [void][Win.K]::SetConsoleMode($h, $m)
-}}
-Set-Location {self.ps_quote(source_project_dir)}
-. {self.ps_quote(venv_activate)}
-python -u -m {module_name} -c -r -p {self.ps_quote(pipeline_file)} -i {self.ps_quote(input_dir)} -o {self.ps_quote(output_dir)} --plugins-directory {self.ps_quote(plugins_directory)} 2>&1 | Tee-Object -FilePath {self.ps_quote(log_file)} -Append
-exit $LASTEXITCODE
-""".strip()
-
+# =========================
+# 批量分析主窗口
+# =========================
 
 class BatchAnalysisDialog(QDialog):
     batch_finished = Signal()
@@ -330,13 +564,16 @@ class BatchAnalysisDialog(QDialog):
         self.config = ConfigManager()
         self.config.ensure_default_config()
 
+        self.alias_store = FolderAliasStore()
         self.parent_folder: Optional[Path] = None
+        self.available_folders: List[Path] = []
         self.scan_rows: List[dict] = []
         self.worker: Optional[BatchProteinWorker] = None
+        self._refreshing_table = False
 
         self.setWindowTitle("批量蛋白分析")
-        self.resize(980, 720)
-        self.setMinimumSize(900, 680)
+        self.resize(980, 760)
+        self.setMinimumSize(920, 700)
         self.init_ui()
         self.scan_parent_folder()
 
@@ -359,18 +596,31 @@ class BatchAnalysisDialog(QDialog):
         folder_group = QGroupBox("选择总文件夹")
         folder_layout = QHBoxLayout(folder_group)
         self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("请选择包含 5 个蛋白子文件夹的上一级目录")
+        self.folder_edit.setPlaceholderText("请选择包含多个蛋白子文件夹的上一级目录")
         self.btn_select_folder = QPushButton("选择文件夹")
         self.btn_scan = QPushButton("重新扫描")
+        self.btn_alias_rules = QPushButton("匹配规则")
+        self.btn_save_mapping = QPushButton("保存当前匹配")
         folder_layout.addWidget(self.folder_edit, 1)
         folder_layout.addWidget(self.btn_select_folder)
         folder_layout.addWidget(self.btn_scan)
+        folder_layout.addWidget(self.btn_alias_rules)
+        folder_layout.addWidget(self.btn_save_mapping)
         layout.addWidget(folder_group)
 
+        hint = QLabel(
+            "说明：软件会根据内部编号、显示名称和“匹配规则”自动识别子文件夹；"
+            "如果自动匹配不对，可以直接在“匹配文件夹”列手动选择。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666666;")
+        layout.addWidget(hint)
+
         table_group = QGroupBox("预检查结果")
-        table_group.setMinimumHeight(250)
-        table_group.setMaximumHeight(290)
+        table_group.setMinimumHeight(280)
+        table_group.setMaximumHeight(330)
         table_layout = QVBoxLayout(table_group)
+
         self.table = QTableWidget()
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels(["蛋白", "匹配文件夹", "G", "R", "DIC", "Merge", "状态"])
@@ -378,11 +628,11 @@ class BatchAnalysisDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        # 预检查表固定为适合 5 个蛋白完整显示的高度，避免用户还要上下滚动查看。
-        self.table.verticalHeader().setDefaultSectionSize(28)
-        self.table.setMinimumHeight(205)
-        self.table.setMaximumHeight(235)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.setMinimumHeight(225)
+        self.table.setMaximumHeight(270)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -407,9 +657,8 @@ class BatchAnalysisDialog(QDialog):
         log_layout = QVBoxLayout(log_group)
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        # 日志区域压缩高度，保留滚动查看；把更多空间让给上方预检查表。
         self.log_edit.setMinimumHeight(90)
-        self.log_edit.setMaximumHeight(140)
+        self.log_edit.setMaximumHeight(150)
         log_layout.addWidget(self.log_edit)
         layout.addWidget(log_group)
 
@@ -426,83 +675,161 @@ class BatchAnalysisDialog(QDialog):
 
         self.btn_select_folder.clicked.connect(self.select_folder)
         self.btn_scan.clicked.connect(self.scan_parent_folder)
+        self.btn_alias_rules.clicked.connect(self.open_alias_rules)
+        self.btn_save_mapping.clicked.connect(self.save_current_mapping_as_rules)
         self.btn_start.clicked.connect(self.start_batch_analysis)
         self.btn_cancel_next.clicked.connect(self.cancel_after_current)
         self.btn_close.clicked.connect(self.close)
 
+    # ---------- 匹配规则 ----------
+
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        return FolderAliasStore.normalize_text(text)
+
+    def get_protein_items(self) -> List[dict]:
+        items = self.config.get_protein_items()
+        fixed_items = []
+        for item in items:
+            key = str(item.get("key", "") or "").strip()
+            if not key:
+                continue
+            name = str(item.get("name", "") or "").strip() or PROTEIN_DISPLAY_FALLBACK.get(key, key)
+            fixed = dict(item)
+            fixed["key"] = key
+            fixed["name"] = name
+            fixed_items.append(fixed)
+        return fixed_items
+
+    def build_folder_alias_map(self) -> Dict[str, List[str]]:
+        """返回 norm_alias -> [protein_key]，保留冲突信息。"""
+        alias_map: Dict[str, List[str]] = {}
+        stored_aliases = self.alias_store.load_aliases()
+
+        for item in self.get_protein_items():
+            key = str(item.get("key", "") or "").strip()
+            name = str(item.get("name", "") or "").strip()
+            if not key:
+                continue
+
+            candidates = [key, name, name.replace("-", ""), name.replace("_", "")]
+            candidates.extend(stored_aliases.get(key, []))
+            candidates.extend(DEFAULT_FOLDER_ALIASES.get(key, []))
+
+            for candidate in candidates:
+                norm = self.normalize_text(candidate)
+                if not norm:
+                    continue
+                alias_map.setdefault(norm, [])
+                if key not in alias_map[norm]:
+                    alias_map[norm].append(key)
+
+        return alias_map
+
+    def match_folder_to_keys(self, folder_name: str, alias_map: Dict[str, List[str]]) -> List[str]:
+        child_norm = self.normalize_text(folder_name)
+        if not child_norm:
+            return []
+
+        # 第一优先级：精确匹配。
+        exact = alias_map.get(child_norm, [])
+        if exact:
+            return list(exact)
+
+        # 第二优先级：包含匹配，例如 protein1_Q9BYW3 可以匹配 Q9BYW3。
+        matched: List[str] = []
+        for alias, keys in alias_map.items():
+            if not alias:
+                continue
+            if alias in child_norm:
+                for key in keys:
+                    if key not in matched:
+                        matched.append(key)
+        return matched
+
+    def open_alias_rules(self):
+        dialog = FolderAliasDialog(self.get_protein_items(), self.alias_store, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.scan_parent_folder()
+
+    def save_current_mapping_as_rules(self):
+        mapping: Dict[str, str] = {}
+        for row in self.scan_rows:
+            folder = row.get("folder", "")
+            if folder:
+                mapping[row.get("protein_key", "")] = Path(folder).name
+        changed = self.alias_store.add_current_mapping(mapping)
+        if changed:
+            QMessageBox.information(self, "提示", f"已保存 {changed} 条当前匹配关系到批量匹配规则。")
+        else:
+            QMessageBox.information(self, "提示", "当前匹配关系已经在规则中，无需重复保存。")
+        self.scan_parent_folder()
+
+    # ---------- 扫描与表格 ----------
+
     def select_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择包含 5 个蛋白子文件夹的上一级目录", "")
+        folder = QFileDialog.getExistingDirectory(self, "选择包含蛋白子文件夹的上一级目录", "")
         if not folder:
             return
         self.folder_edit.setText(folder)
         self.parent_folder = Path(folder)
         self.scan_parent_folder()
 
-    def build_folder_alias_map(self) -> Dict[str, str]:
-        alias_map: Dict[str, str] = {}
-        old_hel_aliases = {
-            "protein1": ["hel1", "hel-1", "hel_1", "q9byw3"],
-            "protein2": ["hel2", "hel-2", "hel_2", "p10323"],
-            "protein3": ["hel3", "hel-3", "hel_3", "q96p56"],
-            "protein4": ["hel4", "hel-4", "hel_4", "q8iyv9"],
-            "protein5": ["hel5", "hel-5", "hel_5", "w5xkt8"],
-        }
-
-        for item in self.config.get_protein_items():
-            key = str(item.get("key", "") or "").strip()
-            name = str(item.get("name", "") or "").strip()
-            if not key:
-                continue
-            candidates = [key, name, name.replace("-", ""), name.replace("_", "")]
-            candidates.extend(old_hel_aliases.get(key, []))
-            for candidate in candidates:
-                norm = self.normalize_text(candidate)
-                if norm:
-                    alias_map[norm] = key
-        return alias_map
-
-    @staticmethod
-    def normalize_text(text: str) -> str:
-        return str(text or "").strip().lower().replace(" ", "").replace("-", "").replace("_", "")
-
     def scan_parent_folder(self):
         folder_text = self.folder_edit.text().strip()
         if folder_text:
             self.parent_folder = Path(folder_text)
 
-        self.scan_rows = []
-        protein_items = self.config.get_protein_items()
-        alias_map = self.build_folder_alias_map()
-        folder_map: Dict[str, Path] = {}
-
+        self.available_folders = []
         if self.parent_folder and self.parent_folder.exists():
-            for child in self.parent_folder.iterdir():
-                if not child.is_dir():
-                    continue
-                child_norm = self.normalize_text(child.name)
-                matched_key = alias_map.get(child_norm)
-                if matched_key:
-                    folder_map[matched_key] = child
-                else:
-                    # 允许 folder 名中包含蛋白名，例如 protein1_Q9BYW3
-                    for alias, key in alias_map.items():
-                        if alias and alias in child_norm:
-                            folder_map[key] = child
-                            break
+            self.available_folders = sorted(
+                [child for child in self.parent_folder.iterdir() if child.is_dir()],
+                key=lambda p: p.name.lower(),
+            )
 
-        for protein in protein_items:
-            key = str(protein.get("key", ""))
-            name = str(protein.get("name", key))
-            folder = folder_map.get(key)
-            channels = self.scan_channels(folder) if folder else {"G": 0, "R": 0, "DIC": 0, "Merge": 0}
-            has_gr = channels.get("G", 0) > 0 and channels.get("R", 0) > 0
+        alias_map = self.build_folder_alias_map()
+        candidates_by_key: Dict[str, List[Path]] = {}
+        ambiguous_by_key: Dict[str, List[str]] = {}
+
+        for child in self.available_folders:
+            matched_keys = self.match_folder_to_keys(child.name, alias_map)
+            if len(matched_keys) == 1:
+                candidates_by_key.setdefault(matched_keys[0], []).append(child)
+            elif len(matched_keys) > 1:
+                for key in matched_keys:
+                    ambiguous_by_key.setdefault(key, []).append(child.name)
+
+        old_selection = {
+            row.get("protein_key", ""): row.get("folder", "")
+            for row in self.scan_rows
+            if row.get("folder")
+        }
+
+        self.scan_rows = []
+        for protein in self.get_protein_items():
+            key = str(protein.get("key", "") or "").strip()
+            name = str(protein.get("name", "") or "").strip() or key
+
+            folder: Optional[Path] = None
+            status_note = ""
+
+            # 如果用户之前手动选过，重新扫描后优先保留这个选择。
+            old_folder_text = old_selection.get(key, "")
+            if old_folder_text and Path(old_folder_text).exists():
+                folder = Path(old_folder_text)
 
             if folder is None:
-                status = "未找到"
-            elif has_gr:
-                status = "可分析"
-            else:
-                status = "缺少G或R"
+                candidates = candidates_by_key.get(key, [])
+                ambiguous_names = ambiguous_by_key.get(key, [])
+                if len(candidates) == 1 and not ambiguous_names:
+                    folder = candidates[0]
+                elif len(candidates) > 1:
+                    status_note = "匹配多个文件夹"
+                elif ambiguous_names:
+                    status_note = "匹配名冲突"
+
+            channels = self.scan_channels(folder) if folder else {"G": 0, "R": 0, "DIC": 0, "Merge": 0}
+            status = self.get_status_by_folder_and_channels(folder, channels, status_note)
 
             self.scan_rows.append({
                 "protein_key": key,
@@ -514,6 +841,15 @@ class BatchAnalysisDialog(QDialog):
 
         self.refresh_table()
 
+    def get_status_by_folder_and_channels(self, folder: Optional[Path], channels: Dict[str, int], status_note: str = "") -> str:
+        if status_note:
+            return status_note
+        if folder is None:
+            return "未匹配"
+        if channels.get("G", 0) > 0 and channels.get("R", 0) > 0:
+            return "可分析"
+        return "缺少G或R"
+
     def scan_channels(self, folder: Optional[Path]) -> Dict[str, int]:
         counts = {"G": 0, "R": 0, "DIC": 0, "Merge": 0}
         if not folder or not folder.exists():
@@ -524,43 +860,86 @@ class BatchAnalysisDialog(QDialog):
             if not path.is_file() or path.suffix.lower() not in suffixes:
                 continue
             name = path.stem.lower()
-            if "merge" in name:
+            if "merge" in name or "mer" in name or "融合" in name:
                 counts["Merge"] += 1
             elif "dic" in name or "phase" in name or "相差" in name:
                 counts["DIC"] += 1
-            elif name.endswith("_g") or "_g_" in name or "fitc" in name or "green" in name:
+            elif name.endswith("_g") or "_g_" in name or "fitc" in name or "green" in name or "绿色" in name:
                 counts["G"] += 1
-            elif name.endswith("_r") or "_r_" in name or "pi" in name or "red" in name:
+            elif name.endswith("_r") or "_r_" in name or "pi" in name or "red" in name or "红色" in name:
                 counts["R"] += 1
         return counts
 
     def refresh_table(self):
-        self.table.setRowCount(len(self.scan_rows))
-        for row_index, row in enumerate(self.scan_rows):
-            channels = row.get("channels", {})
-            values = [
-                row.get("protein_name", ""),
-                Path(row.get("folder", "")).name if row.get("folder") else "-",
-                self.flag_text(channels.get("G", 0)),
-                self.flag_text(channels.get("R", 0)),
-                self.optional_text(channels.get("DIC", 0)),
-                self.optional_text(channels.get("Merge", 0)),
-                row.get("status", ""),
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                item.setTextAlignment(Qt.AlignCenter)
-                if col == 6:
-                    status = str(value)
-                    if status == "可分析":
-                        item.setForeground(Qt.darkGreen)
-                    elif status in ["分析中"]:
-                        item.setForeground(Qt.blue)
-                    elif status in ["失败", "缺少G或R"]:
-                        item.setForeground(Qt.red)
-                    else:
-                        item.setForeground(Qt.gray)
-                self.table.setItem(row_index, col, item)
+        self._refreshing_table = True
+        try:
+            self.table.setRowCount(len(self.scan_rows))
+            folder_names = [folder.name for folder in self.available_folders]
+
+            for row_index, row in enumerate(self.scan_rows):
+                channels = row.get("channels", {})
+
+                protein_item = QTableWidgetItem(str(row.get("protein_name", "")))
+                protein_item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row_index, 0, protein_item)
+
+                combo = QComboBox()
+                combo.addItem("- 未选择 -", "")
+                for name in folder_names:
+                    combo.addItem(name, name)
+                current_folder = row.get("folder", "")
+                if current_folder:
+                    current_name = Path(current_folder).name
+                    idx = combo.findData(current_name)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                combo.currentIndexChanged.connect(lambda _idx, r=row_index: self.on_folder_combo_changed(r))
+                self.table.setCellWidget(row_index, 1, combo)
+
+                values = [
+                    self.flag_text(channels.get("G", 0)),
+                    self.flag_text(channels.get("R", 0)),
+                    self.optional_text(channels.get("DIC", 0)),
+                    self.optional_text(channels.get("Merge", 0)),
+                    row.get("status", ""),
+                ]
+                for offset, value in enumerate(values, start=2):
+                    item = QTableWidgetItem(str(value))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if offset == 6:
+                        self.apply_status_color(item, str(value))
+                    self.table.setItem(row_index, offset, item)
+        finally:
+            self._refreshing_table = False
+
+    def on_folder_combo_changed(self, row_index: int):
+        if self._refreshing_table:
+            return
+        if row_index < 0 or row_index >= len(self.scan_rows):
+            return
+
+        combo = self.table.cellWidget(row_index, 1)
+        folder_name = combo.currentData() if isinstance(combo, QComboBox) else ""
+        folder_path: Optional[Path] = None
+        if folder_name and self.parent_folder:
+            folder_path = self.parent_folder / str(folder_name)
+
+        channels = self.scan_channels(folder_path)
+        self.scan_rows[row_index]["folder"] = str(folder_path) if folder_path else ""
+        self.scan_rows[row_index]["channels"] = channels
+        self.scan_rows[row_index]["status"] = self.get_status_by_folder_and_channels(folder_path, channels)
+        self.refresh_table()
+
+    @staticmethod
+    def apply_status_color(item: QTableWidgetItem, status: str):
+        if status in ["可分析", "已完成"]:
+            item.setForeground(Qt.darkGreen)
+        elif status in ["分析中"]:
+            item.setForeground(Qt.blue)
+        elif status in ["失败", "缺少G或R", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
+            item.setForeground(Qt.red)
+        else:
+            item.setForeground(Qt.gray)
 
     @staticmethod
     def flag_text(count: int) -> str:
@@ -570,7 +949,28 @@ class BatchAnalysisDialog(QDialog):
     def optional_text(count: int) -> str:
         return f"可选 {count}" if count > 0 else "可选"
 
+    def validate_duplicate_folders(self) -> List[str]:
+        folder_to_keys: Dict[str, List[str]] = {}
+        for row in self.scan_rows:
+            folder = row.get("folder", "")
+            if folder:
+                folder_to_keys.setdefault(str(Path(folder).resolve()), []).append(row.get("protein_key", ""))
+        duplicates = []
+        duplicate_paths = {path for path, keys in folder_to_keys.items() if len(keys) > 1}
+        for row in self.scan_rows:
+            folder = row.get("folder", "")
+            if folder and str(Path(folder).resolve()) in duplicate_paths:
+                row["status"] = "文件夹重复"
+                duplicates.append(f"{row.get('protein_name', '')} → {Path(folder).name}")
+        if duplicates:
+            self.refresh_table()
+        return duplicates
+
     def get_ready_tasks(self) -> List[dict]:
+        duplicates = self.validate_duplicate_folders()
+        if duplicates:
+            return []
+
         tasks = []
         for row in self.scan_rows:
             if row.get("status") == "可分析":
@@ -581,14 +981,25 @@ class BatchAnalysisDialog(QDialog):
                 })
         return tasks
 
+    # ---------- 启动分析 ----------
+
     def start_batch_analysis(self):
         if not self.case_data or not self.case_data.get("id"):
             QMessageBox.information(self, "提示", "当前病例无效，请先选择病例。")
             return
 
+        duplicates = self.validate_duplicate_folders()
+        if duplicates:
+            QMessageBox.warning(
+                self,
+                "文件夹重复",
+                "同一个文件夹不能同时分配给多个蛋白，请调整后再开始分析：\n" + "\n".join(duplicates[:20]),
+            )
+            return
+
         tasks = self.get_ready_tasks()
         if not tasks:
-            QMessageBox.information(self, "提示", "没有可分析的蛋白文件夹。请先选择正确的上级目录。")
+            QMessageBox.information(self, "提示", "没有可分析的蛋白文件夹。请先选择正确的上级目录，或手动选择匹配文件夹。")
             return
 
         existing_names = self.get_existing_protein_names(tasks)
@@ -629,7 +1040,7 @@ class BatchAnalysisDialog(QDialog):
         self.worker.start()
 
     def get_existing_protein_names(self, tasks: List[dict]) -> List[str]:
-        existing = []
+        existing: List[str] = []
         case_id = self.case_data.get("id")
         try:
             rows = self.database.get_protein_analysis_by_case(case_id)
@@ -741,6 +1152,9 @@ class BatchAnalysisDialog(QDialog):
     def set_running_state(self, running: bool):
         self.btn_select_folder.setEnabled(not running)
         self.btn_scan.setEnabled(not running)
+        self.btn_alias_rules.setEnabled(not running)
+        self.btn_save_mapping.setEnabled(not running)
+        self.table.setEnabled(not running)
         self.btn_start.setEnabled(not running)
         self.btn_cancel_next.setEnabled(running)
         self.btn_close.setEnabled(not running)
