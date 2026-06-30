@@ -1,5 +1,9 @@
+from pathlib import Path
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -15,6 +19,7 @@ from app.case_detail_window import CaseDetailWindow
 from app.case_manager_window import CaseManagerWindow
 from app.report_window import ReportWindow
 from app.settings_window import SettingsWindow
+from core.config_manager import ConfigManager
 from core.database import Database
 
 
@@ -22,33 +27,83 @@ class MainWindow(QMainWindow):
     """
     主窗口统一页面骨架。
 
-    V1 目标：
-    1. 左侧菜单固定。
-    2. 右侧所有页面共用统一标题栏。
-    3. 隐藏各页面内部原来的标题，避免切换页面时标题位置跳动。
-    4. 统一各页面主体边距，让内容起点更一致。
-
-    注意：
-    - 不改各页面原有业务逻辑。
-    - 不改蛋白分析、病例详情、报告生成等功能。
-    - 只在 MainWindow 层做统一外壳。
+    这版重点修复：
+    1. 窗口标题不再硬编码。
+    2. 启动时从 config.ini 的 [AppInfo] app_name 读取软件名称。
+    3. 启动时从 config.ini 的 [AppInfo] logo_path 读取窗口 LOGO。
+    4. 系统设置保存后立即重新应用软件名称和 LOGO，无需重启。
+    5. config.ini、assets、data 路径统一按项目根目录解析，避免当前工作目录不同导致读写错文件。
     """
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("人精子蛋白质量分析软件")
 
-        # 默认窗口尺寸按蛋白分析页面设置，避免页面切换时窗口跳变
+        # 项目根目录：F:\sperm_protein_analyzer
+        self.project_root = Path(__file__).resolve().parents[1]
+
+        # 统一使用项目根目录下的 config.ini，避免从不同目录启动时读错配置。
+        self.config_manager = ConfigManager(str(self.project_root / "config.ini"))
+        self.config_manager.ensure_default_config()
+
+        # 先应用品牌信息，后续保存设置时也会再次调用。
+        self.apply_app_branding()
+
+        # 默认窗口尺寸按蛋白分析页面设置，避免页面切换时窗口跳变。
         self.resize(1650, 1000)
         self.setMinimumSize(1650, 1000)
 
-        self.database = Database("data/analysis.db")
+        # 数据库路径也按项目根目录解析。
+        database_path = self.resolve_project_path(self.config_manager.get_database_path())
+        self.database = Database(str(database_path))
+
         self.current_case = None
 
         self._page_title_map = {}
         self._page_button_map = {}
 
         self.init_ui()
+
+    # ------------------------------------------------------------------
+    # 路径与品牌信息
+    # ------------------------------------------------------------------
+    def resolve_project_path(self, path_value) -> Path:
+        """把配置中的相对路径解析为项目根目录下的绝对路径。"""
+        path = Path(str(path_value or "").strip())
+        if path.is_absolute():
+            return path
+        return self.project_root / path
+
+    def apply_app_branding(self):
+        """
+        应用软件名称和窗口 LOGO。
+
+        来源：config.ini
+        [AppInfo]
+        app_name = xxx
+        logo_path = assets\logo.png
+        """
+        try:
+            self.config_manager.load()
+        except Exception:
+            pass
+
+        app_name = self.config_manager.get_app_name().strip() or "人精子蛋白质量分析软件"
+        self.setWindowTitle(app_name)
+
+        app = QApplication.instance()
+        if app is not None:
+            app.setApplicationName(app_name)
+
+        logo_path = self.resolve_project_path(self.config_manager.get_app_logo_path())
+        if not logo_path.exists():
+            logo_path = self.project_root / "assets" / "logo.png"
+
+        if logo_path.exists():
+            icon = QIcon(str(logo_path))
+            if not icon.isNull():
+                self.setWindowIcon(icon)
+                if app is not None:
+                    app.setWindowIcon(icon)
 
     # ------------------------------------------------------------------
     # UI 初始化
@@ -171,6 +226,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("系统就绪")
         self.switch_page(self.page_cases, self.btn_cases)
 
+        # 防止某些页面初始化过程中间接覆盖标题，最后再应用一次。
+        self.apply_app_branding()
+
     def register_page(self, page: QWidget, button: QPushButton, title: str):
         self.stack.addWidget(page)
         self._page_title_map[page] = title
@@ -179,24 +237,18 @@ class MainWindow(QMainWindow):
 
     def prepare_embedded_page(self, page: QWidget, page_title: str):
         """
-        统一页面主体边距，并隐藏页面内部旧标题。
-
-        原来每个页面自己绘制标题，所以标题位置不一致。
-        现在标题由 MainWindow 统一绘制，页面内部的同名标题需要隐藏。
+        统一页面主体边距，并隐藏页面内部旧标题。标题统一由 MainWindow 绘制。
         """
         layout = page.layout()
         if layout is not None:
             layout.setContentsMargins(18, 10, 18, 18)
             layout.setSpacing(10)
 
-        # 隐藏页面内部标题。部分页面标题是局部变量，无法通过属性访问，
-        # 所以这里递归查找 QLabel 文本。
         for label in page.findChildren(QLabel):
             text = (label.text() or "").strip()
             if text == page_title:
                 label.hide()
 
-        # 部分页有顶部“当前病例：xxx”的旧状态标签，统一放到主标题栏右侧显示。
         for attr_name in (
             "status_label",
             "case_status_label",
@@ -242,12 +294,17 @@ class MainWindow(QMainWindow):
     # 配置刷新
     # ------------------------------------------------------------------
     def on_config_saved(self):
+        # 关键修复：保存设置后立即重新读取 [AppInfo] 并刷新窗口标题 / LOGO。
+        self.config_manager.load()
+        self.apply_app_branding()
+
         if hasattr(self.page_analysis, "reload_config"):
             self.page_analysis.reload_config()
         if hasattr(self.page_reports, "reload_config"):
             self.page_reports.reload_config()
         if hasattr(self.page_detail, "reload_config"):
             self.page_detail.reload_config()
+
         self.statusBar().showMessage("系统配置已刷新，无需重启。")
         self.refresh_header_context()
 
@@ -276,7 +333,6 @@ class MainWindow(QMainWindow):
         page = self.stack.currentWidget()
         title = self._page_title_map.get(page, "")
 
-        # 病例管理、系统设置不绑定当前病例，右侧不显示病例上下文。
         if title in ("病例管理", "系统设置"):
             self.header_context_label.setText("")
             return
@@ -300,10 +356,6 @@ class MainWindow(QMainWindow):
             self.header_context_label.setText(f"当前病例：{case_no} - {patient_name}")
 
     def hide_old_context_labels(self, page: QWidget):
-        """
-        页面切换或病例刷新后，页面内部旧的顶部病例状态可能被重新 setText。
-        这里再次隐藏，避免和统一标题栏重复。
-        """
         if page is None:
             return
 
