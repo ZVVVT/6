@@ -156,7 +156,7 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             side_layout.addWidget(btn)
 
-        # 中间留白，把低频的“系统设置”固定到左侧底部
+        # 中间留白，把低频的“系统设置”固定到底部
         side_layout.addStretch(1)
 
         # 底部：系统设置入口
@@ -280,6 +280,58 @@ class MainWindow(QMainWindow):
     def apply_unified_style(self):
         self.setStyleSheet(
             """
+            QFrame#SideMenu {
+                background-color: #f2f6fb;
+                border-right: 1px solid #d9e2ef;
+            }
+
+            QLabel#SideTitle {
+                color: #1f2d3d;
+                font-family: Microsoft YaHei;
+                font-size: 16px;
+                font-weight: 700;
+                padding: 0 0 10px 18px;
+            }
+
+            QPushButton#SideButton {
+                min-height: 40px;
+                border: none;
+                border-left: 4px solid transparent;
+                border-radius: 0px;
+                background-color: transparent;
+                color: #26384d;
+                font-family: Microsoft YaHei;
+                font-size: 14px;
+                font-weight: 500;
+                text-align: left;
+                padding-left: 14px;
+                padding-right: 8px;
+            }
+
+            QPushButton#SideButton:hover {
+                background-color: #eaf1f9;
+                color: #1f4e79;
+            }
+
+            QPushButton#SideButton:checked {
+                background-color: #dcecff;
+                color: #0f4c81;
+                font-weight: 700;
+                border-left: 4px solid #2f80ed;
+            }
+
+            QPushButton#SideButton:checked:hover {
+                background-color: #d6e8ff;
+                color: #0f4c81;
+                border-left: 4px solid #2f80ed;
+            }
+
+            QPushButton#SideButton:disabled {
+                background-color: transparent;
+                color: #9aa8b5;
+                border-left: 4px solid transparent;
+            }
+
             QFrame#ContentFrame {
                 background-color: #f5f7fb;
             }
