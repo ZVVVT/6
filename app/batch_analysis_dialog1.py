@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.config_manager import ConfigManager
-from core.image_channel_matcher import ImageChannelMatcher
+from core.image_importer import ImageImporter
 from core.mvimageid_runner import MvImageIDRunner
 from core.protein_analysis_service import ProteinAnalysisService
 from core.result_parser import ResultParser
@@ -399,9 +399,6 @@ class BatchAnalysisDialog(QDialog):
 
         self.alias_store = FolderAliasStore()
         self.parent_folder: Optional[Path] = None
-        # 记录上一次真正完成预检查的总文件夹。
-        # 用于判断用户是否换了一个总文件夹；一旦换文件夹，不能再沿用旧文件夹的手动匹配结果。
-        self._last_scanned_parent_folder: Optional[Path] = None
         self.available_folders: List[Path] = []
         self.scan_rows: List[dict] = []
         self.worker: Optional[BatchProteinWorker] = None
@@ -610,28 +607,9 @@ class BatchAnalysisDialog(QDialog):
         folder = QFileDialog.getExistingDirectory(self, "选择包含蛋白子文件夹的上一级目录", "")
         if not folder:
             return
-
-        new_parent = Path(folder)
-
-        # 如果用户重新选择了另一个总文件夹，必须清空上一次预检查保留的手动选择。
-        # 否则 scan_parent_folder() 会优先沿用旧路径，导致界面路径变了但预检查结果不刷新。
-        if self.is_different_parent_folder(new_parent, self._last_scanned_parent_folder):
-            self.scan_rows = []
-
         self.folder_edit.setText(folder)
-        self.parent_folder = new_parent
+        self.parent_folder = Path(folder)
         self.scan_parent_folder()
-
-    def is_different_parent_folder(self, left: Optional[Path], right: Optional[Path]) -> bool:
-        """判断两个总文件夹是否不同。兼容 Windows 大小写和不存在路径。"""
-        if left is None and right is None:
-            return False
-        if left is None or right is None:
-            return True
-        try:
-            return str(left.resolve()).lower() != str(right.resolve()).lower()
-        except Exception:
-            return str(left.absolute()).lower() != str(right.absolute()).lower()
 
     # ---------- Pipeline / 环境预检查 ----------
 
@@ -702,13 +680,8 @@ class BatchAnalysisDialog(QDialog):
 
     def scan_parent_folder(self):
         folder_text = self.folder_edit.text().strip()
-
-        new_parent: Optional[Path] = self.parent_folder
         if folder_text:
-            new_parent = Path(folder_text)
-
-        parent_changed = self.is_different_parent_folder(new_parent, self._last_scanned_parent_folder)
-        self.parent_folder = new_parent
+            self.parent_folder = Path(folder_text)
 
         self.available_folders = []
         if self.parent_folder and self.parent_folder.exists():
@@ -731,9 +704,7 @@ class BatchAnalysisDialog(QDialog):
                 for key in matched_keys:
                     ambiguous_by_key.setdefault(key, []).append(child.name)
 
-        # 同一个总文件夹内，允许保留用户手动选择；
-        # 一旦切换到另一个总文件夹，必须丢弃旧选择，重新自动匹配新目录。
-        old_selection = {} if parent_changed else {
+        old_selection = {
             row.get("protein_key", ""): row.get("folder", "")
             for row in self.scan_rows
             if row.get("folder")
@@ -776,7 +747,6 @@ class BatchAnalysisDialog(QDialog):
                 "status": status,
             })
 
-        self._last_scanned_parent_folder = self.parent_folder
         self.refresh_table()
 
     def get_status_by_folder_and_channels(
@@ -791,14 +761,8 @@ class BatchAnalysisDialog(QDialog):
             return status_note
         if folder is None:
             return "未匹配"
-
-        # 统一使用 ImageChannelMatcher 的视野级结果判断是否可分析。
-        # G/R 总数大于 0 但不在同一视野时，也不能认为可分析。
-        if channels.get("_duplicate_fields", 0) > 0:
-            return "图片重复"
-        if channels.get("_complete_fields", 0) <= 0:
+        if channels.get("G", 0) <= 0 or channels.get("R", 0) <= 0:
             return "缺少G或R"
-
         if pipeline_check is not None and not pipeline_check.get("ok", False):
             return "Pipeline缺失"
         if env_check is not None and not env_check.get("ok", False):
@@ -806,36 +770,23 @@ class BatchAnalysisDialog(QDialog):
         return "可分析"
 
     def scan_channels(self, folder: Optional[Path]) -> Dict[str, int]:
-        """
-        批量预检查统一使用 core.image_channel_matcher.ImageChannelMatcher。
-
-        不再在批量窗口里单独写一套 G/R/DIC/Merge 判断逻辑，避免出现：
-        预检查显示可分析，但实际导入/分析时识别规则不一致。
-        """
-        counts = {
-            "G": 0,
-            "R": 0,
-            "DIC": 0,
-            "Merge": 0,
-            "_total_fields": 0,
-            "_complete_fields": 0,
-            "_duplicate_fields": 0,
-            "_unmatched_files": 0,
-        }
+        counts = {"G": 0, "R": 0, "DIC": 0, "Merge": 0}
         if not folder or not folder.exists():
             return counts
 
-        matcher = ImageChannelMatcher(self.config.get_image_rule())
-        result = matcher.scan_folder(folder)
-
-        counts["G"] = result.channel_count("G")
-        counts["R"] = result.channel_count("R")
-        counts["DIC"] = result.channel_count("DIC")
-        counts["Merge"] = result.channel_count("Merge")
-        counts["_total_fields"] = result.total_fields
-        counts["_complete_fields"] = result.complete_count
-        counts["_duplicate_fields"] = sum(1 for item in result.fields if item.duplicates)
-        counts["_unmatched_files"] = len(result.unmatched_files)
+        suffixes = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
+        for path in folder.iterdir():
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            name = path.stem.lower()
+            if "merge" in name or "mer" in name or "融合" in name:
+                counts["Merge"] += 1
+            elif "dic" in name or "phase" in name or "相差" in name:
+                counts["DIC"] += 1
+            elif name.endswith("_g") or "_g_" in name or "fitc" in name or "green" in name or "绿色" in name:
+                counts["G"] += 1
+            elif name.endswith("_r") or "_r_" in name or "pi" in name or "red" in name or "红色" in name:
+                counts["R"] += 1
         return counts
 
     def refresh_table(self):
@@ -923,7 +874,7 @@ class BatchAnalysisDialog(QDialog):
             item.setForeground(Qt.darkGreen)
         elif status in ["分析中"]:
             item.setForeground(Qt.blue)
-        elif status in ["失败", "缺少G或R", "图片重复", "Pipeline缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
+        elif status in ["失败", "缺少G或R", "Pipeline缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
             item.setForeground(Qt.red)
         else:
             item.setForeground(Qt.gray)

@@ -6,9 +6,8 @@
 1. 根据病例 + protein_key + 源图片文件夹，完成一次标准单蛋白分析。
 2. 统一 raw_images / cp_input / cp_output 的目录清理与准备。
 3. 统一使用 ImageChannelMatcher 识别 R/G/DIC/Merge 与视野编号。
-4. raw_images 保留原始文件名。
-5. cp_input 也保留原始文件名，只复制参与分析的 G/R 图。
-6. 统一调用 MvImageIDRunner。
+4. raw_images 保留原始文件名，cp_input 使用规范分析命名。
+4. 统一调用 MvImageIDRunner。
 5. 统一解析 Image.csv / colocalized CSV。
 
 说明：
@@ -328,44 +327,32 @@ class ProteinAnalysisService:
     ) -> int:
         """清空 cp_input/proteinX，并复制本次分析实际需要的 R/G 图。
 
-        设计原则：
-        - raw_images 保留原始文件名，用于原始数据追溯。
-        - cp_input 也保留原始文件名，只筛选出本次真正参与分析的 G/R 图。
-        - 不再额外添加 proteinX_ 前缀，因为 proteinX 已经体现在目录层级中。
-
-        这样 cp_output 中的叠加图文件名会自然对应用户原始图片名，
-        例如 bb50-2_G.tif → bb50-2_G_G_objects_OrigOverlay.png。
+        cp_input 是分析工作目录，可以使用规范命名，保证输出文件名稳定：
+        proteinX_视野号_G.tif
+        proteinX_视野号_R.tif
         """
         if cp_input_dir.exists():
             shutil.rmtree(cp_input_dir)
         cp_input_dir.mkdir(parents=True, exist_ok=True)
 
+        protein_key = cp_input_dir.name
         copied_count = 0
-        used_target_names = set()
-
         for item in complete_items:
+            field_no = str(item.get("field_no", "") or "").strip()
+            if not field_no:
+                field_no = f"field{copied_count + 1}"
+
             for channel in ["G", "R"]:
                 source_path = item.get(channel, "")
                 if not source_path:
                     continue
-
                 source = Path(str(source_path)).resolve()
                 if not source.exists():
                     raise FileNotFoundError(f"输入图像不存在：{source}")
 
-                target_name = source.name
-
-                # 正常情况下，同一 raw_images/proteinX 目录下不会存在完全同名文件。
-                # 这里加保护，是为了避免极端情况下不同来源复制到 cp_input 时发生覆盖。
-                if target_name in used_target_names or (cp_input_dir / target_name).exists():
-                    raise RuntimeError(
-                        f"分析输入文件名重复，无法安全复制：{target_name}。"
-                        "请检查原始图片是否存在同名文件。"
-                    )
-
+                target_name = f"{protein_key}_{field_no}_{channel}{source.suffix}"
                 target = cp_input_dir / target_name
                 shutil.copy2(source, target)
-                used_target_names.add(target_name)
                 copied_count += 1
 
         self._log(log_callback, f"{protein_name} 已准备分析输入图像：{copied_count} 张。")

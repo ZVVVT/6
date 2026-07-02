@@ -399,9 +399,6 @@ class BatchAnalysisDialog(QDialog):
 
         self.alias_store = FolderAliasStore()
         self.parent_folder: Optional[Path] = None
-        # 记录上一次真正完成预检查的总文件夹。
-        # 用于判断用户是否换了一个总文件夹；一旦换文件夹，不能再沿用旧文件夹的手动匹配结果。
-        self._last_scanned_parent_folder: Optional[Path] = None
         self.available_folders: List[Path] = []
         self.scan_rows: List[dict] = []
         self.worker: Optional[BatchProteinWorker] = None
@@ -610,28 +607,9 @@ class BatchAnalysisDialog(QDialog):
         folder = QFileDialog.getExistingDirectory(self, "选择包含蛋白子文件夹的上一级目录", "")
         if not folder:
             return
-
-        new_parent = Path(folder)
-
-        # 如果用户重新选择了另一个总文件夹，必须清空上一次预检查保留的手动选择。
-        # 否则 scan_parent_folder() 会优先沿用旧路径，导致界面路径变了但预检查结果不刷新。
-        if self.is_different_parent_folder(new_parent, self._last_scanned_parent_folder):
-            self.scan_rows = []
-
         self.folder_edit.setText(folder)
-        self.parent_folder = new_parent
+        self.parent_folder = Path(folder)
         self.scan_parent_folder()
-
-    def is_different_parent_folder(self, left: Optional[Path], right: Optional[Path]) -> bool:
-        """判断两个总文件夹是否不同。兼容 Windows 大小写和不存在路径。"""
-        if left is None and right is None:
-            return False
-        if left is None or right is None:
-            return True
-        try:
-            return str(left.resolve()).lower() != str(right.resolve()).lower()
-        except Exception:
-            return str(left.absolute()).lower() != str(right.absolute()).lower()
 
     # ---------- Pipeline / 环境预检查 ----------
 
@@ -702,13 +680,8 @@ class BatchAnalysisDialog(QDialog):
 
     def scan_parent_folder(self):
         folder_text = self.folder_edit.text().strip()
-
-        new_parent: Optional[Path] = self.parent_folder
         if folder_text:
-            new_parent = Path(folder_text)
-
-        parent_changed = self.is_different_parent_folder(new_parent, self._last_scanned_parent_folder)
-        self.parent_folder = new_parent
+            self.parent_folder = Path(folder_text)
 
         self.available_folders = []
         if self.parent_folder and self.parent_folder.exists():
@@ -731,9 +704,7 @@ class BatchAnalysisDialog(QDialog):
                 for key in matched_keys:
                     ambiguous_by_key.setdefault(key, []).append(child.name)
 
-        # 同一个总文件夹内，允许保留用户手动选择；
-        # 一旦切换到另一个总文件夹，必须丢弃旧选择，重新自动匹配新目录。
-        old_selection = {} if parent_changed else {
+        old_selection = {
             row.get("protein_key", ""): row.get("folder", "")
             for row in self.scan_rows
             if row.get("folder")
@@ -776,7 +747,6 @@ class BatchAnalysisDialog(QDialog):
                 "status": status,
             })
 
-        self._last_scanned_parent_folder = self.parent_folder
         self.refresh_table()
 
     def get_status_by_folder_and_channels(

@@ -5,15 +5,12 @@
 职责：
 1. 根据病例 + protein_key + 源图片文件夹，完成一次标准单蛋白分析。
 2. 统一 raw_images / cp_input / cp_output 的目录清理与准备。
-3. 统一使用 ImageChannelMatcher 识别 R/G/DIC/Merge 与视野编号。
-4. raw_images 保留原始文件名。
-5. cp_input 也保留原始文件名，只复制参与分析的 G/R 图。
-6. 统一调用 MvImageIDRunner。
-5. 统一解析 Image.csv / colocalized CSV。
+3. 统一调用 MvImageIDRunner。
+4. 统一解析 Image.csv / colocalized CSV。
 
-说明：
-- 本服务不直接写数据库，返回的 result dict 与当前界面保存逻辑兼容。
-- 批量分析和单蛋白分析都应该调用本服务。
+注意：
+- 本服务暂不直接写数据库，返回的 result dict 与现有批量分析保存逻辑兼容。
+- 界面层只负责选择参数、展示日志、保存或刷新结果。
 """
 
 from __future__ import annotations
@@ -23,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from core.config_manager import ConfigManager
-from core.image_channel_matcher import ImageChannelMatcher, FieldImageSet, FolderMatchResult
+from core.image_importer import ImageImporter
 from core.mvimageid_runner import MvImageIDRunner, MvImageIDRunResult
 from core.result_parser import ResultParser
 
@@ -37,7 +34,6 @@ class ProteinAnalysisService:
     def __init__(self, config: Optional[ConfigManager] = None):
         self.config = config or ConfigManager()
         self.config.ensure_default_config()
-        self.matcher = ImageChannelMatcher(self.config.get_image_rule())
 
     # ------------------------------------------------------------------
     # 对外主入口
@@ -56,7 +52,7 @@ class ProteinAnalysisService:
         """
         执行单个蛋白分析。
 
-        返回 dict，字段兼容当前 batch_analysis_dialog / analysis_window 保存逻辑。
+        返回 dict，字段兼容当前 batch_analysis_dialog.save_result_to_database()。
         """
         case_no = str((case_data or {}).get("case_no", "") or "").strip()
         case_id = (case_data or {}).get("id")
@@ -164,7 +160,7 @@ class ProteinAnalysisService:
         }
 
     # ------------------------------------------------------------------
-    # 图片识别与导入
+    # 分步骤执行
     # ------------------------------------------------------------------
     def import_images_to_raw_folder(
         self,
@@ -174,42 +170,24 @@ class ProteinAnalysisService:
         protein_name: str,
         log_callback: LogCallback = None,
     ) -> List[dict]:
-        """
-        清空 raw_images/proteinX 并重新导入原始图片。
-
-        这里不再使用旧 ImageImporter，而是统一调用 ImageChannelMatcher，
-        保证批量预检查、单蛋白导入、分析输入准备使用同一套通道规则。
-        """
-        match_result = self.matcher.scan_folder(source_folder)
-        if match_result.total_fields <= 0:
-            raise RuntimeError(f"未在源图片文件夹中识别到 R/G/DIC/Merge 图像：{source_folder}")
-
+        """清空 raw_images/proteinX 并重新导入原始图片。"""
         if raw_folder.exists():
             shutil.rmtree(raw_folder)
         raw_folder.mkdir(parents=True, exist_ok=True)
 
-        copied_items: List[dict] = []
-        for field_set in match_result.fields:
-            copied_item = self._copy_field_set_to_raw_folder(
-                field_set=field_set,
-                raw_folder=raw_folder,
-                protein_key=protein_key,
-            )
-            copied_items.append(copied_item)
-
-        complete_count = len([item for item in copied_items if item.get("status") == "完整"])
-        self._log(
-            log_callback,
-            f"{protein_name} 导入完成：共 {len(copied_items)} 个视野，完整视野 {complete_count} 个。",
+        importer = ImageImporter(self.config.get_image_rule())
+        imported_images = importer.copy_to_workspace(
+            source_folder=str(source_folder),
+            target_folder=str(raw_folder),
+            protein_name=protein_key,
         )
 
-        if match_result.unmatched_files:
-            self._log(log_callback, f"{protein_name} 未识别图片：{len(match_result.unmatched_files)} 张。")
-        if any(item.get("status") != "完整" for item in copied_items):
-            bad = [f"{item.get('field_no')}({item.get('status')})" for item in copied_items if item.get("status") != "完整"]
-            self._log(log_callback, f"{protein_name} 不完整/异常视野：" + "，".join(bad))
-
-        return copied_items
+        complete_count = len([item for item in imported_images if item.get("status") == "完整"])
+        self._log(
+            log_callback,
+            f"{protein_name} 导入完成：共 {len(imported_images)} 个视野，完整视野 {complete_count} 个。",
+        )
+        return imported_images
 
     def load_images_from_raw_folder(
         self,
@@ -218,107 +196,75 @@ class ProteinAnalysisService:
         protein_name: str,
         log_callback: LogCallback = None,
     ) -> List[dict]:
-        """
-        读取已经导入到 raw_images/proteinX 的图片，不清空、不复制原始图。
-
-        这里同样统一使用 ImageChannelMatcher，避免历史加载和新导入规则不一致。
-        """
+        """读取已经导入到 raw_images/proteinX 的图片，不清空、不复制原始图。"""
         if not raw_folder.exists() or not raw_folder.is_dir():
             raise FileNotFoundError(f"原始导入目录不存在：{raw_folder}")
 
-        match_result = self.matcher.scan_folder(raw_folder)
-        imported_images = self._match_result_to_rows(match_result, protein_key=protein_key)
+        support_exts = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
+        groups: Dict[str, dict] = {}
 
-        complete_count = len([item for item in imported_images if item.get("status") == "完整"])
+        for image_path in raw_folder.iterdir():
+            if not image_path.is_file():
+                continue
+            if image_path.suffix.lower() not in support_exts:
+                continue
+
+            channel_info = self.parse_workspace_image_channel(image_path, protein_key)
+            if channel_info is None:
+                continue
+
+            field_no, channel = channel_info
+            if field_no not in groups:
+                groups[field_no] = {
+                    "field_no": field_no,
+                    "R": "",
+                    "G": "",
+                    "DIC": "",
+                    "Merge": "",
+                    "status": "未完整",
+                }
+            groups[field_no][channel] = str(image_path)
+
+        results = list(groups.values())
+        for item in results:
+            required_ok = bool(item.get("R")) and bool(item.get("G"))
+            item["status"] = "完整" if required_ok else "缺少R或G"
+
+        results.sort(key=lambda x: str(x.get("field_no", "")))
+        complete_count = len([item for item in results if item.get("status") == "完整"])
         self._log(
             log_callback,
-            f"{protein_name} 已读取原始导入图片：共 {len(imported_images)} 个视野，完整视野 {complete_count} 个。",
+            f"{protein_name} 已读取原始导入图片：共 {len(results)} 个视野，完整视野 {complete_count} 个。",
         )
-        return imported_images
+        return results
 
-    def _copy_field_set_to_raw_folder(
-        self,
-        field_set: FieldImageSet,
-        raw_folder: Path,
-        protein_key: str,
-    ) -> dict:
-        """把一个视野的已识别通道图复制到 raw_images/proteinX。
-
-        raw_images 是原始导入备份目录，因此保留用户原始文件名，
-        不强制改成 proteinX_视野号_通道名。真正给 MvImageID 使用的
-        规范命名在 prepare_input_folder() 中生成。
-        """
-        field_no = self._normalize_field_no(field_set.field_id, protein_key)
-        copied_item = self._empty_row(field_no)
-        copied_item["status"] = self._field_status_for_ui(field_set)
-
-        for channel in ["G", "R", "DIC", "Merge"]:
-            source_path = field_set.get(channel)
-            if not source_path:
-                continue
-            source = Path(source_path)
-            target = raw_folder / source.name
-            shutil.copy2(source, target)
-            copied_item[channel] = str(target)
-
-        # 重复通道也复制到 raw_images，便于追溯；但不会作为可分析视野进入 cp_input。
-        for duplicate_list in field_set.duplicates.values():
-            for duplicate_path in duplicate_list:
-                duplicate_source = Path(duplicate_path)
-                duplicate_target = raw_folder / duplicate_source.name
-                if not duplicate_target.exists():
-                    shutil.copy2(duplicate_source, duplicate_target)
-
-        return copied_item
-
-    def _match_result_to_rows(self, match_result: FolderMatchResult, protein_key: str) -> List[dict]:
-        rows = []
-        for field_set in match_result.fields:
-            field_no = self._normalize_field_no(field_set.field_id, protein_key)
-            row = self._empty_row(field_no)
-            row["status"] = self._field_status_for_ui(field_set)
-            for channel in ["G", "R", "DIC", "Merge"]:
-                path = field_set.get(channel)
-                row[channel] = str(path) if path else ""
-            rows.append(row)
-        rows.sort(key=lambda item: self._natural_key(str(item.get("field_no", ""))))
-        return rows
-
-    @staticmethod
-    def _empty_row(field_no: str) -> dict:
-        return {
-            "field_no": field_no,
-            "R": "",
-            "G": "",
-            "DIC": "",
-            "Merge": "",
-            "status": "未完整",
+    def parse_workspace_image_channel(self, image_path: Path, protein_key: str):
+        stem = image_path.stem
+        suffix_map = {
+            "_R": "R",
+            "_G": "G",
+            "_DIC": "DIC",
+            "_Merge": "Merge",
         }
 
-    @staticmethod
-    def _field_status_for_ui(field_set: FieldImageSet) -> str:
-        if field_set.is_complete:
-            return "完整"
-        return field_set.status_text()
+        for suffix, channel in suffix_map.items():
+            if not stem.endswith(suffix):
+                continue
 
-    @staticmethod
-    def _normalize_field_no(field_id: str, protein_key: str) -> str:
-        field_no = str(field_id or "").strip()
-        prefix = f"{protein_key}_"
-        if field_no.startswith(prefix):
-            field_no = field_no[len(prefix):]
-        field_no = field_no.strip("_- ")
-        return field_no or str(field_id or "")
+            base = stem[:-len(suffix)]
+            prefix = f"{protein_key}_"
+            if base.startswith(prefix):
+                field_no = base[len(prefix):]
+            else:
+                field_no = base
 
-    @staticmethod
-    def _natural_key(value: str) -> List[object]:
-        import re
+            field_no = field_no.strip("_- ")
+            if not field_no:
+                field_no = base
+            return field_no, channel
 
-        return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", str(value))]
+        return None
 
-    # ------------------------------------------------------------------
-    # 分析输入 / 输出
-    # ------------------------------------------------------------------
     def prepare_input_folder(
         self,
         complete_items: List[dict],
@@ -326,46 +272,22 @@ class ProteinAnalysisService:
         protein_name: str,
         log_callback: LogCallback = None,
     ) -> int:
-        """清空 cp_input/proteinX，并复制本次分析实际需要的 R/G 图。
-
-        设计原则：
-        - raw_images 保留原始文件名，用于原始数据追溯。
-        - cp_input 也保留原始文件名，只筛选出本次真正参与分析的 G/R 图。
-        - 不再额外添加 proteinX_ 前缀，因为 proteinX 已经体现在目录层级中。
-
-        这样 cp_output 中的叠加图文件名会自然对应用户原始图片名，
-        例如 bb50-2_G.tif → bb50-2_G_G_objects_OrigOverlay.png。
-        """
+        """清空 cp_input/proteinX，并复制本次分析实际需要的 R/G 图。"""
         if cp_input_dir.exists():
             shutil.rmtree(cp_input_dir)
         cp_input_dir.mkdir(parents=True, exist_ok=True)
 
         copied_count = 0
-        used_target_names = set()
-
         for item in complete_items:
-            for channel in ["G", "R"]:
+            for channel in ["R", "G"]:
                 source_path = item.get(channel, "")
                 if not source_path:
                     continue
-
                 source = Path(str(source_path)).resolve()
                 if not source.exists():
                     raise FileNotFoundError(f"输入图像不存在：{source}")
-
-                target_name = source.name
-
-                # 正常情况下，同一 raw_images/proteinX 目录下不会存在完全同名文件。
-                # 这里加保护，是为了避免极端情况下不同来源复制到 cp_input 时发生覆盖。
-                if target_name in used_target_names or (cp_input_dir / target_name).exists():
-                    raise RuntimeError(
-                        f"分析输入文件名重复，无法安全复制：{target_name}。"
-                        "请检查原始图片是否存在同名文件。"
-                    )
-
-                target = cp_input_dir / target_name
+                target = cp_input_dir / source.name
                 shutil.copy2(source, target)
-                used_target_names.add(target_name)
                 copied_count += 1
 
         self._log(log_callback, f"{protein_name} 已准备分析输入图像：{copied_count} 张。")
@@ -378,9 +300,6 @@ class ProteinAnalysisService:
             self._log(log_callback, f"{protein_name} 已清空旧输出目录：{cp_output_dir}")
         cp_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # MvImageID / 结果解析
-    # ------------------------------------------------------------------
     def run_mvimageid(
         self,
         protein_key: str,

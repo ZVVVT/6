@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from app.result_viewer import ResultViewer
 from core.config_manager import ConfigManager
-from core.image_channel_matcher import ImageChannelMatcher
+from core.image_importer import ImageImporter
 from core.result_parser import ResultParser
 from core.protein_analysis_service import ProteinAnalysisService
 
@@ -947,74 +947,83 @@ class AnalysisWindow(QWidget):
         self.update_protein_buttons()
 
     def load_images_from_raw_folder(self, raw_folder: Path, protein_key: str):
-        """从 raw_images/proteinX 读取历史导入图片。
+        support_exts = {
+            ".tif",
+            ".tiff",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".bmp",
+        }
 
-        统一使用 ImageChannelMatcher，与批量预检查、分析服务保持同一套图片规则。
-        raw_images 保留用户原始文件名，不再要求 proteinX_ 前缀。
-        """
-        if not raw_folder.exists() or not raw_folder.is_dir():
-            return []
+        groups = {}
 
-        matcher = ImageChannelMatcher(self.config.get_image_rule())
-        match_result = matcher.scan_folder(raw_folder)
-        return self.match_result_to_table_rows(match_result, protein_key)
+        for image_path in raw_folder.iterdir():
+            if not image_path.is_file():
+                continue
 
-    def scan_source_images_for_table(self, source_folder: Path, protein_key: str):
-        """扫描用户选择的源图片目录，并转换为导入列表表格使用的数据。"""
-        matcher = ImageChannelMatcher(self.config.get_image_rule())
-        match_result = matcher.scan_folder(source_folder)
-        return match_result, self.match_result_to_table_rows(match_result, protein_key)
+            if image_path.suffix.lower() not in support_exts:
+                continue
 
-    def match_result_to_table_rows(self, match_result, protein_key: str):
-        """把 ImageChannelMatcher 的结果转换为当前表格使用的行数据。"""
-        rows = []
-        for field_set in match_result.fields:
-            field_no = self.normalize_field_no(field_set.field_id, protein_key)
-            status = "完整" if field_set.is_complete else field_set.status_text()
-            rows.append({
-                "field_no": field_no,
-                "G": str(field_set.get("G") or ""),
-                "R": str(field_set.get("R") or ""),
-                "DIC": str(field_set.get("DIC") or ""),
-                "Merge": str(field_set.get("Merge") or ""),
-                "status": status,
-            })
-        rows.sort(key=lambda item: self.natural_sort_key(str(item.get("field_no", ""))))
-        return rows
+            channel_info = self.parse_workspace_image_channel(image_path, protein_key)
 
-    @staticmethod
-    def normalize_field_no(field_id: str, protein_key: str):
-        field_no = str(field_id or "").strip()
-        prefix = f"{protein_key}_"
-        if field_no.startswith(prefix):
-            field_no = field_no[len(prefix):]
-        return field_no.strip("_- ") or field_no
+            if channel_info is None:
+                continue
 
-    @staticmethod
-    def natural_sort_key(value: str):
-        import re
-        return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", str(value))]
+            field_no, channel = channel_info
 
-    @staticmethod
-    def collect_matched_files(match_result):
-        """收集识别到的全部文件，包括重复通道中的文件。"""
-        files = []
-        seen = set()
-        for field_set in match_result.fields:
-            for path in field_set.files.values():
-                p = Path(path)
-                key = str(p.resolve())
-                if key not in seen:
-                    files.append(p)
-                    seen.add(key)
-            for duplicate_list in field_set.duplicates.values():
-                for path in duplicate_list:
-                    p = Path(path)
-                    key = str(p.resolve())
-                    if key not in seen:
-                        files.append(p)
-                        seen.add(key)
-        return files
+            if field_no not in groups:
+                groups[field_no] = {
+                    "field_no": field_no,
+                    "R": "",
+                    "G": "",
+                    "DIC": "",
+                    "Merge": "",
+                    "status": "未完整",
+                }
+
+            groups[field_no][channel] = str(image_path)
+
+        results = list(groups.values())
+
+        for item in results:
+            required_ok = bool(item["R"]) and bool(item["G"])
+            item["status"] = "完整" if required_ok else "缺少R或G"
+
+        results.sort(key=lambda x: str(x.get("field_no", "")))
+
+        return results
+
+    def parse_workspace_image_channel(self, image_path: Path, protein_key: str):
+        stem = image_path.stem
+
+        suffix_map = {
+            "_R": "R",
+            "_G": "G",
+            "_DIC": "DIC",
+            "_Merge": "Merge",
+        }
+
+        for suffix, channel in suffix_map.items():
+            if not stem.endswith(suffix):
+                continue
+
+            base = stem[:-len(suffix)]
+
+            prefix = f"{protein_key}_"
+            if base.startswith(prefix):
+                field_no = base[len(prefix):]
+            else:
+                field_no = base
+
+            field_no = field_no.strip("_- ")
+
+            if not field_no:
+                field_no = base
+
+            return field_no, channel
+
+        return None
 
     @staticmethod
     def folder_has_files(folder: Path):
@@ -1052,13 +1061,9 @@ class AnalysisWindow(QWidget):
             return
 
         source_folder = self.folder_edit.text().strip()
+
         if not source_folder:
             QMessageBox.information(self, "提示", "请先选择图片文件夹。")
-            return
-
-        source_path = Path(source_folder)
-        if not source_path.exists() or not source_path.is_dir():
-            QMessageBox.warning(self, "提示", f"图片文件夹不存在或不是文件夹：\n{source_path}")
             return
 
         protein_key = self.get_current_protein_key()
@@ -1067,26 +1072,6 @@ class AnalysisWindow(QWidget):
 
         if not case_no:
             QMessageBox.warning(self, "提示", "当前病例编号为空，无法建立工作目录。")
-            return
-
-        # 先用统一规则预扫描源目录。只有扫描通过后才清理旧 raw_images，避免误删。
-        try:
-            match_result, preview_rows = self.scan_source_images_for_table(source_path, protein_key)
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"识别图片失败：\n{e}")
-            return
-
-        if match_result.total_fields <= 0:
-            QMessageBox.warning(
-                self,
-                "未识别到图片",
-                "当前文件夹没有识别到符合系统设置后缀的图片。\n\n"
-                "请检查：系统设置 → 图片规则 中的 R/G/DIC/Merge 后缀，\n"
-                "以及图片文件名是否符合规则。",
-            )
-            self.imported_images = []
-            self.refresh_table([])
-            self.btn_run_analysis.setEnabled(False)
             return
 
         workspace_root = self.config.get_workspace_root()
@@ -1098,46 +1083,43 @@ class AnalysisWindow(QWidget):
                 "确认重新导入",
                 f"{protein_name} 已经有导入图片。\n\n"
                 "继续导入会清空当前蛋白的旧导入图片，并复制新的图片。\n"
-                "raw_images 会保留原始文件名，不会强制加 protein 前缀。\n"
                 "不会删除已经生成的分析结果。\n\n"
                 "是否继续？",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
+
             if reply != QMessageBox.Yes:
                 return
 
-        try:
-            if target_folder.exists():
+            try:
                 shutil.rmtree(target_folder)
-            target_folder.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"清理旧导入图片失败：\n{e}")
+                return
 
-            copied_count = 0
-            for source_file in self.collect_matched_files(match_result):
-                target = target_folder / source_file.name
-                shutil.copy2(source_file, target)
-                copied_count += 1
+        self.current_raw_image_folder = target_folder
 
-            # 复制完成后从 raw_images 再扫描一次，保证界面显示与后续分析读取完全一致。
-            self.imported_images = self.load_images_from_raw_folder(target_folder, protein_key)
+        try:
+            importer = ImageImporter(self.config.get_image_rule())
+            self.imported_images = importer.copy_to_workspace(
+                source_folder=source_folder,
+                target_folder=str(target_folder),
+                protein_name=protein_key,
+            )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导入图片失败：\n{e}")
             return
 
-        self.current_raw_image_folder = target_folder
         self.refresh_table(self.imported_images)
 
         complete_count = self.get_complete_image_count(self.imported_images)
         total_count = len(self.imported_images)
-        unmatched_count = len(match_result.unmatched_files)
 
         self.append_log(
             f"{protein_name} 图片导入完成：共识别 {total_count} 个视野，完整视野 {complete_count} 个。"
         )
         self.append_log(f"图片已复制到：{target_folder}")
-        self.append_log(f"raw_images 保留原始文件名；分析时由服务复制到 cp_input。")
-        if unmatched_count:
-            self.append_log(f"未识别图片：{unmatched_count} 张。")
 
         self.btn_run_analysis.setEnabled(complete_count > 0)
         self.update_protein_buttons()
@@ -1147,8 +1129,7 @@ class AnalysisWindow(QWidget):
             "导入完成",
             f"蛋白：{protein_name}\n"
             f"共识别 {total_count} 个视野。\n"
-            f"完整视野：{complete_count} 个。\n"
-            f"复制图片：{copied_count} 张。\n\n"
+            f"完整视野：{complete_count} 个。\n\n"
             f"已复制到：\n{target_folder}"
         )
 
@@ -1265,12 +1246,24 @@ class AnalysisWindow(QWidget):
         self.analysis_worker.start()
 
     def imported_images_match_current_protein(self, image_items, protein_key: str):
-        """兼容旧调用。
+        prefix = f"{protein_key}_"
 
-        现在 raw_images 保留原始文件名，不再要求文件名以 proteinX_ 开头。
-        是否属于当前蛋白由 raw_images/proteinX 目录决定。
-        """
-        return True
+        checked_count = 0
+
+        for item in image_items:
+            for channel in ["R", "G"]:
+                path_text = item.get(channel, "")
+
+                if not path_text:
+                    continue
+
+                checked_count += 1
+                file_name = Path(path_text).name
+
+                if not file_name.startswith(prefix):
+                    return False
+
+        return checked_count > 0
 
     def on_analysis_finished(self, success: bool, elapsed: float, result: object, error_message: str):
         self.set_running_state(False)
