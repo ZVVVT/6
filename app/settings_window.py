@@ -170,7 +170,7 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group = QGroupBox("MvImageID 源码环境")
+        group = QGroupBox("运行环境")
         form = QFormLayout(group)
 
         self.powershell_edit = QLineEdit()
