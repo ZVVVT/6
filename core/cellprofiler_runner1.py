@@ -1,39 +1,33 @@
-# -*- coding: utf-8 -*-
 """
-历史兼容入口。
+兼容旧导入路径的 MvImageID 后台执行入口。
 
-当前项目的实际分析执行已经统一收口到：
-    core.mvimageid_runner.MvImageIDRunner
-    core.mvimageid_runner.MvImageIDWorker
-
-本文件只用于兼容旧导入路径，避免旧代码或外部调试脚本导入时报错。
-不要在新代码中继续从本文件导入执行器；新代码应直接使用
-core.mvimageid_runner 或 core.protein_analysis_service。
+历史界面代码仍从 core.cellprofiler_runner 导入 CellProfilerWorker。
+为了降低第一步改动风险，暂时保留这个文件名和类名，内部统一转到
+core.mvimageid_runner.MvImageIDRunner / MvImageIDWorker。
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from PySide6.QtCore import QThread, Signal
 
 from core.mvimageid_runner import MvImageIDRunner
 
 
-__all__ = [
-    "ps_quote",
-    "SourceCellProfilerRunner",
-    "CellProfilerWorker",
-]
-
-
 def ps_quote(path_or_text) -> str:
-    """兼容旧调试代码保留。当前执行链路不再依赖 PowerShell。"""
+    """保留旧函数名，避免外部调试代码导入时报错。"""
     text = str(path_or_text)
     return "'" + text.replace("'", "''") + "'"
 
 
 class SourceCellProfilerRunner:
-    """历史类名兼容包装；实际执行统一委托给 MvImageIDRunner。"""
+    """
+    兼容旧类名。
+
+    不再生成 PowerShell 脚本，实际使用 MvImageIDRunner 直接调用
+    MvImageID 虚拟环境 python。后续第二/三步会把界面层导入名也逐步改成
+    MvImageIDWorker。
+    """
 
     def __init__(
         self,
@@ -45,30 +39,35 @@ class SourceCellProfilerRunner:
         log_file: str = "",
     ):
         self.powershell_exe = powershell_exe or "powershell.exe"
-        self.source_project_dir = Path(str(source_project_dir or "")).resolve()
-        self.venv_activate = Path(str(venv_activate or "")).resolve()
-        self.module_name = str(module_name or "MvImageID").strip() or "MvImageID"
-        self.plugins_directory = Path(str(plugins_directory)).resolve() if str(plugins_directory or "").strip() else None
-        self.log_file = Path(str(log_file)).resolve() if str(log_file or "").strip() else None
+        self.source_project_dir = Path(source_project_dir).resolve()
+        self.venv_activate = Path(venv_activate).resolve()
+        self.module_name = module_name or "MvImageID"
+        self.plugins_directory = Path(plugins_directory).resolve() if plugins_directory else None
+        self.log_file = Path(log_file).resolve() if log_file else None
+        self._last_pipeline_file = None
+        self._last_input_dir = None
+        self._last_output_dir = None
 
     def create_ps1_file(self, pipeline_file: str, input_dir: str, output_dir: str) -> Path:
         """
-        兼容旧接口。
+        保留旧接口。
 
-        当前不再生成运行脚本，只在输出目录写入说明文件。
+        新执行方式不再需要 ps1，这里只写一个说明文件，便于旧调试入口不报错。
         """
-        output_path = Path(str(output_dir)).resolve()
+        self._last_pipeline_file = str(Path(pipeline_file).resolve())
+        self._last_input_dir = str(Path(input_dir).resolve())
+        self._last_output_dir = str(Path(output_dir).resolve())
+        output_path = Path(output_dir).resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         marker = output_path / "run_mvimageid_legacy_note.txt"
         marker.write_text(
-            "当前版本已统一使用 core.mvimageid_runner.MvImageIDRunner 执行分析；"
-            "此文件仅说明旧接口被兼容调用，未生成运行脚本。\n",
+            "当前版本已改为直接调用 MvImageID 虚拟环境 python，未生成 PowerShell 脚本。\n",
             encoding="utf-8",
         )
         return marker
 
     def build_command(self, ps1_path: Path) -> List[str]:
-        """兼容旧接口，仅返回说明文件路径。"""
+        """保留旧接口，仅返回说明文件路径。"""
         return [str(ps1_path)]
 
     def run(self, pipeline_file: str, input_dir: str, output_dir: str, log_callback=None):
@@ -77,8 +76,10 @@ class SourceCellProfilerRunner:
             venv_activate=str(self.venv_activate),
             module_name=self.module_name,
             plugins_directory=str(self.plugins_directory or ""),
-            log_file="",
+            log_file=str(self.log_file or ""),
         )
+        # 统一标准：日志固定写入当前蛋白输出目录 run_mvimageid.log，
+        # 不再用旧配置 log_file 覆盖，避免日志被写到 F:\MvImageID\run.log。
         return runner.run(
             pipeline_file=pipeline_file,
             input_dir=input_dir,
@@ -89,7 +90,12 @@ class SourceCellProfilerRunner:
 
 
 class CellProfilerWorker(QThread):
-    """历史线程类名兼容包装；实际执行统一委托给 MvImageIDRunner。"""
+    """
+    兼容旧类名的后台线程。
+
+    analysis_window.py 当前仍引用 CellProfilerWorker；第一步只替换执行层，
+    不动界面文件，避免大范围改动。
+    """
 
     log_signal = Signal(str)
     finished_signal = Signal(bool, float, str)
@@ -105,13 +111,12 @@ class CellProfilerWorker(QThread):
         output_dir: str,
         plugins_directory: str = "",
         log_file: str = "",
-        parent=None,
     ):
-        super().__init__(parent)
+        super().__init__()
         self.powershell_exe = powershell_exe
         self.source_project_dir = source_project_dir
         self.venv_activate = venv_activate
-        self.module_name = module_name or "MvImageID"
+        self.module_name = module_name
         self.pipeline_file = pipeline_file
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -128,9 +133,11 @@ class CellProfilerWorker(QThread):
             venv_activate=self.venv_activate,
             module_name=self.module_name,
             plugins_directory=self.plugins_directory,
-            log_file="",
+            log_file=self.log_file,
         )
         self.log_signal.emit("开始运行 MvImageID 分析...")
+        # 统一标准：日志固定写入当前蛋白输出目录 run_mvimageid.log，
+        # 不再用旧配置 log_file 覆盖，避免日志被写到 F:\MvImageID\run.log。
         result = runner.run(
             pipeline_file=self.pipeline_file,
             input_dir=self.input_dir,
