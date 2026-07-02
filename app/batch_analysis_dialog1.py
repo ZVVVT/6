@@ -393,8 +393,7 @@ class BatchAnalysisDialog(QDialog):
         super().__init__(parent)
         self.database = database
         self.case_data = case_data
-        project_root = Path(__file__).resolve().parents[1]
-        self.config = ConfigManager(str(project_root / "config.ini"))
+        self.config = ConfigManager()
         self.config.ensure_default_config()
 
         self.alias_store = FolderAliasStore()
@@ -444,27 +443,26 @@ class BatchAnalysisDialog(QDialog):
         hint = QLabel(
             "说明：软件会根据内部编号、显示名称和“匹配规则”自动识别子文件夹；"
             "如果自动匹配不对，可以直接在“匹配文件夹”列手动选择。"
-            "预检查会同时检查 R/G 图片、Pipeline、MvImageID 环境和插件目录。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666666;")
         layout.addWidget(hint)
 
         table_group = QGroupBox("预检查结果")
-        table_group.setMinimumHeight(300)
-        table_group.setMaximumHeight(360)
+        table_group.setMinimumHeight(280)
+        table_group.setMaximumHeight(330)
         table_layout = QVBoxLayout(table_group)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
-        self.table.setHorizontalHeaderLabels(["蛋白", "匹配文件夹", "G", "R", "DIC", "Merge", "Pipeline", "环境", "状态"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["蛋白", "匹配文件夹", "G", "R", "DIC", "Merge", "状态"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(30)
-        self.table.setMinimumHeight(245)
-        self.table.setMaximumHeight(300)
+        self.table.setMinimumHeight(225)
+        self.table.setMaximumHeight(270)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         header = self.table.horizontalHeader()
@@ -475,8 +473,6 @@ class BatchAnalysisDialog(QDialog):
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         table_layout.addWidget(self.table)
         layout.addWidget(table_group, 2)
 
@@ -611,73 +607,6 @@ class BatchAnalysisDialog(QDialog):
         self.parent_folder = Path(folder)
         self.scan_parent_folder()
 
-    # ---------- Pipeline / 环境预检查 ----------
-
-    def get_project_root(self) -> Path:
-        return Path(__file__).resolve().parents[1]
-
-    def resolve_project_path(self, path_value) -> Path:
-        text = str(path_value or "").strip()
-        if not text:
-            return Path("")
-        path = Path(text)
-        if path.is_absolute():
-            return path
-        return self.get_project_root() / path
-
-    def check_pipeline_for_protein(self, protein_key: str) -> dict:
-        pipeline_path = self.resolve_project_path(self.config.get_pipeline_by_protein(protein_key))
-        if not str(pipeline_path).strip():
-            return {"ok": False, "text": "未配置", "path": "", "detail": "未配置 Pipeline。"}
-        if pipeline_path.exists() and pipeline_path.is_file():
-            return {"ok": True, "text": "正常", "path": str(pipeline_path), "detail": str(pipeline_path)}
-        return {"ok": False, "text": "缺失", "path": str(pipeline_path), "detail": f"Pipeline 文件不存在：{pipeline_path}"}
-
-    def check_mvimageid_environment(self) -> dict:
-        source_dir = self.config.get_source_project_dir()
-        venv_activate = self.config.get_venv_activate()
-        plugins_dir = self.config.get_plugins_directory()
-
-        details: List[str] = []
-        ok = True
-
-        source_path = Path(str(source_dir or "")).expanduser()
-        if not source_path.exists():
-            ok = False
-            details.append(f"源码目录不存在：{source_path}")
-
-        activate_path = Path(str(venv_activate or "")).expanduser()
-        if not activate_path.exists():
-            ok = False
-            details.append(f"虚拟环境 Activate.ps1 不存在：{activate_path}")
-
-        try:
-            runner = MvImageIDRunner(
-                source_project_dir=str(source_dir),
-                venv_activate=str(venv_activate),
-                module_name=self.config.get_module_name(),
-                plugins_directory=str(plugins_dir),
-                log_file="",
-            )
-            python_exe = runner.get_python_executable()
-            if not python_exe.exists():
-                ok = False
-                details.append(f"虚拟环境 Python 不存在：{python_exe}")
-        except Exception as e:
-            ok = False
-            details.append(str(e))
-
-        plugins_text = str(plugins_dir or "").strip()
-        if plugins_text:
-            plugins_path = Path(plugins_text).expanduser()
-            if not plugins_path.exists():
-                ok = False
-                details.append(f"插件目录不存在：{plugins_path}")
-
-        if ok:
-            return {"ok": True, "text": "正常", "detail": "MvImageID 环境正常。"}
-        return {"ok": False, "text": "异常", "detail": "；".join(details) if details else "MvImageID 环境异常。"}
-
     def scan_parent_folder(self):
         folder_text = self.folder_edit.text().strip()
         if folder_text:
@@ -689,8 +618,6 @@ class BatchAnalysisDialog(QDialog):
                 [child for child in self.parent_folder.iterdir() if child.is_dir()],
                 key=lambda p: p.name.lower(),
             )
-
-        env_check = self.check_mvimageid_environment()
 
         alias_map = self.build_folder_alias_map()
         candidates_by_key: Dict[str, List[Path]] = {}
@@ -734,40 +661,26 @@ class BatchAnalysisDialog(QDialog):
                     status_note = "匹配名冲突"
 
             channels = self.scan_channels(folder) if folder else {"G": 0, "R": 0, "DIC": 0, "Merge": 0}
-            pipeline_check = self.check_pipeline_for_protein(key)
-            status = self.get_status_by_folder_and_channels(folder, channels, pipeline_check, env_check, status_note)
+            status = self.get_status_by_folder_and_channels(folder, channels, status_note)
 
             self.scan_rows.append({
                 "protein_key": key,
                 "protein_name": name,
                 "folder": str(folder) if folder else "",
                 "channels": channels,
-                "pipeline": pipeline_check,
-                "environment": env_check,
                 "status": status,
             })
 
         self.refresh_table()
 
-    def get_status_by_folder_and_channels(
-        self,
-        folder: Optional[Path],
-        channels: Dict[str, int],
-        pipeline_check: Optional[dict] = None,
-        env_check: Optional[dict] = None,
-        status_note: str = "",
-    ) -> str:
+    def get_status_by_folder_and_channels(self, folder: Optional[Path], channels: Dict[str, int], status_note: str = "") -> str:
         if status_note:
             return status_note
         if folder is None:
             return "未匹配"
-        if channels.get("G", 0) <= 0 or channels.get("R", 0) <= 0:
-            return "缺少G或R"
-        if pipeline_check is not None and not pipeline_check.get("ok", False):
-            return "Pipeline缺失"
-        if env_check is not None and not env_check.get("ok", False):
-            return "环境异常"
-        return "可分析"
+        if channels.get("G", 0) > 0 and channels.get("R", 0) > 0:
+            return "可分析"
+        return "缺少G或R"
 
     def scan_channels(self, folder: Optional[Path]) -> Dict[str, int]:
         counts = {"G": 0, "R": 0, "DIC": 0, "Merge": 0}
@@ -815,27 +728,17 @@ class BatchAnalysisDialog(QDialog):
                 combo.currentIndexChanged.connect(lambda _idx, r=row_index: self.on_folder_combo_changed(r))
                 self.table.setCellWidget(row_index, 1, combo)
 
-                pipeline_check = row.get("pipeline", {}) or {}
-                env_check = row.get("environment", {}) or {}
                 values = [
                     self.flag_text(channels.get("G", 0)),
                     self.flag_text(channels.get("R", 0)),
                     self.optional_text(channels.get("DIC", 0)),
                     self.optional_text(channels.get("Merge", 0)),
-                    str(pipeline_check.get("text", "")),
-                    str(env_check.get("text", "")),
                     row.get("status", ""),
                 ]
                 for offset, value in enumerate(values, start=2):
                     item = QTableWidgetItem(str(value))
                     item.setTextAlignment(Qt.AlignCenter)
                     if offset == 6:
-                        item.setToolTip(str(pipeline_check.get("detail", pipeline_check.get("path", ""))))
-                        self.apply_check_color(item, bool(pipeline_check.get("ok", False)))
-                    elif offset == 7:
-                        item.setToolTip(str(env_check.get("detail", "")))
-                        self.apply_check_color(item, bool(env_check.get("ok", False)))
-                    elif offset == 8:
                         self.apply_status_color(item, str(value))
                     self.table.setItem(row_index, offset, item)
         finally:
@@ -854,19 +757,10 @@ class BatchAnalysisDialog(QDialog):
             folder_path = self.parent_folder / str(folder_name)
 
         channels = self.scan_channels(folder_path)
-        protein_key = self.scan_rows[row_index].get("protein_key", "")
-        pipeline_check = self.check_pipeline_for_protein(protein_key)
-        env_check = self.check_mvimageid_environment()
         self.scan_rows[row_index]["folder"] = str(folder_path) if folder_path else ""
         self.scan_rows[row_index]["channels"] = channels
-        self.scan_rows[row_index]["pipeline"] = pipeline_check
-        self.scan_rows[row_index]["environment"] = env_check
-        self.scan_rows[row_index]["status"] = self.get_status_by_folder_and_channels(folder_path, channels, pipeline_check, env_check)
+        self.scan_rows[row_index]["status"] = self.get_status_by_folder_and_channels(folder_path, channels)
         self.refresh_table()
-
-    @staticmethod
-    def apply_check_color(item: QTableWidgetItem, ok: bool):
-        item.setForeground(Qt.darkGreen if ok else Qt.red)
 
     @staticmethod
     def apply_status_color(item: QTableWidgetItem, status: str):
@@ -874,7 +768,7 @@ class BatchAnalysisDialog(QDialog):
             item.setForeground(Qt.darkGreen)
         elif status in ["分析中"]:
             item.setForeground(Qt.blue)
-        elif status in ["失败", "缺少G或R", "Pipeline缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
+        elif status in ["失败", "缺少G或R", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
             item.setForeground(Qt.red)
         else:
             item.setForeground(Qt.gray)
@@ -937,7 +831,7 @@ class BatchAnalysisDialog(QDialog):
 
         tasks = self.get_ready_tasks()
         if not tasks:
-            QMessageBox.information(self, "提示", "没有可分析的蛋白文件夹。请检查文件夹匹配、R/G 图片、Pipeline 文件和 MvImageID 环境。")
+            QMessageBox.information(self, "提示", "没有可分析的蛋白文件夹。请先选择正确的上级目录，或手动选择匹配文件夹。")
             return
 
         existing_names = self.get_existing_protein_names(tasks)
