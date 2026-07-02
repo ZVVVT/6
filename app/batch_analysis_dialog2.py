@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 from core.config_manager import ConfigManager
 from core.image_importer import ImageImporter
 from core.mvimageid_runner import MvImageIDRunner
-from core.protein_analysis_service import ProteinAnalysisService
 from core.result_parser import ResultParser
 
 
@@ -356,29 +355,135 @@ class BatchProteinWorker(QThread):
         self.finished_signal.emit(results, errors)
 
     def run_one_protein(self, task: dict) -> dict:
-        """
-        批量分析中的单个蛋白执行入口。
+        case_no = str(self.case_data.get("case_no", "") or "").strip()
+        if not case_no:
+            raise RuntimeError("当前病例编号为空。")
 
-        第三步开始，不再在批量窗口里维护另一套导入、清理、运行、解析逻辑，
-        而是统一交给 core.protein_analysis_service.ProteinAnalysisService。
-
-        批量分析 = 按顺序多次调用同一个单蛋白分析服务。
-        """
         protein_key = task["protein_key"]
         protein_name = task["protein_name"]
-        source_folder = task["folder"]
+        protein_part = self.config.get_protein_part(protein_key)
+        source_folder = Path(task["folder"])
 
-        service = ProteinAnalysisService(self.config)
+        workspace_root = self.config.get_workspace_root()
+        raw_folder = workspace_root / case_no / "raw_images" / protein_key
+        cp_input_dir = workspace_root / case_no / "cp_input" / protein_key
+        cp_output_dir = workspace_root / case_no / "cp_output" / protein_key
 
-        # “取消后续分析”只在当前蛋白结束后生效，不强行中断正在运行的 MvImageID。
-        return service.run_one_protein(
-            case_data=self.case_data,
+        self.log_signal.emit(f"{protein_name} 源图片目录：{source_folder}")
+        self.log_signal.emit(f"{protein_name} 原始导入目录：{raw_folder}")
+        self.log_signal.emit(f"{protein_name} 分析输入目录：{cp_input_dir}")
+        self.log_signal.emit(f"{protein_name} 分析输出目录：{cp_output_dir}")
+
+        # 1. 清空当前蛋白 raw_images，重新导入。
+        if raw_folder.exists():
+            shutil.rmtree(raw_folder)
+        raw_folder.mkdir(parents=True, exist_ok=True)
+
+        importer = ImageImporter(self.config.get_image_rule())
+        imported_images = importer.copy_to_workspace(
+            source_folder=str(source_folder),
+            target_folder=str(raw_folder),
+            protein_name=protein_key,
+        )
+        complete_items = [item for item in imported_images if item.get("status") == "完整"]
+        if not complete_items:
+            raise RuntimeError("没有完整的 R/G 视野，无法运行分析。")
+        self.log_signal.emit(f"{protein_name} 导入完成：共 {len(imported_images)} 个视野，完整视野 {len(complete_items)} 个。")
+
+        # 2. 清空并准备 cp_input。当前 Pipeline 只需要 R/G，DIC/Merge 作为原始记录保存即可。
+        if cp_input_dir.exists():
+            shutil.rmtree(cp_input_dir)
+        cp_input_dir.mkdir(parents=True, exist_ok=True)
+
+        copied_count = 0
+        for item in complete_items:
+            for channel in ["R", "G"]:
+                source_path = item.get(channel, "")
+                if not source_path:
+                    continue
+                source = Path(source_path)
+                if not source.exists():
+                    raise FileNotFoundError(f"输入图像不存在：{source}")
+                target = cp_input_dir / source.name
+                shutil.copy2(source, target)
+                copied_count += 1
+
+        if copied_count <= 0:
+            raise RuntimeError("没有复制任何 R/G 图像到分析输入目录。")
+        self.log_signal.emit(f"{protein_name} 已准备分析输入图像：{copied_count} 张。")
+
+        # 3. 清空 cp_output，避免覆盖分析时旧图片混入新结果。
+        if cp_output_dir.exists():
+            shutil.rmtree(cp_output_dir)
+        cp_output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 4. 运行 MvImageID。
+        self.run_mvimageid(
             protein_key=protein_key,
             protein_name=protein_name,
-            source_folder=source_folder,
-            overwrite=True,
+            cp_input_dir=cp_input_dir.resolve(),
+            cp_output_dir=cp_output_dir.resolve(),
+        )
+
+        # 5. 解析结果，返回给主线程入库。
+        parser = ResultParser(str(cp_output_dir))
+        summary_result = parser.parse_image_summary()
+        if not summary_result.get("success"):
+            raise RuntimeError(summary_result.get("message", "解析分析结果失败。"))
+
+        total = summary_result.get("total", {})
+        rows = summary_result.get("rows", [])
+        image_csv = summary_result.get("image_csv", "")
+
+        return {
+            "case_id": self.case_data.get("id"),
+            "protein_key": protein_key,
+            "protein_name": protein_name,
+            "protein_part": protein_part,
+            "image_folder": str(raw_folder),
+            "output_folder": str(cp_output_dir),
+            "total": total,
+            "rows": rows,
+            "image_csv": image_csv,
+        }
+
+    def run_mvimageid(self, protein_key: str, protein_name: str, cp_input_dir: Path, cp_output_dir: Path):
+        """
+        统一调用 core.mvimageid_runner.MvImageIDRunner。
+
+        目的：
+        - 批量分析不再自己拼接 subprocess 命令；
+        - 单蛋白分析和批量分析使用同一个 MvImageID 执行器；
+        - 统一生成 run_mvimageid.log 和 run_mvimageid_command.txt；
+        - 统一错误信息和日志格式。
+        """
+        pipeline_file = self.config.get_pipeline_by_protein(protein_key).resolve()
+
+        runner = MvImageIDRunner(
+            source_project_dir=str(self.config.get_source_project_dir()),
+            venv_activate=str(self.config.get_venv_activate()),
+            module_name=self.config.get_module_name(),
+            plugins_directory=str(self.config.get_plugins_directory()),
+            log_file="",
+        )
+
+        self.log_signal.emit(f"{protein_name} Pipeline：{pipeline_file}")
+        self.log_signal.emit(f"{protein_name} 开始运行 MvImageID ...")
+
+        result = runner.run(
+            pipeline_file=str(pipeline_file),
+            input_dir=str(cp_input_dir),
+            output_dir=str(cp_output_dir),
             log_callback=self.log_signal.emit,
-            cancel_callback=None,
+            cancel_callback=lambda: self.cancel_after_current,
+            log_file="",
+        )
+
+        if not result.success:
+            raise RuntimeError(result.error_message or "MvImageID 运行失败。")
+
+        self.log_signal.emit(
+            f"{protein_name} MvImageID 运行完成，用时：{result.elapsed_seconds:.2f} 秒。"
         )
 
 
