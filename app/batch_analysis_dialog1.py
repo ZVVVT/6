@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import configparser
+import os
 import shutil
+import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -27,7 +30,6 @@ from PySide6.QtWidgets import (
 
 from core.config_manager import ConfigManager
 from core.image_importer import ImageImporter
-from core.mvimageid_runner import MvImageIDRunner
 from core.result_parser import ResultParser
 
 
@@ -417,7 +419,7 @@ class BatchProteinWorker(QThread):
             shutil.rmtree(cp_output_dir)
         cp_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 4. 运行 MvImageID。
+        # 4. 运行 MvImageID / CellProfiler。
         self.run_mvimageid(
             protein_key=protein_key,
             protein_name=protein_name,
@@ -448,43 +450,104 @@ class BatchProteinWorker(QThread):
         }
 
     def run_mvimageid(self, protein_key: str, protein_name: str, cp_input_dir: Path, cp_output_dir: Path):
-        """
-        统一调用 core.mvimageid_runner.MvImageIDRunner。
-
-        目的：
-        - 批量分析不再自己拼接 subprocess 命令；
-        - 单蛋白分析和批量分析使用同一个 MvImageID 执行器；
-        - 统一生成 run_mvimageid.log 和 run_mvimageid_command.txt；
-        - 统一错误信息和日志格式。
-        """
+        """直接调用 MvImageID 虚拟环境 python.exe，避免 PowerShell NativeCommandError 遮挡真实错误。"""
+        source_project_dir = self.config.get_source_project_dir().resolve()
+        venv_activate = self.config.get_venv_activate().resolve()
+        module_name = self.config.get_module_name()
         pipeline_file = self.config.get_pipeline_by_protein(protein_key).resolve()
+        plugins_directory = self.config.get_plugins_directory().resolve()
 
-        runner = MvImageIDRunner(
-            source_project_dir=str(self.config.get_source_project_dir()),
-            venv_activate=str(self.config.get_venv_activate()),
-            module_name=self.config.get_module_name(),
-            plugins_directory=str(self.config.get_plugins_directory()),
-            log_file="",
-        )
+        if not source_project_dir.exists():
+            raise FileNotFoundError(f"MvImageID 源码目录不存在：{source_project_dir}")
+        if not venv_activate.exists():
+            raise FileNotFoundError(f"虚拟环境激活脚本不存在：{venv_activate}")
+        if not pipeline_file.exists():
+            raise FileNotFoundError(f"Pipeline 文件不存在：{pipeline_file}")
+        if not plugins_directory.exists():
+            raise FileNotFoundError(f"插件目录不存在：{plugins_directory}")
+
+        scripts_dir = venv_activate.parent
+        python_exe = scripts_dir / "python.exe"
+        if not python_exe.exists():
+            python_exe = scripts_dir / "python"
+        if not python_exe.exists():
+            raise FileNotFoundError(f"虚拟环境 Python 不存在：{scripts_dir / 'python.exe'}")
+
+        local_log_file = cp_output_dir / "run_mvimageid_batch.log"
+        command_file = cp_output_dir / "run_mvimageid_batch_command.txt"
+        command = [
+            str(python_exe),
+            "-u",
+            "-m",
+            module_name,
+            "-c",
+            "-r",
+            "-p",
+            str(pipeline_file),
+            "-i",
+            str(cp_input_dir),
+            "-o",
+            str(cp_output_dir),
+            "--plugins-directory",
+            str(plugins_directory),
+        ]
+        command_file.write_text("\n".join(command), encoding="utf-8")
 
         self.log_signal.emit(f"{protein_name} Pipeline：{pipeline_file}")
-        self.log_signal.emit(f"{protein_name} 开始运行 MvImageID ...")
+        self.log_signal.emit(f"{protein_name} Python：{python_exe}")
+        self.log_signal.emit(f"{protein_name} 开始运行 MvImageID / CellProfiler ...")
+        self.log_signal.emit(f"{protein_name} 运行日志：{local_log_file}")
 
-        result = runner.run(
-            pipeline_file=str(pipeline_file),
-            input_dir=str(cp_input_dir),
-            output_dir=str(cp_output_dir),
-            log_callback=self.log_signal.emit,
-            cancel_callback=lambda: self.cancel_after_current,
-            log_file="",
-        )
+        start_time = time.time()
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        env["PATH"] = str(scripts_dir) + os.pathsep + env.get("PATH", "")
 
-        if not result.success:
-            raise RuntimeError(result.error_message or "MvImageID 运行失败。")
+        last_lines: List[str] = []
+        with local_log_file.open("w", encoding="utf-8", errors="replace") as log_fp:
+            log_fp.write("COMMAND:\n")
+            log_fp.write(" ".join(command) + "\n\n")
+            log_fp.write("CWD:\n")
+            log_fp.write(str(source_project_dir) + "\n\n")
+            log_fp.write("OUTPUT:\n")
+            log_fp.flush()
 
-        self.log_signal.emit(
-            f"{protein_name} MvImageID 运行完成，用时：{result.elapsed_seconds:.2f} 秒。"
-        )
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(source_project_dir),
+                env=env,
+            )
+
+            assert process.stdout is not None
+            for line in process.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                log_fp.write(line + "\n")
+                log_fp.flush()
+                last_lines.append(line)
+                if len(last_lines) > 80:
+                    last_lines.pop(0)
+                self.log_signal.emit(line)
+
+            return_code = process.wait()
+
+        elapsed = time.time() - start_time
+        if return_code != 0:
+            tail = "\n".join(last_lines[-50:])
+            raise RuntimeError(
+                f"MvImageID / CellProfiler 运行失败，退出码：{return_code}，用时：{elapsed:.2f} 秒。\n"
+                f"完整日志：{local_log_file}\n"
+                f"最后日志：\n{tail}"
+            )
+
+        self.log_signal.emit(f"{protein_name} MvImageID / CellProfiler 运行完成，用时：{elapsed:.2f} 秒。")
 
 
 # =========================
