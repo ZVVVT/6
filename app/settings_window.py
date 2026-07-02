@@ -170,7 +170,7 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group = QGroupBox("MvImageID / CellProfiler 源码环境")
+        group = QGroupBox("MvImageID 源码环境")
         form = QFormLayout(group)
 
         self.powershell_edit = QLineEdit()
@@ -321,14 +321,14 @@ class SettingsWindow(QWidget):
         self.app_font_size_spin.setValue(self.config.get_app_font_size())
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
-        self.powershell_edit.setText(self.config.get("CellProfiler", "powershell_exe", "powershell.exe"))
-        self.source_project_dir_edit.setText(self.config.get("CellProfiler", "source_project_dir", ""))
-        self.venv_activate_edit.setText(self.config.get("CellProfiler", "venv_activate", ""))
-        self.module_name_edit.setText(self.config.get("CellProfiler", "module_name", "MvImageID"))
-        self.head_pipeline_edit.setText(self.config.get("CellProfiler", "head_pipeline", ""))
-        self.tail_pipeline_edit.setText(self.config.get("CellProfiler", "tail_pipeline", ""))
-        self.plugins_directory_edit.setText(self.config.get("CellProfiler", "plugins_directory", ""))
-        self.log_file_edit.setText(self.config.get("CellProfiler", "log_file", ""))
+        self.powershell_edit.setText(self.config.get_mvimageid("powershell_exe", "powershell.exe"))
+        self.source_project_dir_edit.setText(self.config.get_mvimageid("source_project_dir", ""))
+        self.venv_activate_edit.setText(self.config.get_mvimageid("venv_activate", ""))
+        self.module_name_edit.setText(self.config.get_mvimageid("module_name", "MvImageID"))
+        self.head_pipeline_edit.setText(self.config.get_mvimageid("head_pipeline", ""))
+        self.tail_pipeline_edit.setText(self.config.get_mvimageid("tail_pipeline", ""))
+        self.plugins_directory_edit.setText(self.config.get_mvimageid("plugins_directory", ""))
+        self.log_file_edit.setText(self.config.get_mvimageid("log_file", ""))
 
         self.workspace_root_edit.setText(self.config.get("Workspace", "root_dir", "workspace\\cases"))
         self.database_edit.setText(self.config.get("Workspace", "database", "data\\analysis.db"))
@@ -361,15 +361,15 @@ class SettingsWindow(QWidget):
         # 同步旧字段，避免其他旧代码仍读取 [Software] name。
         self.config.set("Software", "name", app_name)
 
-        self.config.set("CellProfiler", "run_mode", "source")
-        self.config.set("CellProfiler", "powershell_exe", self.powershell_edit.text().strip())
-        self.config.set("CellProfiler", "source_project_dir", self.source_project_dir_edit.text().strip())
-        self.config.set("CellProfiler", "venv_activate", self.venv_activate_edit.text().strip())
-        self.config.set("CellProfiler", "module_name", self.module_name_edit.text().strip())
-        self.config.set("CellProfiler", "head_pipeline", self.head_pipeline_edit.text().strip())
-        self.config.set("CellProfiler", "tail_pipeline", self.tail_pipeline_edit.text().strip())
-        self.config.set("CellProfiler", "plugins_directory", self.plugins_directory_edit.text().strip())
-        self.config.set("CellProfiler", "log_file", self.log_file_edit.text().strip())
+        self.config.set("MvImageID", "run_mode", "source")
+        self.config.set("MvImageID", "powershell_exe", self.powershell_edit.text().strip())
+        self.config.set("MvImageID", "source_project_dir", self.source_project_dir_edit.text().strip())
+        self.config.set("MvImageID", "venv_activate", self.venv_activate_edit.text().strip())
+        self.config.set("MvImageID", "module_name", self.module_name_edit.text().strip())
+        self.config.set("MvImageID", "head_pipeline", self.head_pipeline_edit.text().strip())
+        self.config.set("MvImageID", "tail_pipeline", self.tail_pipeline_edit.text().strip())
+        self.config.set("MvImageID", "plugins_directory", self.plugins_directory_edit.text().strip())
+        self.config.set("MvImageID", "log_file", self.log_file_edit.text().strip())
 
         self.config.set("Workspace", "root_dir", self.workspace_root_edit.text().strip())
         self.config.set("Workspace", "database", self.database_edit.text().strip())
@@ -647,7 +647,7 @@ class SettingsWindow(QWidget):
             self,
             "选择该蛋白的 Pipeline",
             current_path,
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
+            "MvImageID Pipeline (*.cppipe);;所有文件 (*.*)",
         )
         if path:
             self.protein_table.setItem(row, 3, QTableWidgetItem(path))
@@ -837,7 +837,7 @@ class SettingsWindow(QWidget):
             self,
             "选择头部 Pipeline",
             "",
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
+            "MvImageID Pipeline (*.cppipe);;所有文件 (*.*)",
         )
         if path:
             self.head_pipeline_edit.setText(path)
@@ -847,7 +847,7 @@ class SettingsWindow(QWidget):
             self,
             "选择尾部 Pipeline",
             "",
-            "CellProfiler Pipeline (*.cppipe);;所有文件 (*.*)",
+            "MvImageID Pipeline (*.cppipe);;所有文件 (*.*)",
         )
         if path:
             self.tail_pipeline_edit.setText(path)

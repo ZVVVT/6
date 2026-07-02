@@ -86,6 +86,21 @@ class ConfigManager:
         return max(8, min(18, size))
 
     # ------------------------------------------------------------------
+    # MvImageID 配置读取
+    # ------------------------------------------------------------------
+    def get_mvimageid(self, key: str, default: str = "") -> str:
+        """
+        读取 MvImageID 运行环境配置。
+
+        新版本统一使用 [MvImageID] 配置节；为了兼容旧版 config.ini，
+        如果 [MvImageID] 中没有对应值，会自动回退读取旧的 [CellProfiler]。
+        """
+        value = self.get("MvImageID", key, "").strip()
+        if value:
+            return value
+        return self.get("CellProfiler", key, default)
+
+    # ------------------------------------------------------------------
     # 工作目录 / 图片规则 / 蛋白配置
     # ------------------------------------------------------------------
     def get_workspace_root(self) -> Path:
@@ -171,9 +186,9 @@ class ConfigManager:
 
         protein_part = self.get_protein_part(protein_key)
         if protein_part == "tail":
-            pipeline = self.get("CellProfiler", "tail_pipeline", "")
+            pipeline = self.get_mvimageid("tail_pipeline", "")
         else:
-            pipeline = self.get("CellProfiler", "head_pipeline", "")
+            pipeline = self.get_mvimageid("head_pipeline", "")
         return Path(pipeline)
 
     def get_protein_intensity_min(self, protein_name_or_key: str) -> float:
@@ -202,27 +217,27 @@ class ConfigManager:
         return items
 
     # ------------------------------------------------------------------
-    # MvImageID / CellProfiler 配置
+    # MvImageID 配置
     # ------------------------------------------------------------------
     def get_powershell_exe(self) -> str:
-        return self.get("CellProfiler", "powershell_exe", "powershell.exe")
+        return self.get_mvimageid("powershell_exe", "powershell.exe")
 
     def get_source_project_dir(self) -> Path:
-        return Path(self.get("CellProfiler", "source_project_dir", r"F:\MvImageID"))
+        return Path(self.get_mvimageid("source_project_dir", r"F:\MvImageID"))
 
     def get_venv_activate(self) -> Path:
         return Path(
-            self.get("CellProfiler", "venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1")
+            self.get_mvimageid("venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1")
         )
 
     def get_module_name(self) -> str:
-        return self.get("CellProfiler", "module_name", "MvImageID")
+        return self.get_mvimageid("module_name", "MvImageID")
 
     def get_plugins_directory(self) -> Path:
-        return Path(self.get("CellProfiler", "plugins_directory", ""))
+        return Path(self.get_mvimageid("plugins_directory", ""))
 
     def get_log_file(self) -> Path:
-        return Path(self.get("CellProfiler", "log_file", r"F:\MvImageID\run.log"))
+        return Path(self.get_mvimageid("log_file", r"F:\MvImageID\run.log"))
 
     def get_logo_path(self) -> Path:
         """报告 LOGO 路径。为兼容旧代码保留，不用于软件窗口图标。"""
@@ -245,6 +260,19 @@ class ConfigManager:
                 "font_path": "",
                 "font_size": "10",
             },
+            "MvImageID": {
+                "run_mode": "source",
+                "powershell_exe": "powershell.exe",
+                "source_project_dir": r"F:\MvImageID",
+                "venv_activate": r"F:\MvImageID\.venv\Scripts\Activate.ps1",
+                "module_name": "MvImageID",
+                "head_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
+                "tail_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
+                "plugins_directory": r"F:\MvImageID\C-plugins\active_plugins",
+                "log_file": r"F:\MvImageID\run.log",
+            },
+            # 历史兼容：旧版本使用 [CellProfiler] 保存运行环境。
+            # 新版本会优先读取 [MvImageID]；如果旧配置仍存在，也不会影响运行。
             "CellProfiler": {
                 "run_mode": "source",
                 "powershell_exe": "powershell.exe",
