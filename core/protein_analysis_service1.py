@@ -45,7 +45,6 @@ class ProteinAnalysisService:
         source_folder: str,
         protein_name: str = "",
         overwrite: bool = True,
-        reuse_existing_raw: bool = False,
         log_callback: LogCallback = None,
         cancel_callback: CancelCallback = None,
     ) -> dict:
@@ -65,24 +64,18 @@ class ProteinAnalysisService:
 
         protein_name = str(protein_name or "").strip() or self.config.get_protein_display_name(protein_key)
         protein_part = self.config.get_protein_part(protein_key)
-
-        source_folder_path: Optional[Path] = None
-        if not reuse_existing_raw:
-            source_folder_path = Path(str(source_folder or "")).resolve()
-            if not source_folder_path.exists():
-                raise FileNotFoundError(f"源图片文件夹不存在：{source_folder_path}")
-            if not source_folder_path.is_dir():
-                raise NotADirectoryError(f"源图片路径不是文件夹：{source_folder_path}")
+        source_folder_path = Path(str(source_folder or "")).resolve()
+        if not source_folder_path.exists():
+            raise FileNotFoundError(f"源图片文件夹不存在：{source_folder_path}")
+        if not source_folder_path.is_dir():
+            raise NotADirectoryError(f"源图片路径不是文件夹：{source_folder_path}")
 
         workspace_root = Path(self.config.get_workspace_root())
         raw_folder = (workspace_root / case_no / "raw_images" / protein_key).resolve()
         cp_input_dir = (workspace_root / case_no / "cp_input" / protein_key).resolve()
         cp_output_dir = (workspace_root / case_no / "cp_output" / protein_key).resolve()
 
-        if source_folder_path is not None:
-            self._log(log_callback, f"{protein_name} 源图片目录：{source_folder_path}")
-        else:
-            self._log(log_callback, f"{protein_name} 使用已有原始导入目录，不重新复制原始图片。")
+        self._log(log_callback, f"{protein_name} 源图片目录：{source_folder_path}")
         self._log(log_callback, f"{protein_name} 原始导入目录：{raw_folder}")
         self._log(log_callback, f"{protein_name} 分析输入目录：{cp_input_dir}")
         self._log(log_callback, f"{protein_name} 分析输出目录：{cp_output_dir}")
@@ -92,21 +85,13 @@ class ProteinAnalysisService:
             self._assert_folder_not_existing(cp_input_dir, "分析输入目录")
             self._assert_folder_not_existing(cp_output_dir, "分析输出目录")
 
-        if reuse_existing_raw:
-            imported_images = self.load_images_from_raw_folder(
-                raw_folder=raw_folder,
-                protein_key=protein_key,
-                protein_name=protein_name,
-                log_callback=log_callback,
-            )
-        else:
-            imported_images = self.import_images_to_raw_folder(
-                source_folder=source_folder_path,
-                raw_folder=raw_folder,
-                protein_key=protein_key,
-                protein_name=protein_name,
-                log_callback=log_callback,
-            )
+        imported_images = self.import_images_to_raw_folder(
+            source_folder=source_folder_path,
+            raw_folder=raw_folder,
+            protein_key=protein_key,
+            protein_name=protein_name,
+            log_callback=log_callback,
+        )
 
         complete_items = [item for item in imported_images if item.get("status") == "完整"]
         if not complete_items:
@@ -188,82 +173,6 @@ class ProteinAnalysisService:
             f"{protein_name} 导入完成：共 {len(imported_images)} 个视野，完整视野 {complete_count} 个。",
         )
         return imported_images
-
-    def load_images_from_raw_folder(
-        self,
-        raw_folder: Path,
-        protein_key: str,
-        protein_name: str,
-        log_callback: LogCallback = None,
-    ) -> List[dict]:
-        """读取已经导入到 raw_images/proteinX 的图片，不清空、不复制原始图。"""
-        if not raw_folder.exists() or not raw_folder.is_dir():
-            raise FileNotFoundError(f"原始导入目录不存在：{raw_folder}")
-
-        support_exts = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
-        groups: Dict[str, dict] = {}
-
-        for image_path in raw_folder.iterdir():
-            if not image_path.is_file():
-                continue
-            if image_path.suffix.lower() not in support_exts:
-                continue
-
-            channel_info = self.parse_workspace_image_channel(image_path, protein_key)
-            if channel_info is None:
-                continue
-
-            field_no, channel = channel_info
-            if field_no not in groups:
-                groups[field_no] = {
-                    "field_no": field_no,
-                    "R": "",
-                    "G": "",
-                    "DIC": "",
-                    "Merge": "",
-                    "status": "未完整",
-                }
-            groups[field_no][channel] = str(image_path)
-
-        results = list(groups.values())
-        for item in results:
-            required_ok = bool(item.get("R")) and bool(item.get("G"))
-            item["status"] = "完整" if required_ok else "缺少R或G"
-
-        results.sort(key=lambda x: str(x.get("field_no", "")))
-        complete_count = len([item for item in results if item.get("status") == "完整"])
-        self._log(
-            log_callback,
-            f"{protein_name} 已读取原始导入图片：共 {len(results)} 个视野，完整视野 {complete_count} 个。",
-        )
-        return results
-
-    def parse_workspace_image_channel(self, image_path: Path, protein_key: str):
-        stem = image_path.stem
-        suffix_map = {
-            "_R": "R",
-            "_G": "G",
-            "_DIC": "DIC",
-            "_Merge": "Merge",
-        }
-
-        for suffix, channel in suffix_map.items():
-            if not stem.endswith(suffix):
-                continue
-
-            base = stem[:-len(suffix)]
-            prefix = f"{protein_key}_"
-            if base.startswith(prefix):
-                field_no = base[len(prefix):]
-            else:
-                field_no = base
-
-            field_no = field_no.strip("_- ")
-            if not field_no:
-                field_no = base
-            return field_no, channel
-
-        return None
 
     def prepare_input_folder(
         self,

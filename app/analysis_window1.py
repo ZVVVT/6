@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -21,46 +21,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.result_viewer import ResultViewer
+from core.cellprofiler_runner import CellProfilerWorker
 from core.config_manager import ConfigManager
 from core.image_importer import ImageImporter
 from core.result_parser import ResultParser
-from core.protein_analysis_service import ProteinAnalysisService
-
-
-class SingleProteinAnalysisWorker(QThread):
-    """单蛋白分析后台线程。
-
-    第四步开始，蛋白分析页不再自己维护 MvImageID 执行细节，
-    而是调用 core.protein_analysis_service.ProteinAnalysisService。
-    """
-
-    log_signal = Signal(str)
-    finished_signal = Signal(bool, float, object, str)
-
-    def __init__(self, case_data: dict, protein_key: str, protein_name: str, config: ConfigManager, parent=None):
-        super().__init__(parent)
-        self.case_data = case_data
-        self.protein_key = protein_key
-        self.protein_name = protein_name
-        self.config = config
-
-    def run(self):
-        try:
-            service = ProteinAnalysisService(self.config)
-            result = service.run_one_protein(
-                case_data=self.case_data,
-                protein_key=self.protein_key,
-                protein_name=self.protein_name,
-                source_folder="",
-                overwrite=True,
-                reuse_existing_raw=True,
-                log_callback=self.log_signal.emit,
-                cancel_callback=None,
-            )
-            elapsed = float(result.get("runner_elapsed_seconds", 0) or 0)
-            self.finished_signal.emit(True, elapsed, result, "")
-        except Exception as e:
-            self.finished_signal.emit(False, 0.0, {}, str(e))
 
 
 class AnalysisWindow(QWidget):
@@ -1160,10 +1124,6 @@ class AnalysisWindow(QWidget):
                 self.table.setItem(row_index, col_index, table_item)
 
     def run_cellprofiler(self):
-        """兼容旧按钮绑定：实际执行统一 MvImageID 分析流程。"""
-        self.run_analysis()
-
-    def run_analysis(self):
         if not self.current_case:
             QMessageBox.information(self, "提示", "请先选择病例。")
             return
@@ -1183,14 +1143,7 @@ class AnalysisWindow(QWidget):
 
         protein_key = self.get_current_protein_key()
         protein_name = self.get_current_protein_name()
-
-        if not protein_key:
-            QMessageBox.warning(self, "提示", "当前蛋白配置为空，无法运行分析。")
-            return
-
-        if not self.current_raw_image_folder or not Path(self.current_raw_image_folder).exists():
-            QMessageBox.warning(self, "提示", "当前蛋白导入目录不存在，请先重新导入图片。")
-            return
+        case_no = self.get_current_case_no()
 
         if not self.imported_images_match_current_protein(complete_items, protein_key):
             reply = QMessageBox.question(
@@ -1205,7 +1158,7 @@ class AnalysisWindow(QWidget):
 
             if reply != QMessageBox.Yes:
                 return
-
+        
         existing_result = self.get_existing_analysis_result_for_current_protein()
 
         if existing_result:
@@ -1234,19 +1187,107 @@ class AnalysisWindow(QWidget):
             if reply != QMessageBox.Yes:
                 self.append_log(f"用户取消重新分析：{protein_name}")
                 return
+        
 
-        self.append_log(f"准备运行分析：{protein_name}")
-        self.append_log(f"当前蛋白导入目录：{self.current_raw_image_folder}")
+        source_project_dir = self.config.get_source_project_dir().resolve()
+        venv_activate = self.config.get_venv_activate().resolve()
+        module_name = self.config.get_module_name()
+        pipeline_file = self.config.get_pipeline_by_protein(protein_key).resolve()
+        plugins_directory = self.config.get_plugins_directory().resolve()
+        log_file = self.config.get_log_file().resolve()
+        powershell_exe = self.config.get_powershell_exe()
+
+        if not source_project_dir.exists():
+            QMessageBox.critical(
+                self,
+                "错误",
+                f"MvImageID 源码目录不存在：\n{source_project_dir}\n\n请检查 config.ini 中的 source_project_dir。"
+            )
+            return
+
+        if not venv_activate.exists():
+            QMessageBox.critical(
+                self,
+                "错误",
+                f"虚拟环境激活脚本不存在：\n{venv_activate}\n\n请检查 config.ini 中的 venv_activate。"
+            )
+            return
+
+        if not pipeline_file.exists():
+            QMessageBox.critical(
+                self,
+                "错误",
+                f"Pipeline 文件不存在：\n{pipeline_file}\n\n请检查 config.ini 中的 pipeline 路径。"
+            )
+            return
+
+        if not plugins_directory.exists():
+            QMessageBox.critical(
+                self,
+                "错误",
+                f"插件目录不存在：\n{plugins_directory}\n\n请检查 config.ini 中的 plugins_directory。"
+            )
+            return
+
+        workspace_root = self.config.get_workspace_root()
+        cp_input_dir = workspace_root / case_no / "cp_input" / protein_key
+        cp_output_dir = workspace_root / case_no / "cp_output" / protein_key
+
+        cp_input_dir = cp_input_dir.resolve()
+        cp_output_dir = cp_output_dir.resolve()
+
+        try:
+            self.prepare_cp_input(complete_items, cp_input_dir)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"准备输入目录失败：\n{e}")
+            return
+
+        # 覆盖/重新分析时，必须先清空当前蛋白的旧输出目录。
+        # 否则旧图片会和本次新图片混在一起，被界面误识别为多个视野。
+        # 这里只清空当前病例下的当前蛋白目录，不影响其他蛋白结果。
+        try:
+            if cp_output_dir.exists():
+                shutil.rmtree(cp_output_dir)
+                self.append_log(f"已清空当前蛋白旧输出目录：{cp_output_dir}")
+
+            cp_output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "错误",
+                f"清空当前蛋白输出目录失败：\n{cp_output_dir}\n\n错误信息：{e}\n\n"
+                "请确认输出目录中的图片、CSV、PDF 没有被其他程序打开。"
+            )
+            return
+
+        self.current_cp_output_dir = cp_output_dir
+
+        self.append_log(f"准备以源码环境方式运行分析：{protein_name}")
+        self.append_log(f"源码目录：{source_project_dir}")
+        self.append_log(f"虚拟环境：{venv_activate}")
+        self.append_log(f"模块名称：{module_name}")
+        self.append_log(f"Pipeline：{pipeline_file}")
+        self.append_log(f"插件目录：{plugins_directory}")
+        self.append_log(f"输入目录：{cp_input_dir}")
+        self.append_log(f"输出目录：{cp_output_dir}")
+        self.append_log(f"日志文件：{log_file}")
+
         self.set_running_state(True)
 
-        self.cp_worker = SingleProteinAnalysisWorker(
-            case_data=self.current_case,
-            protein_key=protein_key,
-            protein_name=protein_name,
-            config=self.config,
+        self.cp_worker = CellProfilerWorker(
+            powershell_exe=powershell_exe,
+            source_project_dir=str(source_project_dir),
+            venv_activate=str(venv_activate),
+            module_name=module_name,
+            pipeline_file=str(pipeline_file),
+            input_dir=str(cp_input_dir),
+            output_dir=str(cp_output_dir),
+            plugins_directory=str(plugins_directory),
+            log_file=str(log_file),
         )
+
         self.cp_worker.log_signal.connect(self.append_log)
-        self.cp_worker.finished_signal.connect(self.on_analysis_finished)
+        self.cp_worker.finished_signal.connect(self.on_cellprofiler_finished)
         self.cp_worker.start()
 
     def imported_images_match_current_protein(self, image_items, protein_key: str):
@@ -1300,19 +1341,8 @@ class AnalysisWindow(QWidget):
         self.append_log(f"已生成输入目录：{cp_input_dir}")
         self.append_log(f"已复制 R/G 图像数量：{copied_count}")
 
-    def on_analysis_finished(self, success: bool, elapsed: float, result: object, error_message: str):
+    def on_cellprofiler_finished(self, success: bool, elapsed: float, log_text: str):
         self.set_running_state(False)
-        self.cp_worker = None
-
-        result = result or {}
-
-        output_folder = result.get("output_folder", "") if isinstance(result, dict) else ""
-        image_folder = result.get("image_folder", "") if isinstance(result, dict) else ""
-
-        if output_folder:
-            self.current_cp_output_dir = Path(output_folder)
-        if image_folder:
-            self.current_raw_image_folder = Path(image_folder)
 
         if self.current_cp_output_dir:
             self.result_viewer.set_output_dir(str(self.current_cp_output_dir))
@@ -1327,7 +1357,6 @@ class AnalysisWindow(QWidget):
                 self.append_log(f"结果入库失败：{save_message}")
 
             self.refresh_protein_status()
-            self.refresh_current_protein_workspace()
 
             QMessageBox.information(
                 self,
@@ -1337,19 +1366,15 @@ class AnalysisWindow(QWidget):
             )
 
             self.append_log(f"输出目录：{self.current_cp_output_dir}")
+
             self.select_next_unanalyzed_protein()
+
         else:
-            message = str(error_message or "分析失败，请查看日志。")
-            self.append_log(f"分析失败：{message}")
             QMessageBox.critical(
                 self,
                 "分析失败",
-                f"分析失败。\n\n{message}"
+                f"分析失败。\n用时：{elapsed:.2f} 秒\n\n请查看日志。"
             )
-
-    def on_cellprofiler_finished(self, success: bool, elapsed: float, log_text: str):
-        """兼容旧信号名称，正常流程已改用 on_analysis_finished。"""
-        self.on_analysis_finished(success, elapsed, {}, log_text)
 
     # -------------------------
     # 入库
