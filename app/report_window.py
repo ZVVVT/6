@@ -136,35 +136,210 @@ class ReportWindow(QWidget):
         self.refresh_analysis_results()
 
     def refresh_analysis_results(self):
+        """刷新报告管理页分析结果。
+
+        和病例详情页保持一致：
+        1. 固定按系统设置中的蛋白顺序显示所有蛋白；
+        2. 已分析的蛋白显示数据库结果；
+        3. 未分析的蛋白也占位显示“未检测”，避免报告页与病例详情页行数不一致。
+        """
+        self.analysis_table.setRowCount(0)
+
         if not self.current_case:
-            self.analysis_table.setRowCount(0)
             self.info_label.setText("请先在病例管理中双击选择病例。")
             return
 
         case_id = self.current_case.get("id")
-        rows = self.database.get_protein_analysis_by_case(case_id)
+        if not case_id:
+            self.info_label.setText("当前病例缺少数据库 ID。")
+            return
 
-        self.analysis_table.setRowCount(len(rows))
+        try:
+            rows = self.database.get_protein_analysis_by_case(case_id)
+        except Exception as e:
+            self.info_label.setText(f"读取分析结果失败：{e}")
+            return
 
-        for row_index, row in enumerate(rows):
-            values = [
-                row.get("protein_name", ""),
-                row.get("protein_part", ""),
-                row.get("total_fields", 0),
-                row.get("total_sperm_count", 0),
-                row.get("positive_count", 0),
-                self._fmt(row.get("expression_rate", 0)),
-                self._fmt(row.get("mean_intensity", 0)),
-                row.get("status", ""),
-                row.get("created_at", ""),
-            ]
+        display_rows = self.build_report_display_rows(rows)
 
-            for col_index, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                item.setTextAlignment(Qt.AlignCenter)
-                self.analysis_table.setItem(row_index, col_index, item)
+        self.analysis_table.setRowCount(len(display_rows))
 
-        self.info_label.setText(f"当前病例已分析蛋白数量：{len(rows)}")
+        done_count = 0
+
+        for row_index, row in enumerate(display_rows):
+            is_done = bool(row.get("has_result"))
+
+            if is_done:
+                done_count += 1
+                values = [
+                    row.get("protein_name", ""),
+                    row.get("protein_part", ""),
+                    row.get("total_fields", 0),
+                    row.get("total_sperm_count", 0),
+                    row.get("positive_count", 0),
+                    self._fmt(row.get("expression_rate", 0)),
+                    self._fmt(row.get("mean_intensity", 0)),
+                    row.get("status", "") or "完成",
+                    row.get("created_at", ""),
+                ]
+            else:
+                values = [
+                    row.get("protein_name", ""),
+                    row.get("protein_part", ""),
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "未检测",
+                    "-",
+                ]
+
+            for col, value in enumerate(values):
+                self.analysis_table.setItem(row_index, col, QTableWidgetItem(str(value)))
+
+        total_count = len(display_rows)
+        pending_count = max(total_count - done_count, 0)
+        self.info_label.setText(
+            f"当前病例蛋白检测进度：已完成 {done_count} / {total_count}，未检测 {pending_count}"
+        )
+
+    def sort_analysis_rows_by_config(self, rows):
+        """按照系统设置中的蛋白顺序排序报告管理页结果。
+
+        数据库 get_protein_analysis_by_case() 默认按 id DESC 返回，
+        这会导致报告管理页顺序和病例详情页、PDF报告顺序不一致。
+        这里按 config.ini 的 ProteinOrder / ProteinNames 统一排序。
+        """
+        rows = list(rows or [])
+
+        protein_items = []
+        try:
+            protein_items = self.config.get_protein_items()
+        except Exception:
+            protein_items = []
+
+        order_map = {}
+        name_to_key = {}
+
+        for index, item in enumerate(protein_items):
+            key = str(item.get("key", "") or "").strip()
+            name = str(item.get("name", "") or "").strip()
+
+            if key:
+                order_map[key] = index
+                name_to_key[key] = key
+
+            if name:
+                name_to_key[name] = key or name
+                if name not in order_map:
+                    order_map[name] = index
+
+        def row_sort_key(row):
+            protein_name = str(row.get("protein_name", "") or "").strip()
+
+            try:
+                protein_key = self.config.normalize_protein_key(protein_name)
+            except Exception:
+                protein_key = name_to_key.get(protein_name, protein_name)
+
+            index = order_map.get(protein_key, order_map.get(protein_name, 9999))
+            created_at = str(row.get("created_at", "") or "")
+
+            return (index, created_at, protein_name)
+
+        return sorted(rows, key=row_sort_key)
+
+
+    def build_report_display_rows(self, analysis_rows):
+        """构建报告管理页显示行。
+
+        返回值固定覆盖系统设置中的所有蛋白。
+        已分析蛋白合并数据库结果；未分析蛋白生成占位行。
+        """
+        analysis_rows = list(analysis_rows or [])
+        analysis_map = {}
+
+        for row in analysis_rows:
+            protein_name = str(row.get("protein_name", "") or "").strip()
+            if not protein_name:
+                continue
+
+            protein_key = self.resolve_protein_key(protein_name)
+            if protein_key:
+                analysis_map[protein_key] = row
+            analysis_map[protein_name] = row
+
+        display_rows = []
+
+        try:
+            protein_items = self.config.get_protein_items()
+        except Exception:
+            protein_items = []
+
+        for item in protein_items:
+            key = str(item.get("key", "") or "").strip()
+            name = str(item.get("name", key) or key).strip()
+            part = str(item.get("part", "") or "").strip()
+
+            row = None
+            if key:
+                row = analysis_map.get(key)
+            if row is None and name:
+                row = analysis_map.get(name)
+
+            if row:
+                display_row = dict(row)
+                display_row["has_result"] = True
+                display_row["protein_name"] = display_row.get("protein_name", name) or name
+                display_row["protein_part"] = display_row.get("protein_part", part) or part
+            else:
+                display_row = {
+                    "has_result": False,
+                    "protein_key": key,
+                    "protein_name": name,
+                    "protein_part": part,
+                    "status": "未检测",
+                }
+
+            display_rows.append(display_row)
+
+        if display_rows:
+            return display_rows
+
+        # 兜底：如果配置异常没有蛋白列表，就显示数据库已有结果。
+        rows = self.sort_analysis_rows_by_config(analysis_rows)
+        for row in rows:
+            row = dict(row)
+            row["has_result"] = True
+            display_rows.append(row)
+
+        return display_rows
+
+    def resolve_protein_key(self, protein_name: str) -> str:
+        """把数据库中的 protein_name 尽量映射回 protein1/protein2 等内部编号。"""
+        protein_name = str(protein_name or "").strip()
+
+        if not protein_name:
+            return ""
+
+        try:
+            return self.config.normalize_protein_key(protein_name)
+        except Exception:
+            pass
+
+        try:
+            for item in self.config.get_protein_items():
+                key = str(item.get("key", "") or "").strip()
+                name = str(item.get("name", "") or "").strip()
+
+                if protein_name == key or protein_name == name:
+                    return key
+        except Exception:
+            pass
+
+        return protein_name
+
 
     def generate_report(self):
         if not self.current_case:
