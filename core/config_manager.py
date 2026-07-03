@@ -111,6 +111,17 @@ class ConfigManager:
     def get_report_dir(self) -> Path:
         return Path(self.get("Workspace", "report_dir", "reports"))
 
+    def get_qc_root_dir(self) -> Path:
+        """质控微球测试根目录。
+
+        默认使用 workspace/qc，质控每次运行会在其下创建 YYYYMMDD_01 目录。
+        """
+        return Path(self.get("QC", "root_dir", r"workspace\qc"))
+
+    def get_qc_pipeline(self) -> Path:
+        """质控微球荧光强度测试 Pipeline。"""
+        return Path(self.get_mvimageid("qc_pipeline", r"pipelines\pipeline_qc.cppipe"))
+
     def get_image_rule(self) -> dict:
         return {
             "r_suffix": self.get("ImageRule", "r_suffix", "_R"),
@@ -302,14 +313,18 @@ class ConfigManager:
                 "source_project_dir": r"F:\MvImageID",
                 "python_exe": r"F:\MvImageID\.venv\Scripts\python.exe",
                 "module_name": "MvImageID",
-                "head_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
-                "tail_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
+                "head_pipeline": r"pipelines\pipeline_head.cppipe",
+                "tail_pipeline": r"pipelines\pipeline_tail.cppipe",
+                "qc_pipeline": r"pipelines\pipeline_qc.cppipe",
                 "plugins_directory": r"F:\MvImageID\C-plugins\active_plugins",
             },
             "Workspace": {
                 "root_dir": r"workspace\cases",
                 "database": r"data\analysis.db",
                 "report_dir": "reports",
+            },
+            "QC": {
+                "root_dir": r"workspace\qc",
             },
             "ImageRule": {
                 "r_suffix": "_R",

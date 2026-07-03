@@ -1,8 +1,8 @@
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QComboBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.config_manager import ConfigManager
+from core.qc_beads_service import QCBeadsService, QCBeadsWorker
 
 
 class SettingsWindow(QWidget):
@@ -69,6 +70,7 @@ class SettingsWindow(QWidget):
 
         self.init_app_info_tab()
         self.init_runtime_tab()
+        self.init_qc_tab()
         self.init_workspace_tab()
         self.init_image_rule_tab()
         self.init_protein_tab()
@@ -198,6 +200,59 @@ class SettingsWindow(QWidget):
         layout.addWidget(hint)
         layout.addStretch()
         self.tabs.addTab(tab, "运行环境")
+
+    def init_qc_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        group = QGroupBox("质控微球荧光强度测试")
+        form = QFormLayout(group)
+
+        self.qc_source_folder_edit = QLineEdit()
+        self.qc_output_dir_edit = QLineEdit()
+        self.qc_pipeline_edit = QLineEdit()
+
+        source_row = self._with_button(self.qc_source_folder_edit, "选择", self.select_qc_source_folder)
+        output_row_widget = QWidget()
+        output_row_layout = QHBoxLayout(output_row_widget)
+        output_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_select_qc_output = QPushButton("选择")
+        self.btn_reset_qc_output = QPushButton("默认")
+        self.btn_select_qc_output.setFixedWidth(60)
+        self.btn_reset_qc_output.setFixedWidth(60)
+        self.btn_select_qc_output.clicked.connect(self.select_qc_output_dir)
+        self.btn_reset_qc_output.clicked.connect(self.reset_qc_output_dir)
+        output_row_layout.addWidget(self.qc_output_dir_edit, 1)
+        output_row_layout.addWidget(self.btn_select_qc_output)
+        output_row_layout.addWidget(self.btn_reset_qc_output)
+
+        form.addRow("微球图片文件夹：", source_row)
+        form.addRow("本次输出目录：", output_row_widget)
+        form.addRow("质控 Pipeline：", self._with_button(self.qc_pipeline_edit, "选择", self.select_qc_pipeline))
+
+        button_layout = QHBoxLayout()
+        self.btn_run_qc = QPushButton("运行质控测试")
+        self.btn_open_qc_output = QPushButton("打开输出目录")
+        button_layout.addWidget(self.btn_run_qc)
+        button_layout.addWidget(self.btn_open_qc_output)
+        button_layout.addStretch()
+
+        hint = QLabel(
+            "说明：质控微球测试不进入病例数据库，也不进入 PDF 报告。"
+            "默认输出到 workspace\\qc\\YYYYMMDD_01，目录内包含 input 和 output 两个文件夹。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666666;")
+
+        layout.addWidget(group)
+        layout.addLayout(button_layout)
+        layout.addWidget(hint)
+        layout.addStretch()
+
+        self.btn_run_qc.clicked.connect(self.run_qc_beads_test)
+        self.btn_open_qc_output.clicked.connect(self.open_qc_output_dir)
+
+        self.tabs.addTab(tab, "质控微球测试")
 
     def init_workspace_tab(self):
         tab = QWidget()
@@ -332,6 +387,14 @@ class SettingsWindow(QWidget):
         self.tail_pipeline_edit.setText(self.config.get_mvimageid("tail_pipeline", ""))
         self.plugins_directory_edit.setText(self.config.get_mvimageid("plugins_directory", ""))
 
+        self.qc_pipeline_edit.setText(self.config.get_mvimageid("qc_pipeline", r"pipelines\pipeline_qc.cppipe"))
+        self.qc_source_folder_edit.setText("")
+        try:
+            qc_default_dir = QCBeadsService(self.config).get_next_run_dir()
+            self.qc_output_dir_edit.setText(self.to_project_relative_text(qc_default_dir))
+        except Exception:
+            self.qc_output_dir_edit.setText(r"workspace\qc")
+
         self.workspace_root_edit.setText(self.config.get("Workspace", "root_dir", "workspace\\cases"))
         self.database_edit.setText(self.config.get("Workspace", "database", "data\\analysis.db"))
         self.report_dir_edit.setText(self.config.get("Workspace", "report_dir", "reports"))
@@ -369,7 +432,10 @@ class SettingsWindow(QWidget):
         self.config.set("MvImageID", "module_name", self.module_name_edit.text().strip())
         self.config.set("MvImageID", "head_pipeline", self.head_pipeline_edit.text().strip())
         self.config.set("MvImageID", "tail_pipeline", self.tail_pipeline_edit.text().strip())
+        self.config.set("MvImageID", "qc_pipeline", self.qc_pipeline_edit.text().strip())
         self.config.set("MvImageID", "plugins_directory", self.plugins_directory_edit.text().strip())
+        if not self.config.get("QC", "root_dir", "").strip():
+            self.config.set("QC", "root_dir", r"workspace\qc")
 
         self.config.set("Workspace", "root_dir", self.workspace_root_edit.text().strip())
         self.config.set("Workspace", "database", self.database_edit.text().strip())
@@ -724,6 +790,7 @@ class SettingsWindow(QWidget):
             ("Python解释器", self.python_exe_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),
+            ("质控 Pipeline", self.qc_pipeline_edit.text().strip(), "file"),
             ("插件目录", self.plugins_directory_edit.text().strip(), "dir"),
             ("病例工作目录", self.workspace_root_edit.text().strip(), "dir_create"),
             ("数据库文件", self.database_edit.text().strip(), "parent_create"),
@@ -807,6 +874,130 @@ class SettingsWindow(QWidget):
     # ------------------------------------------------------------------
     # 文件/文件夹选择
     # ------------------------------------------------------------------
+    def select_qc_source_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "选择微球图片文件夹")
+        if path:
+            self.qc_source_folder_edit.setText(path)
+
+    def select_qc_output_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "选择本次质控输出目录")
+        if path:
+            self.qc_output_dir_edit.setText(path)
+
+    def reset_qc_output_dir(self):
+        try:
+            qc_default_dir = QCBeadsService(self.config).get_next_run_dir()
+            self.qc_output_dir_edit.setText(self.to_project_relative_text(qc_default_dir))
+        except Exception:
+            self.qc_output_dir_edit.setText(r"workspace\qc")
+
+    def select_qc_pipeline(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择质控微球 Pipeline",
+            self.qc_pipeline_edit.text().strip(),
+            "MvImageID Pipeline (*.cppipe);;所有文件 (*.*)",
+        )
+        if path:
+            self.qc_pipeline_edit.setText(path)
+
+    def run_qc_beads_test(self):
+        source_folder = self.qc_source_folder_edit.text().strip()
+        run_dir = self.qc_output_dir_edit.text().strip()
+        qc_pipeline = self.qc_pipeline_edit.text().strip()
+
+        if not source_folder:
+            QMessageBox.warning(self, "提示", "请先选择微球图片文件夹。")
+            return
+        if not qc_pipeline:
+            QMessageBox.warning(self, "提示", "请先设置质控 Pipeline。")
+            return
+        if not run_dir:
+            self.reset_qc_output_dir()
+            run_dir = self.qc_output_dir_edit.text().strip()
+
+        source_path = Path(source_folder)
+        if not source_path.is_absolute():
+            source_path = self.resolve_project_path(str(source_path))
+        if not source_path.exists() or not source_path.is_dir():
+            QMessageBox.warning(self, "提示", f"微球图片文件夹不存在：\n{source_path}")
+            return
+
+        pipeline_path = Path(qc_pipeline)
+        if not pipeline_path.is_absolute():
+            pipeline_path = self.resolve_project_path(str(pipeline_path))
+        if not pipeline_path.exists() or not pipeline_path.is_file():
+            QMessageBox.warning(self, "提示", f"质控 Pipeline 不存在：\n{pipeline_path}")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认运行质控测试",
+            "将运行微球荧光强度质控测试。\n\n"
+            f"图片目录：\n{source_path}\n\n"
+            f"输出目录：\n{self.resolve_project_path(run_dir) if not Path(run_dir).is_absolute() else Path(run_dir)}\n\n"
+            "该功能不会写入病例数据库，也不会影响报告结果。\n\n是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self.log_edit.clear()
+        self.append_log("准备运行质控微球测试...")
+        self.set_qc_running(True)
+
+        self.qc_worker = QCBeadsWorker(
+            config_path=str(self.project_root / "config.ini"),
+            source_folder=source_folder,
+            run_dir=run_dir,
+            qc_pipeline=qc_pipeline,
+            parent=self,
+        )
+        self.qc_worker.log_signal.connect(self.append_log)
+        self.qc_worker.finished_signal.connect(self.on_qc_beads_finished)
+        self.qc_worker.start()
+
+    def on_qc_beads_finished(self, success: bool, elapsed: float, message: str, run_dir: str, output_dir: str):
+        self.set_qc_running(False)
+        if run_dir:
+            self.qc_output_dir_edit.setText(run_dir)
+        self.current_qc_output_dir = output_dir or run_dir
+        self.append_log(message)
+
+        if success:
+            QMessageBox.information(self, "质控完成", message)
+        else:
+            QMessageBox.warning(self, "质控失败", message)
+
+    def set_qc_running(self, running: bool):
+        self.btn_run_qc.setEnabled(not running)
+        self.btn_run_qc.setText("正在运行..." if running else "运行质控测试")
+        self.btn_open_qc_output.setEnabled(not running)
+
+    def open_qc_output_dir(self):
+        path_text = ""
+        if hasattr(self, "current_qc_output_dir") and self.current_qc_output_dir:
+            path_text = str(self.current_qc_output_dir)
+        else:
+            path_text = self.qc_output_dir_edit.text().strip()
+
+        if not path_text:
+            QMessageBox.information(self, "提示", "当前没有质控输出目录。")
+            return
+
+        path = Path(path_text)
+        if not path.is_absolute():
+            path = self.resolve_project_path(str(path))
+
+        # 如果用户填的是本次运行目录，优先打开 output；如果 output 不存在，就打开运行目录本身。
+        output_candidate = path / "output"
+        if output_candidate.exists() and output_candidate.is_dir():
+            path = output_candidate
+
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
+
     def select_python_exe(self):
         path, _ = QFileDialog.getOpenFileName(
             self,

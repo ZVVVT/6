@@ -205,13 +205,13 @@ CalculateMath(计算数学表达式):[module_num:14|svn_version:'Unknown'|variab
     将结果乘方至:1.0
     将数值加到结果上:0.0
     输出值应如何四舍五入？:Rounded to a specified number of decimal places
-    请输入要四舍五入到的小数位数:2
+    请输入要四舍五入到的小数位数:0
     是否限制结果的下界？:No
     请输入下界数值:0.0
     是否限制结果的上界？:No
     请输入上界数值:1.0
 
-CalculateMath(计算数学表达式):[module_num:15|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['单个精子荧光强度 = IntDen / Area', '平均荧光强度（0-1）']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+CalculateMath(计算数学表达式):[module_num:15|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['单个精子荧光强度 = IntDen / Area', '平均荧光强度（0-1）']|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
     为输出测量命名:G_MeanIntensity0_1
     运算类型:Divide
     选择 分子 测量类型:Object
@@ -275,7 +275,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:17|svn_version:'Unknown
     是否使用科学计数法?:No
     字体粗细:normal
 
-DisplayDataOnImage(在图像上显示数据):[module_num:18|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['IntDen', '归一区域总荧光强度']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+DisplayDataOnImage(在图像上显示数据):[module_num:18|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['IntDen', '归一区域总荧光强度']|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
     显示对象测量值还是图像测量值?:Object
     选择输入对象:G_objects
     选择要显示的测量值:Intensity_IntegratedIntensity_G_Gray
@@ -323,7 +323,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:20|svn_version:'Unknown
     文字颜色:red
     输出图像名称（叠加测量值）:MeanIntensity255
     字体大小（磅值）:10
-    小数位数:2
+    小数位数:0
     保存的图像元素:Image
     标注偏移量（像素）:0
     显示模式:Text
@@ -335,7 +335,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:20|svn_version:'Unknown
     是否使用科学计数法?:No
     字体粗细:normal
 
-DisplayDataOnImage(在图像上显示数据):[module_num:21|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['归一平均荧光强度(0-1)']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+DisplayDataOnImage(在图像上显示数据):[module_num:21|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['归一平均荧光强度(0-1)']|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
     显示对象测量值还是图像测量值?:Object
     选择输入对象:G_objects
     选择要显示的测量值:Math_G_MeanIntensity0_1
@@ -435,7 +435,7 @@ SaveImages(保存图像):[module_num:25|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:26|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:26|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):IntDen0_1
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -455,7 +455,7 @@ SaveImages(保存图像):[module_num:26|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:27|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:27|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):MeanIntensity0_1
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -489,7 +489,7 @@ ExportToSpreadsheet(导出到表格):[module_num:28|svn_version:'Unknown'|variab
     选择用作标识符的图像:None
     选择要用作标识符的元数据:None
     导出所有测量类型?:No
-    按下按钮选择测量值:G_objects|AreaShape_Area,G_objects|Intensity_IntegratedIntensity_G_Gray,G_objects|Math_G_MeanIntensity255,G_objects|Math_G_IntegratedIntensity255,G_objects|Math_G_MeanIntensity0_1
+    按下按钮选择测量值:G_objects|AreaShape_Area,G_objects|Math_G_IntegratedIntensity255,G_objects|Math_G_MeanIntensity255
     Nan/Inf 的表示:NaN
     为文件名添加前缀?:No
     文件名前缀:MyExpt_
@@ -497,4 +497,4 @@ ExportToSpreadsheet(导出到表格):[module_num:28|svn_version:'Unknown'|variab
     要导出的数据:G_objects
     将这些物体的测量值与前一个物体的测量值结合起来?:No
     文件名:DATA.csv
-    使用对象名称作为文件名?:Yes
+    使用对象名称作为文件名?:No
