@@ -170,28 +170,32 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group = QGroupBox("运行环境")
+        group = QGroupBox("MvImageID 源码环境")
         form = QFormLayout(group)
 
-        self.powershell_edit = QLineEdit()
         self.source_project_dir_edit = QLineEdit()
-        self.venv_activate_edit = QLineEdit()
+        self.python_exe_edit = QLineEdit()
         self.module_name_edit = QLineEdit()
         self.head_pipeline_edit = QLineEdit()
         self.tail_pipeline_edit = QLineEdit()
         self.plugins_directory_edit = QLineEdit()
-        self.log_file_edit = QLineEdit()
 
-        form.addRow("PowerShell：", self._with_button(self.powershell_edit, "选择", self.select_powershell))
         form.addRow("源码目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
-        form.addRow("虚拟环境 Activate.ps1：", self._with_button(self.venv_activate_edit, "选择", self.select_venv_activate))
+        form.addRow("Python解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
         form.addRow("模块名称：", self.module_name_edit)
         form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
         form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
         form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
-        form.addRow("日志文件：", self._with_button(self.log_file_edit, "选择", self.select_log_file))
+
+        hint = QLabel(
+            "说明：当前版本直接调用 MvImageID 虚拟环境中的 python.exe。"
+            "每次分析日志会自动写入对应蛋白输出目录的 run_mvimageid.log。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666666;")
 
         layout.addWidget(group)
+        layout.addWidget(hint)
         layout.addStretch()
         self.tabs.addTab(tab, "运行环境")
 
@@ -321,14 +325,12 @@ class SettingsWindow(QWidget):
         self.app_font_size_spin.setValue(self.config.get_app_font_size())
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
-        self.powershell_edit.setText(self.config.get_mvimageid("powershell_exe", "powershell.exe"))
         self.source_project_dir_edit.setText(self.config.get_mvimageid("source_project_dir", ""))
-        self.venv_activate_edit.setText(self.config.get_mvimageid("venv_activate", ""))
+        self.python_exe_edit.setText(str(self.config.get_python_exe()))
         self.module_name_edit.setText(self.config.get_mvimageid("module_name", "MvImageID"))
         self.head_pipeline_edit.setText(self.config.get_mvimageid("head_pipeline", ""))
         self.tail_pipeline_edit.setText(self.config.get_mvimageid("tail_pipeline", ""))
         self.plugins_directory_edit.setText(self.config.get_mvimageid("plugins_directory", ""))
-        self.log_file_edit.setText(self.config.get_mvimageid("log_file", ""))
 
         self.workspace_root_edit.setText(self.config.get("Workspace", "root_dir", "workspace\\cases"))
         self.database_edit.setText(self.config.get("Workspace", "database", "data\\analysis.db"))
@@ -362,14 +364,12 @@ class SettingsWindow(QWidget):
         self.config.set("Software", "name", app_name)
 
         self.config.set("MvImageID", "run_mode", "source")
-        self.config.set("MvImageID", "powershell_exe", self.powershell_edit.text().strip())
         self.config.set("MvImageID", "source_project_dir", self.source_project_dir_edit.text().strip())
-        self.config.set("MvImageID", "venv_activate", self.venv_activate_edit.text().strip())
+        self.config.set("MvImageID", "python_exe", self.python_exe_edit.text().strip())
         self.config.set("MvImageID", "module_name", self.module_name_edit.text().strip())
         self.config.set("MvImageID", "head_pipeline", self.head_pipeline_edit.text().strip())
         self.config.set("MvImageID", "tail_pipeline", self.tail_pipeline_edit.text().strip())
         self.config.set("MvImageID", "plugins_directory", self.plugins_directory_edit.text().strip())
-        self.config.set("MvImageID", "log_file", self.log_file_edit.text().strip())
 
         self.config.set("Workspace", "root_dir", self.workspace_root_edit.text().strip())
         self.config.set("Workspace", "database", self.database_edit.text().strip())
@@ -721,7 +721,7 @@ class SettingsWindow(QWidget):
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
             ("界面字体", self.app_font_path_edit.text().strip(), "font_optional"),
             ("源码目录", self.source_project_dir_edit.text().strip(), "dir"),
-            ("虚拟环境 Activate.ps1", self.venv_activate_edit.text().strip(), "file"),
+            ("Python解释器", self.python_exe_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),
             ("插件目录", self.plugins_directory_edit.text().strip(), "dir"),
@@ -807,30 +807,20 @@ class SettingsWindow(QWidget):
     # ------------------------------------------------------------------
     # 文件/文件夹选择
     # ------------------------------------------------------------------
-    def select_powershell(self):
+    def select_python_exe(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择 PowerShell",
+            "选择 MvImageID Python解释器",
             "",
-            "PowerShell (*.exe);;所有文件 (*.*)",
+            "Python解释器 (python.exe);;Executable (*.exe);;所有文件 (*.*)",
         )
         if path:
-            self.powershell_edit.setText(path)
+            self.python_exe_edit.setText(path)
 
     def select_source_project_dir(self):
         path = QFileDialog.getExistingDirectory(self, "选择 MvImageID 源码目录")
         if path:
             self.source_project_dir_edit.setText(path)
-
-    def select_venv_activate(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 Activate.ps1",
-            "",
-            "PowerShell Script (*.ps1);;所有文件 (*.*)",
-        )
-        if path:
-            self.venv_activate_edit.setText(path)
 
     def select_head_pipeline(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -856,16 +846,6 @@ class SettingsWindow(QWidget):
         path = QFileDialog.getExistingDirectory(self, "选择插件目录")
         if path:
             self.plugins_directory_edit.setText(path)
-
-    def select_log_file(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "选择日志文件",
-            "run.log",
-            "Log File (*.log);;Text File (*.txt);;所有文件 (*.*)",
-        )
-        if path:
-            self.log_file_edit.setText(path)
 
     def select_workspace_root(self):
         path = QFileDialog.getExistingDirectory(self, "选择病例工作目录")

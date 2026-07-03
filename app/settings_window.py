@@ -501,8 +501,8 @@ class SettingsWindow(QWidget):
         self.app_font_size_spin.setValue(10)
 
     def prepare_app_font_for_save(self, font_path_text: str) -> str:
-        if not font_path_text or font_path_text.strip() == ".":
-            # 空路径 / . 表示使用系统默认字体，不复制、不强制使用内置字体。
+        if not font_path_text or font_path_text.strip() in (".", "系统默认字体"):
+            # 空路径 / . / “系统默认字体”表示使用系统默认字体，不复制、不强制使用内置字体。
             return ""
 
         src = Path(font_path_text)
@@ -755,7 +755,7 @@ class SettingsWindow(QWidget):
         path_text = str(path_text or "").strip()
 
         if check_type == "font_optional":
-            if not path_text or path_text == ".":
+            if not path_text or path_text in (".", "系统默认字体"):
                 return True, "系统默认字体"
             path = Path(path_text)
             if not path.is_absolute():

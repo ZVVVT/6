@@ -72,7 +72,7 @@ class ConfigManager:
         并在路径检查时被解析成项目根目录，导致误报。
         """
         font_path = self.get("AppInfo", "font_path", "").strip()
-        if font_path in ("", "."):
+        if font_path in ("", ".", "系统默认字体"):
             return ""
         return font_path
 
@@ -244,6 +244,43 @@ class ConfigManager:
         return Path(self.get("Report", "logo_path", ""))
 
     # ------------------------------------------------------------------
+    # 历史配置清理
+    # ------------------------------------------------------------------
+    def cleanup_legacy_config(self) -> bool:
+        """清理旧版本遗留配置。
+
+        当前正式运行配置统一放在 [MvImageID]。
+        不再生成或保留 [CellProfiler]，也不再保留 PowerShell、Activate.ps1、
+        全局日志文件这些旧执行方式相关字段。
+        """
+        changed = False
+
+        if self.config.has_section("CellProfiler"):
+            self.config.remove_section("CellProfiler")
+            changed = True
+
+        obsolete_mvimageid_options = (
+            "powershell_exe",
+            "venv_activate",
+            "log_file",
+        )
+        if self.config.has_section("MvImageID"):
+            for option in obsolete_mvimageid_options:
+                if self.config.has_option("MvImageID", option):
+                    self.config.remove_option("MvImageID", option)
+                    changed = True
+
+        # 旧界面可能把“系统默认字体”文字写入 font_path。
+        # 新逻辑统一用空字符串表示系统默认字体。
+        if self.config.has_section("AppInfo"):
+            font_path = self.config.get("AppInfo", "font_path", fallback="").strip()
+            if font_path in (".", "系统默认字体"):
+                self.config.set("AppInfo", "font_path", "")
+                changed = True
+
+        return changed
+
+    # ------------------------------------------------------------------
     # 默认配置
     # ------------------------------------------------------------------
     def ensure_default_config(self):
@@ -324,7 +361,7 @@ class ConfigManager:
             },
         }
 
-        changed = False
+        changed = self.cleanup_legacy_config()
         for section, values in defaults.items():
             if not self.config.has_section(section):
                 self.config.add_section(section)
