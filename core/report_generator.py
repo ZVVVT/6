@@ -1,3 +1,18 @@
+# -*- coding: utf-8 -*-
+"""
+core/report_generator.py
+
+人精子蛋白质量分析软件 PDF 报告生成器。
+
+当前报告规则：
+1. “精子质量分子评价”表格只显示已检测/已有数据库结果的蛋白，不显示未检测占位。
+2. “分子标志物荧光图”固定显示系统配置中的前 5 个蛋白槽位，未检测蛋白图片为空。
+3. PDF 中蛋白顺序按照 config.ini 的 ProteinOrder / ProteinNames 顺序。
+4. 荧光强度、标定率、参考值均来自数据库和 config.ini，不重新读取 Image.csv。
+5. 代表性荧光图使用 raw_images/proteinX 中的 Merge 原图；没有 Merge 图则该槽位为空。
+6. 不显示页脚备注。
+"""
+
 import sys
 import hashlib
 from pathlib import Path
@@ -56,14 +71,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 class ReportGenerator:
     """
-    报告生成器。
-
-    当前版本业务逻辑：
-    1. 固定生成 HEL-1 到 HEL-5 五个分子标志物项目。
-    2. 报告中的表格和图片均按 HEL-1 到 HEL-5 固定槽位显示。
-    3. 某个项目没有分析结果时，显示“未检测”。
-    4. 某个项目有结果时，数据和图片只出现在对应项目位置。
-    5. 参考值从 config.ini 读取。
+    PDF 报告生成器。
     """
 
     def __init__(self, database, report_dir: str = "reports", logo_path: str = ""):
@@ -95,17 +103,22 @@ class ReportGenerator:
 
     def _register_chinese_font(self):
         font_candidates = [
-            r"C:\Windows\Fonts\simsun.ttc",
-            r"C:\Windows\Fonts\simsun.ttf",
+            # 优先使用软件配置字体
+            str(self.config.get_app_font_path() or ""),
             r"C:\Windows\Fonts\msyh.ttc",
             r"C:\Windows\Fonts\msyh.ttf",
+            r"C:\Windows\Fonts\simsun.ttc",
+            r"C:\Windows\Fonts\simsun.ttf",
             r"C:\Windows\Fonts\simhei.ttf",
         ]
 
         for font_path in font_candidates:
+            if not font_path:
+                continue
+
             path = Path(font_path)
 
-            if not path.exists():
+            if not path.exists() or not path.is_file():
                 continue
 
             try:
@@ -131,6 +144,7 @@ class ReportGenerator:
             raise ValueError(f"未找到病例：case_id={case_id}")
 
         analysis_rows = self.database.get_protein_analysis_by_case(case_id)
+        analysis_rows = self._sort_analysis_rows_by_config(analysis_rows)
 
         case_no = str(case_data.get("case_no", f"case_{case_id}"))
         safe_case_no = self._safe_filename(case_no)
@@ -272,6 +286,7 @@ class ReportGenerator:
             x += 30 * mm
 
         # 精子质量分子评价
+        # 表格只显示已检测项目，不显示未检测占位。
         marker_slots = self._build_marker_slots(analysis_rows)
 
         if marker_slots:
@@ -284,7 +299,7 @@ class ReportGenerator:
             c.setFillColor(black)
             c.setFont(self.font_name, 12)
 
-            headers = ["分子标志物", "荧光强度", "参考值范围", "标定率", "参考值范围"]
+            headers = ["分子标志物", "荧光强度", "参考值范围", "标定率(%)", "参考值范围"]
             cols_x = [
                 left + 10 * mm,
                 left + 45 * mm,
@@ -326,73 +341,63 @@ class ReportGenerator:
                 for cx, cell in zip(cols_x, row):
                     c.drawCentredString(cx, y, str(cell))
 
-            # 分子标志物荧光图
-            # 注意：表格只显示已检测项目；但荧光图区域固定显示 HEL-1 到 HEL-5 五个槽位。
-            image_slots = self._build_marker_image_slots(analysis_rows)
+        # 分子标志物荧光图
+        # 图片区固定显示 5 个槽位；未检测项目只显示标题，图片为空。
+        # 图片来源：raw_images/proteinX 中的 Merge 原图。
+        image_slots = self._build_marker_image_slots(analysis_rows)
 
-            if image_slots:
-                y -= gap_big
-                c.setFont(self.font_name, 13)
-                c.setFillColor(blue)
-                c.drawString(left, y, "分子标志物荧光图")
+        if image_slots:
+            y -= gap_big
+            c.setFont(self.font_name, 13)
+            c.setFillColor(blue)
+            c.drawString(left, y, "分子标志物荧光图")
 
-                y -= gap_line
-                c.setFillColor(black)
-                c.setFont(self.font_name, 12)
+            y -= gap_line
+            c.setFillColor(black)
+            c.setFont(self.font_name, 12)
 
-                box_w = 30 * mm
-                gap = 5 * mm
-                total_w = box_w * 5 + gap * 4
-                start_x = (W - total_w) / 2
+            box_w = 30 * mm
+            gap = 5 * mm
+            total_w = box_w * 5 + gap * 4
+            start_x = (W - total_w) / 2
 
-                labels_y = y
-                img_top_y = y - 6 * mm
-                img_h = 34 * mm
-                img_w = 34 * mm
+            labels_y = y
+            img_top_y = y - 6 * mm
+            img_h = 34 * mm
+            img_w = 34 * mm
 
-                for i, slot in enumerate(image_slots):
-                    name = slot.get("name", f"HEL-{i + 1}")
-                    image_path = slot.get("image_path")
+            for i, slot in enumerate(image_slots):
+                name = slot.get("name", "")
+                image_path = slot.get("image_path")
 
-                    bx = start_x + i * (box_w + gap)
-                    c.drawCentredString(bx + box_w / 2, labels_y, name)
+                bx = start_x + i * (box_w + gap)
 
-                    safe_image = self._prepare_image_for_report(
-                        image_path,
-                        f"marker_image_{i + 1}.png",
-                    )
+                c.drawCentredString(bx + box_w / 2, labels_y, name)
 
-                    if safe_image:
-                        ix = bx + (box_w - img_w) / 2
-                        iy = img_top_y - img_h
+                safe_image = self._prepare_image_for_report(
+                    image_path,
+                    f"marker_image_{i + 1}.png",
+                )
 
-                        try:
-                            c.drawImage(
-                                str(safe_image),
-                                ix,
-                                iy,
-                                width=img_w,
-                                height=img_h,
-                                preserveAspectRatio=True,
-                                anchor="c",
-                                mask="auto",
-                            )
-                        except Exception:
-                            pass
+                if safe_image:
+                    ix = bx + (box_w - img_w) / 2
+                    iy = img_top_y - img_h
 
-        # 页脚
-#         c.setFillColor(colors.grey)
-#         c.setFont(self.font_name, 8)
-#         c.drawString(
-#             left,
-#             16 * mm,
-#             "备注：本报告由软件根据 MvImageID / CellProfiler 后台分析结果自动生成。",
-#         )
-#         c.drawRightString(
-#             right,
-#             16 * mm,
-#             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-#         )
+                    try:
+                        c.drawImage(
+                            str(safe_image),
+                            ix,
+                            iy,
+                            width=img_w,
+                            height=img_h,
+                            preserveAspectRatio=True,
+                            anchor="c",
+                            mask="auto",
+                        )
+                    except Exception:
+                        pass
+
+        # 页脚已取消：不显示备注和生成时间。
 
         c.showPage()
         c.save()
@@ -409,6 +414,7 @@ class ReportGenerator:
         def time_only(value):
             """
             报告中只显示时分秒，不显示日期。
+
             兼容：
             1. 14:31:04
             2. 2026-06-09 14:31:04
@@ -422,20 +428,17 @@ class ReportGenerator:
 
             text = text.replace("T", " ")
 
-            # 如果是完整日期时间，取最后一段时间
             if " " in text:
                 text = text.split()[-1]
 
-            # 去掉可能存在的小数秒
             if "." in text:
                 text = text.split(".")[0]
 
-            # 如果是 HH:MM:SS，直接返回
             parts = text.split(":")
+
             if len(parts) >= 3:
                 return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
 
-            # 如果是 HH:MM，补秒
             if len(parts) == 2:
                 return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:00"
 
@@ -448,32 +451,25 @@ class ReportGenerator:
             "姓名": case_data.get("patient_name", ""),
             "样本号": case_data.get("sample_no", ""),
             "病历号": case_data.get("case_no", ""),
-
             "年龄": case_data.get("age", ""),
             "性别": case_data.get("sex", "男"),
             "节欲天数": case_data.get("abstinence_days", ""),
-
             "取样方式": case_data.get("collect_method", ""),
             "取样时间": collect_time,
             "检测时间": receive_time,
-
             "外观": case_data.get("appearance", ""),
             "气味": case_data.get("smell", ""),
             "凝集程度": case_data.get("agglutination", ""),
-
             "粘稠度": case_data.get("viscosity", ""),
             "精液量": case_data.get("semen_volume", ""),
             "PH值": case_data.get("ph_value", ""),
-
             "液化时间": case_data.get("liquefaction_time", ""),
             "液化效果": case_data.get("liquefaction_status", ""),
             "颜色": case_data.get("color", ""),
-
             "精子浓度": case_data.get("sperm_concentration", ""),
             "精子总数": case_data.get("sperm_total", ""),
             "前向运动": case_data.get("forward_motility", ""),
             "总活力": case_data.get("total_motility", ""),
-
             "结论_正常": bool_value("conclusion_normal"),
             "结论_少精子症": bool_value("conclusion_oligo"),
             "结论_弱精子症": bool_value("conclusion_astheno"),
@@ -483,26 +479,17 @@ class ReportGenerator:
 
     def _build_marker_slots(self, analysis_rows: list) -> list:
         """
-        构建报告中需要显示的分子标志物结果。
+        构建“精子质量分子评价”表格行。
 
-        当前逻辑：
-        1. 只显示已经分析、有数据库结果的项目。
-        2. 没有分析的 HEL 项目不显示。
-        3. 显示顺序仍然按照 config.ini 中 ProteinOrder 的顺序。
-        4. 例如只分析 HEL-2，则报告只显示 HEL-2。
+        业务规则：
+        1. 只显示已有数据库分析结果的项目。
+        2. 不显示未检测占位。
+        3. 顺序按照系统设置中的蛋白顺序。
         """
         if not analysis_rows:
             return []
 
-        analysis_map = {}
-
-        for row in analysis_rows:
-            protein_name = str(row.get("protein_name", "") or "").strip()
-            protein_key = self._normalize_protein_key(protein_name)
-
-            if protein_key:
-                analysis_map[protein_key] = row
-
+        analysis_map = self._build_analysis_map(analysis_rows)
         protein_items = self._get_report_protein_items()
 
         slots = []
@@ -511,7 +498,7 @@ class ReportGenerator:
             key = item.get("key", "")
             name = item.get("name", key)
 
-            row = analysis_map.get(key)
+            row = analysis_map.get(key) or analysis_map.get(name)
 
             if not row:
                 continue
@@ -521,7 +508,6 @@ class ReportGenerator:
 
             intensity = self._to_float(row.get("mean_intensity", 0))
             rate = self._to_float(row.get("expression_rate", 0))
-            image_path = self._find_representative_image(row.get("output_folder", ""))
 
             slots.append({
                 "key": key,
@@ -531,30 +517,21 @@ class ReportGenerator:
                 "rate": rate,
                 "intensity_min": intensity_min,
                 "rate_min": rate_min,
-                "image_path": image_path,
             })
 
         return slots[:5]
 
     def _build_marker_image_slots(self, analysis_rows: list) -> list:
         """
-        固定构建 HEL-1 到 HEL-5 五个荧光图槽位。
+        构建“分子标志物荧光图”固定五槽位。
 
-        业务逻辑：
-        1. 图片区域永远显示 HEL-1 到 HEL-5 的标题。
-        2. 有结果的项目，在对应槽位显示图片。
-        3. 没有结果的项目，只显示标题，下面为空。
-        4. 只分析 HEL-2 时，图片只出现在 HEL-2 下方。
+        业务规则：
+        1. 固定显示系统设置中的前 5 个蛋白名称。
+        2. 已检测项目显示 raw_images/proteinX 中的 Merge 图。
+        3. 未检测项目只显示标题，图片为空。
+        4. 如果已检测但 raw_images 中没有 Merge 图，图片也为空。
         """
-        analysis_map = {}
-
-        for row in analysis_rows:
-            protein_name = str(row.get("protein_name", "") or "").strip()
-            protein_key = self._normalize_protein_key(protein_name)
-
-            if protein_key:
-                analysis_map[protein_key] = row
-
+        analysis_map = self._build_analysis_map(analysis_rows)
         protein_items = self._get_report_protein_items()
 
         slots = []
@@ -563,11 +540,13 @@ class ReportGenerator:
             key = item.get("key", "")
             name = item.get("name", key)
 
-            row = analysis_map.get(key)
+            row = analysis_map.get(key) or analysis_map.get(name)
 
             image_path = None
+
             if row:
-                image_path = self._find_representative_image(row.get("output_folder", ""))
+                image_folder = row.get("image_folder", "")
+                image_path = self._find_merge_image(image_folder)
 
             slots.append({
                 "key": key,
@@ -579,11 +558,52 @@ class ReportGenerator:
             index = len(slots) + 1
             slots.append({
                 "key": f"protein{index}",
-                "name": f"HEL-{index}",
+                "name": f"protein{index}",
                 "image_path": None,
             })
 
         return slots[:5]
+
+    def _build_analysis_map(self, analysis_rows: list) -> dict:
+        analysis_map = {}
+
+        for row in analysis_rows or []:
+            protein_name = str(row.get("protein_name", "") or "").strip()
+
+            if not protein_name:
+                continue
+
+            protein_key = self._normalize_protein_key(protein_name)
+
+            if protein_key:
+                analysis_map[protein_key] = row
+
+            analysis_map[protein_name] = row
+
+        return analysis_map
+
+    def _sort_analysis_rows_by_config(self, analysis_rows: list) -> list:
+        rows = list(analysis_rows or [])
+
+        order_map = {}
+
+        for index, item in enumerate(self._get_report_protein_items()):
+            key = str(item.get("key", "") or "").strip()
+            name = str(item.get("name", "") or "").strip()
+
+            if key:
+                order_map[key] = index
+
+            if name:
+                order_map[name] = index
+
+        def sort_key(row):
+            protein_name = str(row.get("protein_name", "") or "").strip()
+            protein_key = self._normalize_protein_key(protein_name)
+            index = order_map.get(protein_key, order_map.get(protein_name, 9999))
+            return (index, str(row.get("created_at", "") or ""), protein_name)
+
+        return sorted(rows, key=sort_key)
 
     def _get_report_protein_items(self) -> list:
         items = []
@@ -612,11 +632,11 @@ class ReportGenerator:
 
         if not items:
             items = [
-                {"key": "protein1", "name": "HEL-1", "part": "head"},
-                {"key": "protein2", "name": "HEL-2", "part": "head"},
-                {"key": "protein3", "name": "HEL-3", "part": "tail"},
-                {"key": "protein4", "name": "HEL-4", "part": "head"},
-                {"key": "protein5", "name": "HEL-5", "part": "head"},
+                {"key": "protein1", "name": "protein1", "part": "head"},
+                {"key": "protein2", "name": "protein2", "part": "head"},
+                {"key": "protein3", "name": "protein3", "part": "tail"},
+                {"key": "protein4", "name": "protein4", "part": "head"},
+                {"key": "protein5", "name": "protein5", "part": "head"},
             ]
 
         return items[:5]
@@ -636,8 +656,20 @@ class ReportGenerator:
 
         if upper_value.startswith("HEL-"):
             number = upper_value.replace("HEL-", "").strip()
+
             if number.isdigit():
                 return f"protein{number}"
+
+        # 最后一层兼容：根据当前配置名称反查
+        try:
+            for item in self.config.get_protein_items():
+                key = str(item.get("key", "") or "").strip()
+                name = str(item.get("name", "") or "").strip()
+
+                if value == key or value == name:
+                    return key
+        except Exception:
+            pass
 
         return value.lower()
 
@@ -653,32 +685,91 @@ class ReportGenerator:
         except Exception:
             return 82.88
 
-    def _find_representative_image(self, output_folder: str):
-        if not output_folder:
+    def _get_merge_suffixes(self) -> list:
+        suffixes = []
+
+        try:
+            rule = self.config.get_image_rule()
+            merge_suffix = getattr(rule, "merge_suffix", "")
+            if merge_suffix:
+                suffixes.append(str(merge_suffix))
+        except Exception:
+            pass
+
+        try:
+            merge_suffix = self.config.get("ImageRule", "merge_suffix", "")
+            if merge_suffix:
+                suffixes.append(str(merge_suffix))
+        except Exception:
+            pass
+
+        # 兜底兼容
+        suffixes.extend(["_Merge", "_merge", "Merge", "merge"])
+
+        result = []
+        for item in suffixes:
+            item = str(item or "").strip()
+            if item and item.lower() not in [x.lower() for x in result]:
+                result.append(item)
+
+        return result
+
+    def _find_merge_image(self, image_folder: str):
+        """
+        查找 raw_images/proteinX 目录中的 Merge 原图。
+
+        注意：
+        - 不再从 cp_output 中取 G_colocalized / G_objects / R_objects 叠加图。
+        - 没有 Merge 图时直接返回 None，让 PDF 图片槽位保持为空。
+        """
+        if not image_folder:
             return None
 
-        folder = Path(output_folder)
+        folder = Path(image_folder)
 
-        if not folder.exists():
+        if not folder.exists() or not folder.is_dir():
             return None
 
-        candidates = list(folder.glob("*G_colocalized*Overlay*.png"))
+        image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+        suffixes = self._get_merge_suffixes()
 
-        if not candidates:
-            candidates = list(folder.glob("*G_objects*Overlay*.png"))
+        candidates = []
 
-        if not candidates:
-            candidates = list(folder.glob("*R_objects*Overlay*.png"))
+        try:
+            files = [p for p in folder.iterdir() if p.is_file()]
+        except Exception:
+            files = []
 
-        if not candidates:
-            candidates = list(folder.glob("*Overlay*.png"))
+        for file_path in files:
+            if file_path.suffix.lower() not in image_exts:
+                continue
 
-        if not candidates:
-            candidates = list(folder.glob("*.png"))
+            stem = file_path.stem
+            stem_lower = stem.lower()
 
-        candidates.sort()
+            matched = False
+
+            for suffix in suffixes:
+                suffix_lower = str(suffix).lower()
+
+                if stem_lower.endswith(suffix_lower):
+                    matched = True
+                    break
+
+            # 兜底：如果文件名里明确包含 merge，也可以识别。
+            if not matched and "merge" in stem_lower:
+                matched = True
+
+            if matched:
+                candidates.append(file_path)
+
+        candidates.sort(key=lambda p: p.name.lower())
 
         return candidates[0] if candidates else None
+
+    # 兼容旧调用名：如果其他位置还调用 _find_representative_image，则也只返回 Merge 图。
+    def _find_representative_image(self, image_folder: str):
+        return self._find_merge_image(image_folder)
 
     # ------------------------------------------------------------------
     # 绘图辅助
@@ -750,8 +841,8 @@ class ReportGenerator:
 
                 output_path = self.temp_image_dir / output_name
                 img.save(str(output_path), format="PNG")
-                return output_path
 
+                return output_path
         except Exception:
             return None
 
