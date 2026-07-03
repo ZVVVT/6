@@ -657,7 +657,7 @@ class BatchAnalysisDialog(QDialog):
 
     def check_mvimageid_environment(self) -> dict:
         source_dir = self.config.get_source_project_dir()
-        python_exe = self.config.get_python_exe()
+        venv_activate = self.config.get_venv_activate()
         plugins_dir = self.config.get_plugins_directory()
 
         details: List[str] = []
@@ -668,23 +668,23 @@ class BatchAnalysisDialog(QDialog):
             ok = False
             details.append(f"源码目录不存在：{source_path}")
 
-        python_path = Path(str(python_exe or "")).expanduser()
-        if not python_path.exists() or not python_path.is_file():
+        activate_path = Path(str(venv_activate or "")).expanduser()
+        if not activate_path.exists():
             ok = False
-            details.append(f"Python解释器不存在：{python_path}")
+            details.append(f"虚拟环境 Activate.ps1 不存在：{activate_path}")
 
         try:
             runner = MvImageIDRunner(
                 source_project_dir=str(source_dir),
-                python_exe=str(python_exe),
+                venv_activate=str(venv_activate),
                 module_name=self.config.get_module_name(),
                 plugins_directory=str(plugins_dir),
                 log_file="",
             )
-            resolved_python = runner.get_python_executable()
-            if not resolved_python.exists():
+            python_exe = runner.get_python_executable()
+            if not python_exe.exists():
                 ok = False
-                details.append(f"Python解释器不存在：{resolved_python}")
+                details.append(f"虚拟环境 Python 不存在：{python_exe}")
         except Exception as e:
             ok = False
             details.append(str(e))

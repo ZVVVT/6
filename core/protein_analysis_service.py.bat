@@ -177,7 +177,7 @@ class ProteinAnalysisService:
         """
         清空 raw_images/proteinX 并重新导入原始图片。
 
-        这里不再使用旧 ImageImporter，而是统一调用 ImageChannelMatcher，
+        统一调用 ImageChannelMatcher，
         保证批量预检查、单蛋白导入、分析输入准备使用同一套通道规则。
         """
         match_result = self.matcher.scan_folder(source_folder)
@@ -242,12 +242,7 @@ class ProteinAnalysisService:
         raw_folder: Path,
         protein_key: str,
     ) -> dict:
-        """把一个视野的已识别通道图复制到 raw_images/proteinX。
 
-        raw_images 是原始导入备份目录，因此保留用户原始文件名，
-        不强制改成 proteinX_视野号_通道名。真正给 MvImageID 使用的
-        规范命名在 prepare_input_folder() 中生成。
-        """
         field_no = self._normalize_field_no(field_set.field_id, protein_key)
         copied_item = self._empty_row(field_no)
         copied_item["status"] = self._field_status_for_ui(field_set)
@@ -397,7 +392,7 @@ class ProteinAnalysisService:
 
         runner = MvImageIDRunner(
             source_project_dir=str(self.config.get_source_project_dir()),
-            python_exe=str(self.config.get_python_exe()),
+            venv_activate=str(self.config.get_venv_activate()),
             module_name=self.config.get_module_name(),
             plugins_directory=str(self.config.get_plugins_directory()),
             log_file="",

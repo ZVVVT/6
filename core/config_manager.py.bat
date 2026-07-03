@@ -92,12 +92,13 @@ class ConfigManager:
         """
         读取 MvImageID 运行环境配置。
 
-        新版本统一使用 [MvImageID] 配置节。
+        新版本统一使用 [MvImageID] 配置节；为了兼容旧版 config.ini，
+        如果 [MvImageID] 中没有对应值，会自动回退读取旧的 [CellProfiler]。
         """
         value = self.get("MvImageID", key, "").strip()
         if value:
             return value
-        return default
+        return self.get("CellProfiler", key, default)
 
     # ------------------------------------------------------------------
     # 工作目录 / 图片规则 / 蛋白配置
@@ -218,19 +219,16 @@ class ConfigManager:
     # ------------------------------------------------------------------
     # MvImageID 配置
     # ------------------------------------------------------------------
+    def get_powershell_exe(self) -> str:
+        return self.get_mvimageid("powershell_exe", "powershell.exe")
+
     def get_source_project_dir(self) -> Path:
         return Path(self.get_mvimageid("source_project_dir", r"F:\MvImageID"))
 
-    def get_python_exe(self) -> Path:
-        """MvImageID 虚拟环境 Python 解释器。
-
-        新版本直接调用 python.exe。未配置时，默认使用源码目录下的
-        .venv/Scripts/python.exe。
-        """
-        python_exe = self.get_mvimageid("python_exe", "").strip()
-        if python_exe:
-            return Path(python_exe)
-        return self.get_source_project_dir() / ".venv" / "Scripts" / "python.exe"
+    def get_venv_activate(self) -> Path:
+        return Path(
+            self.get_mvimageid("venv_activate", r"F:\MvImageID\.venv\Scripts\Activate.ps1")
+        )
 
     def get_module_name(self) -> str:
         return self.get_mvimageid("module_name", "MvImageID")
@@ -238,6 +236,8 @@ class ConfigManager:
     def get_plugins_directory(self) -> Path:
         return Path(self.get_mvimageid("plugins_directory", ""))
 
+    def get_log_file(self) -> Path:
+        return Path(self.get_mvimageid("log_file", r"F:\MvImageID\run.log"))
 
     def get_logo_path(self) -> Path:
         """报告 LOGO 路径。为兼容旧代码保留，不用于软件窗口图标。"""
@@ -262,12 +262,27 @@ class ConfigManager:
             },
             "MvImageID": {
                 "run_mode": "source",
+                "powershell_exe": "powershell.exe",
                 "source_project_dir": r"F:\MvImageID",
-                "python_exe": r"F:\MvImageID\.venv\Scripts\python.exe",
+                "venv_activate": r"F:\MvImageID\.venv\Scripts\Activate.ps1",
                 "module_name": "MvImageID",
                 "head_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
                 "tail_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
                 "plugins_directory": r"F:\MvImageID\C-plugins\active_plugins",
+                "log_file": r"F:\MvImageID\run.log",
+            },
+            # 历史兼容：旧版本使用 [CellProfiler] 保存运行环境。
+            # 新版本会优先读取 [MvImageID]；如果旧配置仍存在，也不会影响运行。
+            "CellProfiler": {
+                "run_mode": "source",
+                "powershell_exe": "powershell.exe",
+                "source_project_dir": r"F:\MvImageID",
+                "venv_activate": r"F:\MvImageID\.venv\Scripts\Activate.ps1",
+                "module_name": "MvImageID",
+                "head_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
+                "tail_pipeline": r"F:\MvImageID\pipelines4_DLM\DLM\CPP.cppipe",
+                "plugins_directory": r"F:\MvImageID\C-plugins\active_plugins",
+                "log_file": r"F:\MvImageID\run.log",
             },
             "Workspace": {
                 "root_dir": r"workspace\cases",

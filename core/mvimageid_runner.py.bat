@@ -32,6 +32,7 @@ class MvImageIDRunner:
 
     设计目标：
     - 直接调用 MvImageID 虚拟环境中的 python.exe；
+    - 不依赖 PowerShell 激活脚本执行分析，避免错误流被 PowerShell 包装；
     - 单蛋白分析、批量分析后续都应复用此执行器；
     - 每次运行都在输出目录生成命令文件和日志文件，方便排查。
     """
@@ -39,63 +40,37 @@ class MvImageIDRunner:
     def __init__(
         self,
         source_project_dir: str,
-        python_exe: str = "",
+        venv_activate: str,
         module_name: str = "MvImageID",
         plugins_directory: str = "",
         log_file: str = "",
-        **legacy_kwargs,
     ):
         self.source_project_dir = Path(str(source_project_dir or "")).expanduser().resolve()
-        self.python_exe = (
-            Path(str(python_exe or "")).expanduser().resolve()
-            if str(python_exe or "").strip()
-            else None
-        )
+        self.venv_activate = Path(str(venv_activate or "")).expanduser().resolve()
         self.module_name = str(module_name or "MvImageID").strip() or "MvImageID"
-        self.plugins_directory = (
-            Path(str(plugins_directory or "")).expanduser().resolve()
-            if str(plugins_directory or "").strip()
-            else None
-        )
-        # log_file 仅作历史兼容；标准日志始终写入当前输出目录。
-        self.config_log_file = (
-            Path(str(log_file or "")).expanduser().resolve()
-            if str(log_file or "").strip()
-            else None
-        )
+        self.plugins_directory = Path(str(plugins_directory or "")).expanduser().resolve() if str(plugins_directory or "").strip() else None
+        self.config_log_file = Path(str(log_file or "")).expanduser().resolve() if str(log_file or "").strip() else None
 
     # ------------------------------------------------------------------
     # 路径检查与命令构建
     # ------------------------------------------------------------------
     def get_python_executable(self) -> Path:
-        """定位 MvImageID Python解释器。"""
-        candidates: List[Path] = []
-
-        if self.python_exe is not None:
-            candidates.append(self.python_exe)
-
-        candidates.extend([
-            self.source_project_dir / ".venv" / "Scripts" / "python.exe",
-            self.source_project_dir / ".venv" / "Scripts" / "python",
-        ])
-
-        seen = set()
+        """根据 Activate.ps1 所在目录定位虚拟环境 python。"""
+        scripts_dir = self.venv_activate.parent
+        candidates = [
+            scripts_dir / "python.exe",
+            scripts_dir / "python",
+        ]
         for candidate in candidates:
-            key = str(candidate).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            if candidate.exists() and candidate.is_file():
+            if candidate.exists():
                 return candidate.resolve()
-
-        expected = self.python_exe or (self.source_project_dir / ".venv" / "Scripts" / "python.exe")
-        raise FileNotFoundError(f"MvImageID Python解释器不存在：{expected}")
+        raise FileNotFoundError(f"MvImageID 虚拟环境 Python 不存在：{scripts_dir / 'python.exe'}")
 
     def validate_paths(self, pipeline_file: Path, input_dir: Path, output_dir: Path) -> None:
         if not self.source_project_dir.exists():
             raise FileNotFoundError(f"MvImageID 源码目录不存在：{self.source_project_dir}")
-        # 提前确认 Python解释器存在，避免运行时才发现环境错误。
-        self.get_python_executable()
+        if not self.venv_activate.exists():
+            raise FileNotFoundError(f"MvImageID 虚拟环境激活脚本不存在：{self.venv_activate}")
         if not pipeline_file.exists():
             raise FileNotFoundError(f"Pipeline 文件不存在：{pipeline_file}")
         if not input_dir.exists():
@@ -128,7 +103,10 @@ class MvImageIDRunner:
         """
         每次分析都把标准运行日志写到当前蛋白输出目录。
 
-        旧的全局日志路径只作为历史配置保留，不再覆盖本次输出目录日志。
+        旧配置中的 CellProfiler.log_file / log_file 只作为历史配置保留，
+        不再覆盖本次输出目录日志。否则单蛋白分析会把日志写到
+        F:/MvImageID/run.log，导致 cp_output/proteinX 里看不到
+        run_mvimageid.log。
         """
         return output_dir / "run_mvimageid.log"
 
@@ -302,19 +280,18 @@ class MvImageIDWorker(QThread):
     def __init__(
         self,
         source_project_dir: str,
-        python_exe: str = "",
-        module_name: str = "MvImageID",
-        pipeline_file: str = "",
-        input_dir: str = "",
-        output_dir: str = "",
+        venv_activate: str,
+        module_name: str,
+        pipeline_file: str,
+        input_dir: str,
+        output_dir: str,
         plugins_directory: str = "",
         log_file: str = "",
         parent=None,
-        **legacy_kwargs,
     ):
         super().__init__(parent)
         self.source_project_dir = source_project_dir
-        self.python_exe = python_exe
+        self.venv_activate = venv_activate
         self.module_name = module_name
         self.pipeline_file = pipeline_file
         self.input_dir = input_dir
@@ -329,7 +306,7 @@ class MvImageIDWorker(QThread):
     def run(self):
         runner = MvImageIDRunner(
             source_project_dir=self.source_project_dir,
-            python_exe=self.python_exe,
+            venv_activate=self.venv_activate,
             module_name=self.module_name,
             plugins_directory=self.plugins_directory,
             log_file=self.log_file,
