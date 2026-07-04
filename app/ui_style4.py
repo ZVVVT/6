@@ -24,17 +24,18 @@ def _qss_value(theme: Dict[str, str], key: str, default: str = "") -> str:
 def _side_navigation_qss(theme: Dict[str, str]) -> str:
     """左侧导航专用 QSS。
 
-    说明：
-    - 不新增主题字段，直接复用 primary / primary_light / background 等变量。
-    - 选中项使用横向渐变，左侧主色更重，右侧过渡到浅蓝。
-    - 菜单背景也使用极浅渐变，让左侧区域不显得单调。
+    本版目标：
+    - 选中项：蓝色横向渐变，文字白色，无边框。
+    - 未选中项：深色文字，无边框。
+    - 悬停项：浅蓝背景，无边框。
+    - 禁用项：仍保持深色文字，避免视觉发灰。
+    - 图标颜色由 main_window.py 在普通图标和 _s 白色图标之间切换。
     """
     primary = theme["primary"]
     primary_hover = theme["primary_hover"]
     primary_pressed = theme["primary_pressed"]
     primary_light = theme["primary_light"]
     primary_lighter = theme["primary_lighter"]
-    primary_border = theme["primary_border"]
 
     background = theme["background"]
     background_alt = theme["background_alt"]
@@ -43,7 +44,6 @@ def _side_navigation_qss(theme: Dict[str, str]) -> str:
     border = theme["border"]
 
     text_primary = theme["text_primary"]
-    text_muted = theme["text_muted"]
     text_inverse = theme["text_inverse"]
 
     return f"""
@@ -61,7 +61,7 @@ QPushButton#SideButton {{
     min-height: 42px;
     padding: 0px 14px 0px 18px;
     margin: 0px 10px 0px 8px;
-    border: 1px solid transparent;
+    border: none;
     border-radius: 7px;
     background-color: transparent;
     color: {text_primary};
@@ -76,18 +76,19 @@ QPushButton#SideButton:hover {{
         stop: 0 {primary_lighter},
         stop: 1 {surface_hover}
     );
-    border: 1px solid {primary_border};
+    border: none;
     color: {primary_pressed};
 }}
 
 QPushButton#SideButton:checked {{
     background: qlineargradient(
         x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 {primary},
-        stop: 0.52 {primary_hover},
+        stop: 0 {primary_pressed},
+        stop: 0.42 {primary},
+        stop: 0.78 {primary_hover},
         stop: 1 {primary_light}
     );
-    border: 1px solid {primary};
+    border: none;
     color: {text_inverse};
     font-weight: 700;
 }}
@@ -96,23 +97,24 @@ QPushButton#SideButton:checked:hover {{
     background: qlineargradient(
         x1: 0, y1: 0, x2: 1, y2: 0,
         stop: 0 {primary_pressed},
-        stop: 0.55 {primary},
+        stop: 0.48 {primary},
+        stop: 0.82 {primary_hover},
         stop: 1 {primary_light}
     );
-    border: 1px solid {primary_pressed};
+    border: none;
     color: {text_inverse};
 }}
 
 QPushButton#SideButton:disabled {{
     background-color: transparent;
-    border: 1px solid transparent;
-    color: {text_muted};
+    border: none;
+    color: {text_primary};
 }}
 
 QPushButton#SideButton:disabled:hover {{
     background-color: transparent;
-    border: 1px solid transparent;
-    color: {text_muted};
+    border: none;
+    color: {text_primary};
 }}
 """
 

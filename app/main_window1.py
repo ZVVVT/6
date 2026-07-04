@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.ui_style import get_main_window_stylesheet
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -14,7 +15,6 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from app.ui_style import get_main_window_stylesheet
 from app.analysis_window import AnalysisWindow
 from app.case_detail_window import CaseDetailWindow
 from app.case_manager_window import CaseManagerWindow
@@ -25,13 +25,16 @@ from core.database import Database
 
 
 class MainWindow(QMainWindow):
-    """主窗口统一页面骨架。
+    """
+    主窗口统一页面骨架。
 
-    本版重点：
-    1. 左侧导航使用普通图标 + 选中白色图标两套 SVG。
-    2. 普通图标：assets/icons/*.svg
-    3. 选中图标：assets/icons/*_s.svg
-    4. 不再使用复杂的图标染色补丁，便于维护。
+    本版包含：
+    1. 软件名称 / LOGO 从 config.ini 的 [AppInfo] 读取。
+    2. 系统设置固定到左侧菜单底部。
+    3. 左侧菜单增加 SVG 图标。
+    4. 右侧统一标题栏增加当前页面图标。
+    5. 左侧菜单选中态：浅蓝背景 + 深蓝文字 + 左侧蓝色竖条。
+    6. 鼠标悬停态：浅灰蓝背景。
     """
 
     PAGE_ICONS = {
@@ -40,14 +43,6 @@ class MainWindow(QMainWindow):
         "蛋白分析": "protein_analysis.svg",
         "报告管理": "report.svg",
         "系统设置": "settings.svg",
-    }
-
-    PAGE_SELECTED_ICONS = {
-        "病例管理": "case_manager_s.svg",
-        "病例详情": "case_detail_s.svg",
-        "蛋白分析": "protein_analysis_s.svg",
-        "报告管理": "report_s.svg",
-        "系统设置": "settings_s.svg",
     }
 
     def __init__(self):
@@ -72,6 +67,7 @@ class MainWindow(QMainWindow):
         self.database = Database(str(database_path))
 
         self.current_case = None
+
         self._page_title_map = {}
         self._page_button_map = {}
 
@@ -85,7 +81,6 @@ class MainWindow(QMainWindow):
         path_text = str(path_value or "").strip()
         if not path_text or path_text == ".":
             return self.project_root
-
         path = Path(path_text)
         if path.is_absolute():
             return path
@@ -103,7 +98,8 @@ class MainWindow(QMainWindow):
         return QIcon()
 
     def apply_app_branding(self):
-        """应用软件名称和窗口 LOGO。
+        """
+        应用软件名称和窗口 LOGO。
 
         来源：config.ini
         [AppInfo]
@@ -153,6 +149,9 @@ class MainWindow(QMainWindow):
         side_layout.setContentsMargins(0, 16, 0, 12)
         side_layout.setSpacing(4)
 
+        # 左侧导航不再显示“功能菜单”标题，减少重复信息。
+        # 保留顶部留白，让第一个菜单项不会贴边。
+
         self.btn_cases = QPushButton("病例管理")
         self.btn_detail = QPushButton("病例详情")
         self.btn_analysis = QPushButton("蛋白分析")
@@ -167,7 +166,7 @@ class MainWindow(QMainWindow):
             self.btn_settings,
         ]
 
-        # 图标绑定。普通状态使用深色图标，选中状态使用 *_s.svg 白色图标。
+        # 图标绑定。
         self.apply_side_button_icon(self.btn_cases, "病例管理")
         self.apply_side_button_icon(self.btn_detail, "病例详情")
         self.apply_side_button_icon(self.btn_analysis, "蛋白分析")
@@ -181,6 +180,7 @@ class MainWindow(QMainWindow):
             self.btn_analysis,
             self.btn_reports,
         ]
+
         for btn in business_buttons:
             self.prepare_side_button(btn)
             side_layout.addWidget(btn)
@@ -204,6 +204,7 @@ class MainWindow(QMainWindow):
         self.header_frame = QFrame()
         self.header_frame.setObjectName("UnifiedPageHeader")
         self.header_frame.setFixedHeight(58)
+
         header_layout = QHBoxLayout(self.header_frame)
         header_layout.setContentsMargins(18, 0, 18, 0)
         header_layout.setSpacing(10)
@@ -265,9 +266,10 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(side_frame)
         main_layout.addWidget(content_frame, 1)
-        self.setCentralWidget(central_widget)
 
+        self.setCentralWidget(central_widget)
         self.apply_unified_style()
+
         self.set_case_related_buttons_enabled(False)
         self.statusBar().showMessage("系统就绪")
         self.switch_page(self.page_cases, self.btn_cases)
@@ -283,37 +285,14 @@ class MainWindow(QMainWindow):
         button.setIconSize(QSize(18, 18))
         button.setMinimumHeight(42)
 
-    def side_icon_file_for_button(self, button: QPushButton, page_title: str) -> str:
-        """根据按钮选中状态返回普通图标或白色选中图标。"""
-        if button.isChecked():
-            return self.PAGE_SELECTED_ICONS.get(page_title) or self.PAGE_ICONS.get(page_title, "")
-        return self.PAGE_ICONS.get(page_title, "")
-
     def apply_side_button_icon(self, button: QPushButton, page_title: str):
-        """给左侧按钮设置图标。
-
-        说明：
-        - 未选中：使用普通深色图标，例如 case_manager.svg。
-        - 选中：使用白色图标，例如 case_manager_s.svg。
-        - 如果白色图标不存在，自动回退到普通图标，避免报错。
-        """
-        icon_file = self.side_icon_file_for_button(button, page_title)
+        icon_file = self.PAGE_ICONS.get(page_title, "")
         if not icon_file:
             return
-
         icon = self.load_icon(icon_file)
-        if icon.isNull() and icon_file.endswith("_s.svg"):
-            icon = self.load_icon(self.PAGE_ICONS.get(page_title, ""))
-
         if not icon.isNull():
             button.setIcon(icon)
             button.setIconSize(QSize(18, 18))
-
-    def refresh_side_button_icons(self):
-        """根据当前选中状态刷新左侧导航图标。"""
-        for button in getattr(self, "menu_buttons", []):
-            page_title = button.text().strip()
-            self.apply_side_button_icon(button, page_title)
 
     def set_header_icon(self, page_title: str):
         icon_file = self.PAGE_ICONS.get(page_title, "")
@@ -334,7 +313,9 @@ class MainWindow(QMainWindow):
         self.prepare_embedded_page(page, title)
 
     def prepare_embedded_page(self, page: QWidget, page_title: str):
-        """统一页面主体边距，并隐藏页面内部旧标题。标题统一由 MainWindow 绘制。"""
+        """
+        统一页面主体边距，并隐藏页面内部旧标题。标题统一由 MainWindow 绘制。
+        """
         layout = page.layout()
         if layout is not None:
             layout.setContentsMargins(18, 10, 18, 18)
@@ -360,7 +341,12 @@ class MainWindow(QMainWindow):
     # 统一样式
     # ------------------------------------------------------------------
     def apply_unified_style(self):
-        """应用主窗口局部样式。颜色统一由 app/theme.py 控制。"""
+        """
+        应用主窗口局部样式。
+
+        颜色不再写死，统一由 app/theme.py 控制。
+        后续做主题切换时，只需要让这里传入不同 theme_key。
+        """
         self.setStyleSheet(get_main_window_stylesheet())
 
     # ------------------------------------------------------------------
@@ -380,7 +366,6 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("系统配置已刷新，无需重启。")
         self.refresh_header_context()
-        self.refresh_side_button_icons()
 
     # ------------------------------------------------------------------
     # 页面切换
@@ -389,14 +374,11 @@ class MainWindow(QMainWindow):
         self.btn_detail.setEnabled(enabled)
         self.btn_analysis.setEnabled(enabled)
         self.btn_reports.setEnabled(enabled)
-        if hasattr(self, "menu_buttons"):
-            self.refresh_side_button_icons()
 
     def switch_page(self, page, active_button):
         self.stack.setCurrentWidget(page)
         for btn in self.menu_buttons:
             btn.setChecked(btn == active_button)
-        self.refresh_side_button_icons()
         self.refresh_header()
         self.hide_old_context_labels(page)
 
@@ -426,7 +408,7 @@ class MainWindow(QMainWindow):
 
         if title == "蛋白分析":
             self.header_context_label.setText(
-                f"当前病例：{case_no} 姓名：{patient_name} 样本号：{sample_no} 检测日期：{test_date}"
+                f"当前病例：{case_no}    姓名：{patient_name}    样本号：{sample_no}    检测日期：{test_date}"
             )
         elif title == "报告管理":
             self.header_context_label.setText(f"当前病例：{case_no} - {patient_name}")
@@ -460,9 +442,11 @@ class MainWindow(QMainWindow):
                 case_data = fresh_case
 
         self.current_case = case_data
+
         self.page_detail.set_case(case_data)
         self.page_analysis.set_case(case_data)
         self.page_reports.set_case(case_data)
+
         self.set_case_related_buttons_enabled(True)
 
         case_no = case_data.get("case_no", "")
@@ -476,13 +460,11 @@ class MainWindow(QMainWindow):
         self.hide_old_context_labels(self.page_detail)
         self.hide_old_context_labels(self.page_analysis)
         self.hide_old_context_labels(self.page_reports)
-        self.refresh_side_button_icons()
 
     def open_analysis_for_case(self, case_data):
         if not case_data:
             self.statusBar().showMessage("请先在病例管理中选择病例")
             return
-
         self.set_current_case(case_data)
         self.switch_page(self.page_analysis, self.btn_analysis)
 
@@ -490,7 +472,6 @@ class MainWindow(QMainWindow):
         if not case_data:
             self.statusBar().showMessage("请先在病例管理中选择病例")
             return
-
         self.set_current_case(case_data)
         self.page_reports.refresh_analysis_results()
         self.switch_page(self.page_reports, self.btn_reports)
@@ -506,7 +487,6 @@ class MainWindow(QMainWindow):
 
         title_label = QLabel(title)
         title_label.setObjectName("PageTitle")
-
         message_label = QLabel(message)
         message_label.setObjectName("SectionHint")
         message_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)

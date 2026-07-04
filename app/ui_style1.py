@@ -3,11 +3,6 @@
 
 本文件只负责根据主题生成 QSS。
 颜色统一来自 app/theme.py，页面里尽量不要再直接写死颜色。
-
-本版重点：
-1. 左侧导航栏改为浅色渐变背景。
-2. 左侧导航按钮选中态改为蓝色横向渐变。
-3. 渐变颜色仍然从主题变量推导，后续换主题不需要改页面代码。
 """
 
 from __future__ import annotations
@@ -19,102 +14,6 @@ from app.theme import DEFAULT_THEME_KEY, get_theme
 
 def _qss_value(theme: Dict[str, str], key: str, default: str = "") -> str:
     return theme.get(key, default)
-
-
-def _side_navigation_qss(theme: Dict[str, str]) -> str:
-    """左侧导航专用 QSS。
-
-    说明：
-    - 不新增主题字段，直接复用 primary / primary_light / background 等变量。
-    - 选中项使用横向渐变，左侧主色更重，右侧过渡到浅蓝。
-    - 菜单背景也使用极浅渐变，让左侧区域不显得单调。
-    """
-    primary = theme["primary"]
-    primary_hover = theme["primary_hover"]
-    primary_pressed = theme["primary_pressed"]
-    primary_light = theme["primary_light"]
-    primary_lighter = theme["primary_lighter"]
-    primary_border = theme["primary_border"]
-
-    background = theme["background"]
-    background_alt = theme["background_alt"]
-    surface = theme["surface"]
-    surface_hover = theme["surface_hover"]
-    border = theme["border"]
-
-    text_primary = theme["text_primary"]
-    text_muted = theme["text_muted"]
-    text_inverse = theme["text_inverse"]
-
-    return f"""
-QFrame#SideMenu {{
-    background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 {surface},
-        stop: 0.58 {background},
-        stop: 1 {background_alt}
-    );
-    border-right: 1px solid {border};
-}}
-
-QPushButton#SideButton {{
-    min-height: 42px;
-    padding: 0px 14px 0px 18px;
-    margin: 0px 10px 0px 8px;
-    border: 1px solid transparent;
-    border-radius: 7px;
-    background-color: transparent;
-    color: {text_primary};
-    font-size: 14px;
-    font-weight: 500;
-    text-align: left;
-}}
-
-QPushButton#SideButton:hover {{
-    background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 {primary_lighter},
-        stop: 1 {surface_hover}
-    );
-    border: 1px solid {primary_border};
-    color: {primary_pressed};
-}}
-
-QPushButton#SideButton:checked {{
-    background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 {primary},
-        stop: 0.52 {primary_hover},
-        stop: 1 {primary_light}
-    );
-    border: 1px solid {primary};
-    color: {text_inverse};
-    font-weight: 700;
-}}
-
-QPushButton#SideButton:checked:hover {{
-    background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 {primary_pressed},
-        stop: 0.55 {primary},
-        stop: 1 {primary_light}
-    );
-    border: 1px solid {primary_pressed};
-    color: {text_inverse};
-}}
-
-QPushButton#SideButton:disabled {{
-    background-color: transparent;
-    border: 1px solid transparent;
-    color: {text_muted};
-}}
-
-QPushButton#SideButton:disabled:hover {{
-    background-color: transparent;
-    border: 1px solid transparent;
-    color: {text_muted};
-}}
-"""
 
 
 def get_app_stylesheet(theme_key: Optional[str] = None) -> str:
@@ -173,8 +72,6 @@ def get_app_stylesheet(theme_key: Optional[str] = None) -> str:
     table_alt_bg = _qss_value(theme, "table_alt_bg")
     table_grid = _qss_value(theme, "table_grid")
     table_selected_bg = _qss_value(theme, "table_selected_bg")
-
-    side_navigation_qss = _side_navigation_qss(theme)
 
     return f"""
 /* -------------------------
@@ -243,6 +140,11 @@ QLabel#SectionTitle {{
 /* -------------------------
    主窗口骨架
 ------------------------- */
+QFrame#SideMenu {{
+    background-color: {background_alt};
+    border-right: 1px solid {border};
+}}
+
 QFrame#ContentFrame {{
     background-color: {background};
 }}
@@ -274,7 +176,41 @@ QStackedWidget#PageStack {{
 /* -------------------------
    左侧导航
 ------------------------- */
-{side_navigation_qss}
+QPushButton#SideButton {{
+    min-height: 42px;
+    padding: 0px 14px 0px 14px;
+    border: none;
+    border-left: 4px solid transparent;
+    border-radius: 0px;
+    background-color: transparent;
+    color: {text_primary};
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+}}
+
+QPushButton#SideButton:hover {{
+    background-color: {surface_hover};
+    color: {primary};
+}}
+
+QPushButton#SideButton:checked {{
+    background-color: {primary_light};
+    color: {primary_pressed};
+    border-left: 4px solid {primary};
+    font-weight: 700;
+}}
+
+QPushButton#SideButton:disabled {{
+    background-color: transparent;
+    color: {text_muted};
+    border-left: 4px solid transparent;
+}}
+
+QPushButton#SideButton:disabled:hover {{
+    background-color: transparent;
+    color: {text_muted};
+}}
 
 /* -------------------------
    卡片 / 分组
@@ -725,18 +661,65 @@ def get_main_window_stylesheet(theme_key: Optional[str] = None) -> str:
     """
     主窗口局部样式。
 
-    当前 main_window.py 会调用这个函数给主窗口设置局部样式。
-    这里重点覆盖左侧导航栏、右侧页面背景和统一标题栏。
+    说明：
+    当前 main_window.py 里有 apply_unified_style()。
+    这段样式专门给主窗口用，避免它继续写死蓝色。
     """
     theme = get_theme(theme_key or DEFAULT_THEME_KEY)
 
+    primary = theme["primary"]
+    primary_pressed = theme["primary_pressed"]
+    primary_light = theme["primary_light"]
+    surface_hover = theme["surface_hover"]
     background = theme["background"]
+    background_alt = theme["background_alt"]
     border = theme["border"]
+    text_primary = theme["text_primary"]
     text_secondary = theme["text_secondary"]
+    text_muted = theme["text_muted"]
     title = theme["title"]
 
     return f"""
-{_side_navigation_qss(theme)}
+QFrame#SideMenu {{
+    background-color: {background_alt};
+    border-right: 1px solid {border};
+}}
+
+QPushButton#SideButton {{
+    min-height: 42px;
+    padding: 0px 14px 0px 14px;
+    border: none;
+    border-left: 4px solid transparent;
+    border-radius: 0px;
+    background-color: transparent;
+    color: {text_primary};
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+}}
+
+QPushButton#SideButton:hover {{
+    background-color: {surface_hover};
+    color: {primary};
+}}
+
+QPushButton#SideButton:checked {{
+    background-color: {primary_light};
+    color: {primary_pressed};
+    border-left: 4px solid {primary};
+    font-weight: 700;
+}}
+
+QPushButton#SideButton:disabled {{
+    background-color: transparent;
+    color: {text_muted};
+    border-left: 4px solid transparent;
+}}
+
+QPushButton#SideButton:disabled:hover {{
+    background-color: transparent;
+    color: {text_muted};
+}}
 
 QFrame#ContentFrame {{
     background-color: {background};
