@@ -24,24 +24,21 @@ def _qss_value(theme: Dict[str, str], key: str, default: str = "") -> str:
 def _side_navigation_qss(theme: Dict[str, str]) -> str:
     """左侧导航专用 QSS。
 
-    说明：
-    - 不新增主题字段，直接复用 primary / primary_light / background 等变量。
-    - 选中项使用横向渐变，左侧主色更重，右侧过渡到浅蓝。
-    - 菜单背景也使用极浅渐变，让左侧区域不显得单调。
+    关键说明：
+    1. 选中项只保留渐变背景，不画任何外圈边框。
+    2. hover / checked / focus / disabled 全状态都显式 border: none。
+    3. 不再使用 border: 1px solid transparent，因为 Qt 仍可能产生可见描边。
     """
     primary = theme["primary"]
     primary_hover = theme["primary_hover"]
     primary_pressed = theme["primary_pressed"]
     primary_light = theme["primary_light"]
     primary_lighter = theme["primary_lighter"]
-    primary_border = theme["primary_border"]
-
     background = theme["background"]
     background_alt = theme["background_alt"]
     surface = theme["surface"]
     surface_hover = theme["surface_hover"]
     border = theme["border"]
-
     text_primary = theme["text_primary"]
     text_muted = theme["text_muted"]
     text_inverse = theme["text_inverse"]
@@ -49,7 +46,8 @@ def _side_navigation_qss(theme: Dict[str, str]) -> str:
     return f"""
 QFrame#SideMenu {{
     background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
+        x1: 0, y1: 0,
+        x2: 1, y2: 0,
         stop: 0 {surface},
         stop: 0.58 {background},
         stop: 1 {background_alt}
@@ -57,61 +55,79 @@ QFrame#SideMenu {{
     border-right: 1px solid {border};
 }}
 
+/* 左侧导航：基础态。这里必须写 border: none，不能写 1px transparent。 */
 QPushButton#SideButton {{
     min-height: 42px;
     padding: 0px 14px 0px 18px;
     margin: 0px 10px 0px 8px;
-    border: 1px solid transparent;
+    border: none;
+    outline: none;
     border-radius: 7px;
-    background-color: transparent;
+    background: transparent;
     color: {text_primary};
     font-size: 14px;
     font-weight: 500;
     text-align: left;
 }}
 
+/* 未选中悬停：只给浅背景，不给任何描边。 */
 QPushButton#SideButton:hover {{
+    border: none;
+    outline: none;
     background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
+        x1: 0, y1: 0,
+        x2: 1, y2: 0,
         stop: 0 {primary_lighter},
         stop: 1 {surface_hover}
     );
-    border: 1px solid {primary_border};
     color: {primary_pressed};
 }}
 
+/* 选中态：只有渐变背景，无外圈边框。 */
 QPushButton#SideButton:checked {{
+    border: none;
+    outline: none;
     background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
+        x1: 0, y1: 0,
+        x2: 1, y2: 0,
         stop: 0 {primary},
-        stop: 0.52 {primary_hover},
+        stop: 0.56 {primary_hover},
         stop: 1 {primary_light}
     );
-    border: 1px solid {primary};
     color: {text_inverse};
     font-weight: 700;
 }}
 
+/* 选中 + 悬停：仍然无边框，只稍微加深左侧渐变。 */
 QPushButton#SideButton:checked:hover {{
+    border: none;
+    outline: none;
     background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 0,
+        x1: 0, y1: 0,
+        x2: 1, y2: 0,
         stop: 0 {primary_pressed},
-        stop: 0.55 {primary},
+        stop: 0.56 {primary},
         stop: 1 {primary_light}
     );
-    border: 1px solid {primary_pressed};
     color: {text_inverse};
 }}
 
-QPushButton#SideButton:disabled {{
-    background-color: transparent;
-    border: 1px solid transparent;
-    color: {text_muted};
+/* 焦点态强制取消外框，避免 Tab/鼠标点击后出现焦点描边。 */
+QPushButton#SideButton:focus,
+QPushButton#SideButton:hover:focus,
+QPushButton#SideButton:checked:focus,
+QPushButton#SideButton:checked:hover:focus {{
+    border: none;
+    outline: none;
 }}
 
-QPushButton#SideButton:disabled:hover {{
-    background-color: transparent;
-    border: 1px solid transparent;
+/* 不可用：文字灰一些，图标仍由 main_window.py 使用普通深色 SVG。 */
+QPushButton#SideButton:disabled,
+QPushButton#SideButton:disabled:hover,
+QPushButton#SideButton:disabled:focus {{
+    background: transparent;
+    border: none;
+    outline: none;
     color: {text_muted};
 }}
 """
