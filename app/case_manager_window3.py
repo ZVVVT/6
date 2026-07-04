@@ -2,7 +2,7 @@ import sqlite3
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -238,18 +238,44 @@ class CaseManagerWindow(QWidget):
         )
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)   # 状态
-        header.setSectionResizeMode(2, QHeaderView.Stretch)            # 病历号
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)   # 姓名
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)   # 年龄
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)   # 性别
-        header.setSectionResizeMode(6, QHeaderView.Stretch)            # 联系方式
-        header.setSectionResizeMode(7, QHeaderView.Stretch)            # 样本号
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)   # 检测日期
-        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)   # 报告状态
-        header.setSectionResizeMode(10, QHeaderView.ResizeToContents)  # 创建时间
-        header.setSectionResizeMode(11, QHeaderView.ResizeToContents)  # 更新时间
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(42)
+
+        # 列宽说明：
+        # 1. 不再使用单一 Stretch，也不写固定像素列宽。
+        # 2. 采用“最小宽度 + 剩余空间按权重分配”的响应式列宽。
+        # 3. 窗口变宽时，病历号、联系方式、样本号、时间列会自动变宽；
+        #    窗口变窄时，先压缩到最小宽度，仍不够时允许横向滚动。
+        for column in range(1, self.table.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+
+        self._column_min_widths = {
+            1: 100,  # 状态：保证“待分析/已完成”胶囊标签完整
+            2: 190,  # 病历号
+            3: 60,   # 姓名
+            4: 48,   # 年龄
+            5: 48,   # 性别
+            6: 108,  # 联系方式
+            7: 122,  # 样本号
+            8: 92,   # 检测日期
+            9: 92,   # 报告状态
+            10: 132, # 创建时间
+            11: 132, # 更新时间
+        }
+        self._column_stretch_weights = {
+            1: 0.6,
+            2: 4.0,
+            3: 0.7,
+            4: 0.35,
+            5: 0.35,
+            6: 1.6,
+            7: 1.8,
+            8: 1.0,
+            9: 1.0,
+            10: 2.0,
+            11: 2.0,
+        }
+        QTimer.singleShot(0, self._apply_responsive_table_columns)
 
         table_card.addWidget(self.table, 1)
 
@@ -280,6 +306,56 @@ class CaseManagerWindow(QWidget):
         self.btn_delete.clicked.connect(self.delete_case)
         self.table.doubleClicked.connect(self.open_selected_case)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_table_columns()
+
+    def _apply_responsive_table_columns(self) -> None:
+        """根据表格可视宽度动态计算列宽。
+
+        这里不是简单百分比，而是更适合业务表格的方案：
+        - 每列先保留一个最小宽度，避免状态标签、日期、时间被压坏；
+        - 剩余空间再按权重分配，窗口越宽，主要字段自动变宽；
+        - 如果窗口太窄，则使用最小宽度并允许横向滚动。
+        """
+        if not hasattr(self, "table"):
+            return
+        if not hasattr(self, "_column_min_widths"):
+            return
+
+        viewport_width = max(0, self.table.viewport().width() - 2)
+        visible_columns = [column for column in range(1, self.table.columnCount()) if not self.table.isColumnHidden(column)]
+        if not visible_columns:
+            return
+
+        min_widths = self._column_min_widths
+        weights = self._column_stretch_weights
+        min_total = sum(min_widths.get(column, 60) for column in visible_columns)
+
+        if viewport_width <= 0:
+            return
+
+        if viewport_width <= min_total:
+            for column in visible_columns:
+                self.table.setColumnWidth(column, min_widths.get(column, 60))
+            return
+
+        extra_width = viewport_width - min_total
+        total_weight = sum(weights.get(column, 1.0) for column in visible_columns)
+        used_width = 0
+
+        for column in visible_columns[:-1]:
+            base_width = min_widths.get(column, 60)
+            weight = weights.get(column, 1.0)
+            width = int(base_width + extra_width * weight / total_weight)
+            self.table.setColumnWidth(column, width)
+            used_width += width
+
+        # 最后一列吸收取整误差，避免右侧出现细小空隙。
+        last_column = visible_columns[-1]
+        last_width = max(min_widths.get(last_column, 60), viewport_width - used_width)
+        self.table.setColumnWidth(last_column, last_width)
+
     # ------------------------------------------------------------------
     # 数据加载与统计
     # ------------------------------------------------------------------
@@ -302,6 +378,7 @@ class CaseManagerWindow(QWidget):
         self._fill_table(cases)
         self._update_summary_cards(cases)
         self._update_footer(len(cases))
+        self._apply_responsive_table_columns()
 
     def _fill_table(self, cases: List[Dict]) -> None:
         self.table.setRowCount(len(cases))
