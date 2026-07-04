@@ -20,56 +20,17 @@ from app.theme import DEFAULT_THEME_KEY, get_theme
 def _qss_value(theme: Dict[str, str], key: str, default: str = "") -> str:
     return theme.get(key, default)
 
-def _hex_to_rgb(color: str) -> tuple[int, int, int]:
-    """将 #RRGGBB 转为 RGB。主题色异常时返回黑色，避免样式生成报错。"""
-    value = str(color or "").strip()
-    if value.startswith("#"):
-        value = value[1:]
-    if len(value) != 6:
-        return 0, 0, 0
-    try:
-        return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
-    except ValueError:
-        return 0, 0, 0
-
-
-def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
-    r, g, b = rgb
-    return "#{:02X}{:02X}{:02X}".format(
-        max(0, min(255, int(r))),
-        max(0, min(255, int(g))),
-        max(0, min(255, int(b))),
-    )
-
-
-def _mix_color(color: str, target: str, ratio: float) -> str:
-    """
-    颜色混合。
-
-    ratio 越接近 0，越接近 color；
-    ratio 越接近 1，越接近 target。
-    用于根据主题主色自动生成更柔和的渐变色。
-    """
-    ratio = max(0.0, min(1.0, float(ratio)))
-    r1, g1, b1 = _hex_to_rgb(color)
-    r2, g2, b2 = _hex_to_rgb(target)
-    return _rgb_to_hex((
-        r1 + (r2 - r1) * ratio,
-        g1 + (g2 - g1) * ratio,
-        b1 + (b2 - b1) * ratio,
-    ))
-
 
 def _side_navigation_qss(theme: Dict[str, str]) -> str:
     """左侧导航专用 QSS。
 
-    本版目标：
-    1. 选中项为更柔和的蓝色渐变，更接近参考图。
-    2. 选中项无边框、无焦点描边。
-    3. 未选中项为深色文字；不可用项文字灰一些。
-    4. 渐变色通过主题主色自动推导，后续换主题不用改页面代码。
+    关键说明：
+    1. 选中项只保留渐变背景，不画任何外圈边框。
+    2. hover / checked / focus / disabled 全状态都显式 border: none。
+    3. 不再使用 border: 1px solid transparent，因为 Qt 仍可能产生可见描边。
     """
     primary = theme["primary"]
+    primary_hover = theme["primary_hover"]
     primary_pressed = theme["primary_pressed"]
     primary_light = theme["primary_light"]
     primary_lighter = theme["primary_lighter"]
@@ -82,41 +43,24 @@ def _side_navigation_qss(theme: Dict[str, str]) -> str:
     text_muted = theme["text_muted"]
     text_inverse = theme["text_inverse"]
 
-    # 选中态渐变：左侧保持主色，向右逐步过渡到浅蓝。
-    # 比“深蓝 -> 深蓝 -> 浅蓝”的过渡更温和，也更接近效果图。
-    nav_selected_start = _mix_color(primary, surface, 0.03)
-    nav_selected_mid = _mix_color(primary, surface, 0.34)
-    nav_selected_end = _mix_color(primary_light, surface, 0.18)
-
-    # 悬停态：很淡的蓝色，不抢选中态视觉。
-    nav_hover_start = _mix_color(primary_lighter, surface, 0.10)
-    nav_hover_end = _mix_color(surface_hover, surface, 0.28)
-
-    # 侧栏背景：左侧偏白，右侧轻微蓝灰，避免过重。
-    side_bg_start = surface
-    side_bg_mid = _mix_color(background, surface, 0.45)
-    side_bg_end = _mix_color(background_alt, surface, 0.30)
-
     return f"""
 QFrame#SideMenu {{
     background: qlineargradient(
         x1: 0, y1: 0,
         x2: 1, y2: 0,
-        stop: 0 {side_bg_start},
-        stop: 0.58 {side_bg_mid},
-        stop: 1 {side_bg_end}
+        stop: 0 {surface},
+        stop: 0.58 {background},
+        stop: 1 {background_alt}
     );
     border-right: 1px solid {border};
 }}
 
-/* 左侧导航：基础态 */
+/* 左侧导航：基础态。这里必须写 border: none，不能写 1px transparent。 */
 QPushButton#SideButton {{
-    qproperty-flat: true;
     min-height: 42px;
     padding: 0px 14px 0px 18px;
     margin: 0px 10px 0px 8px;
-    border: 0px;
-    border-image: none;
+    border: none;
     outline: none;
     border-radius: 7px;
     background: transparent;
@@ -126,68 +70,63 @@ QPushButton#SideButton {{
     text-align: left;
 }}
 
-/* 未选中悬停：只给非常淡的浅蓝背景，不给描边 */
+/* 未选中悬停：只给浅背景，不给任何描边。 */
 QPushButton#SideButton:hover {{
-    border: 0px;
-    border-image: none;
+    border: none;
     outline: none;
     background: qlineargradient(
         x1: 0, y1: 0,
         x2: 1, y2: 0,
-        stop: 0 {nav_hover_start},
-        stop: 1 {nav_hover_end}
+        stop: 0 {primary_lighter},
+        stop: 1 {surface_hover}
     );
     color: {primary_pressed};
 }}
 
-/* 选中态：柔和渐变，无边框 */
+/* 选中态：只有渐变背景，无外圈边框。 */
 QPushButton#SideButton:checked {{
-    border: 0px;
-    border-image: none;
-    outline: none;
-    background: qlineargradient(
-        x1: 0, y1: 0,
-        x2: 1, y2: 0,
-        stop: 0 {nav_selected_start},
-        stop: 0.48 {nav_selected_mid},
-        stop: 1 {nav_selected_end}
-    );
-    color: {text_inverse};
-    font-weight: 700;
-}}
-
-/* 选中 + 悬停：只略微加深左侧，不出现边框 */
-QPushButton#SideButton:checked:hover {{
-    border: 0px;
-    border-image: none;
+    border: none;
     outline: none;
     background: qlineargradient(
         x1: 0, y1: 0,
         x2: 1, y2: 0,
         stop: 0 {primary},
-        stop: 0.48 {nav_selected_mid},
-        stop: 1 {nav_selected_end}
+        stop: 0.56 {primary_hover},
+        stop: 1 {primary_light}
+    );
+    color: {text_inverse};
+    font-weight: 700;
+}}
+
+/* 选中 + 悬停：仍然无边框，只稍微加深左侧渐变。 */
+QPushButton#SideButton:checked:hover {{
+    border: none;
+    outline: none;
+    background: qlineargradient(
+        x1: 0, y1: 0,
+        x2: 1, y2: 0,
+        stop: 0 {primary_pressed},
+        stop: 0.56 {primary},
+        stop: 1 {primary_light}
     );
     color: {text_inverse};
 }}
 
-/* 焦点态强制取消外框，避免点击后出现蓝色焦点描边 */
+/* 焦点态强制取消外框，避免 Tab/鼠标点击后出现焦点描边。 */
 QPushButton#SideButton:focus,
 QPushButton#SideButton:hover:focus,
 QPushButton#SideButton:checked:focus,
 QPushButton#SideButton:checked:hover:focus {{
-    border: 0px;
-    border-image: none;
+    border: none;
     outline: none;
 }}
 
-/* 不可用：背景透明，文字灰一些；图标继续由 main_window.py 使用普通深色 SVG */
+/* 不可用：文字灰一些，图标仍由 main_window.py 使用普通深色 SVG。 */
 QPushButton#SideButton:disabled,
 QPushButton#SideButton:disabled:hover,
 QPushButton#SideButton:disabled:focus {{
     background: transparent;
-    border: 0px;
-    border-image: none;
+    border: none;
     outline: none;
     color: {text_muted};
 }}
