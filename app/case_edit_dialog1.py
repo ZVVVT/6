@@ -1,5 +1,4 @@
 from datetime import datetime
-from pathlib import Path
 
 from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import (
@@ -267,193 +266,44 @@ class CaseEditDialog(QDialog):
         self.set_common_style()
 
     def set_common_style(self):
-        """
-        只优化控件外观，不改变原有布局。
-
-        注意：
-        之前页面错乱的根本原因，是为了美化下拉/日期图标时同时改了弹窗整体布局、
-        分组边距和控件高度，导致 680px 高度下“样本信息”区域被压缩重叠。
-        这里保留原来的紧凑布局参数，只替换下拉、日期、时间、数字框右侧图标样式。
-        """
-        icon_dir = Path(__file__).resolve().parent.parent / "assets" / "icons"
-
-        def icon_url(name: str) -> str:
-            path = icon_dir / name
-            if not path.exists():
-                return ""
-            return path.as_posix()
-
-        down_icon = icon_url("form_chevron_down.svg")
-        up_icon = icon_url("form_chevron_up.svg")
-        calendar_icon = icon_url("form_calendar.svg")
-
-        self.setStyleSheet(f"""
-            QDialog {{
+        self.setStyleSheet("""
+            QDialog {
                 background-color: #f7f9fc;
+                font-family: Microsoft YaHei;
                 font-size: 13px;
-            }}
-            QGroupBox {{
+            }
+            QGroupBox {
                 border: 1px solid #d9e2ef;
                 border-radius: 6px;
                 margin-top: 10px;
                 padding-top: 12px;
                 background-color: #ffffff;
-                font-weight: bold;
-            }}
-            QGroupBox::title {{
+            }
+            QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 6px;
                 color: #1f4e79;
-            }}
-            QLabel {{
+            }
+            QLabel {
                 color: #333333;
-                background: transparent;
-            }}
-            QLineEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit {{
+            }
+            QLineEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit {
                 min-height: 24px;
-                max-height: 26px;
                 border: 1px solid #cfd8e3;
                 border-radius: 4px;
-                padding-left: 6px;
-                padding-right: 24px;
+                padding-left: 4px;
                 background-color: #ffffff;
-                color: #1f2937;
-                selection-background-color: #dbeafe;
-            }}
-            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus, QTimeEdit:focus {{
-                border: 1px solid #2f6fed;
-                background-color: #ffffff;
-            }}
-            QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDateEdit:disabled, QTimeEdit:disabled {{
-                background-color: #f3f6fb;
-                color: #9aa6b2;
-            }}
-
-            QComboBox {{
-                padding-right: 26px;
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 24px;
-                border-left: none;
-                border-top-right-radius: 4px;
-                border-bottom-right-radius: 4px;
-                background: transparent;
-            }}
-            QComboBox::drop-down:hover {{
-                background-color: #eef5ff;
-            }}
-            QComboBox::down-arrow {{
-                image: url("{down_icon}");
-                width: 10px;
-                height: 10px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 4px;
-                padding: 2px;
-                selection-background-color: #eaf2ff;
-                selection-color: #1f2937;
-                outline: none;
-            }}
-
-            QDateEdit, QTimeEdit, QSpinBox {{
-                padding-right: 24px;
-            }}
-            QDateEdit::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 24px;
-                border-left: none;
-                background: transparent;
-            }}
-            QDateEdit::down-arrow {{
-                image: url("{calendar_icon}");
-                width: 13px;
-                height: 13px;
-            }}
-            QDateEdit::drop-down:hover {{
-                background-color: #eef5ff;
-            }}
-
-            QSpinBox::up-button, QTimeEdit::up-button {{
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: 22px;
-                border-left: none;
-                border-bottom: none;
-                background: transparent;
-            }}
-            QSpinBox::down-button, QTimeEdit::down-button {{
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                width: 22px;
-                border-left: none;
-                border-top: none;
-                background: transparent;
-            }}
-            QSpinBox::up-button:hover, QTimeEdit::up-button:hover,
-            QSpinBox::down-button:hover, QTimeEdit::down-button:hover {{
-                background-color: #eef5ff;
-            }}
-            QSpinBox::up-arrow, QTimeEdit::up-arrow {{
-                image: url("{up_icon}");
-                width: 8px;
-                height: 8px;
-            }}
-            QSpinBox::down-arrow, QTimeEdit::down-arrow {{
-                image: url("{down_icon}");
-                width: 8px;
-                height: 8px;
-            }}
-
-            QTextEdit {{
+            }
+            QTextEdit {
                 border: 1px solid #cfd8e3;
                 border-radius: 4px;
                 background-color: #ffffff;
-                padding: 6px;
-                color: #1f2937;
-            }}
-            QTextEdit:focus {{
-                border: 1px solid #2f6fed;
-            }}
-            QCheckBox {{
-                color: #1f2937;
-                spacing: 6px;
-                background: transparent;
-            }}
-            QCheckBox::indicator {{
-                width: 14px;
-                height: 14px;
-                border: 1px solid #cfd8e3;
-                border-radius: 3px;
-                background-color: #ffffff;
-            }}
-            QCheckBox::indicator:hover {{
-                border: 1px solid #2f6fed;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: #2f6fed;
-                border: 1px solid #2f6fed;
-            }}
-            QPushButton {{
+            }
+            QPushButton {
                 min-width: 78px;
                 min-height: 28px;
-                border: 1px solid #cfd8e3;
-                border-radius: 5px;
-                background-color: #ffffff;
-                color: #1f2937;
-            }}
-            QPushButton:hover {{
-                background-color: #f3f7ff;
-                border-color: #9bbcf7;
-            }}
-            QPushButton:pressed {{
-                background-color: #eaf2ff;
-            }}
+            }
         """)
 
     def create_combo(self, items):
