@@ -44,10 +44,10 @@ from app.ui_components import (
 class CaseStatCard(CardFrame):
     """病例管理顶部统计卡片。
 
-    说明：
-    1. 这里使用主题颜色，不在页面里写死主色。
-    2. 图标先用文字符号承载，避免额外引入图标依赖。
-    3. 后续如需换成 SVG 图标，只需要替换本类内部实现。
+    本版使用 assets/icons/stat_*.svg 作为统计图标：
+    1. 图标在固定尺寸画布内居中渲染，避免不同 SVG 视觉大小不一致。
+    2. 图标颜色由主题色统一控制，后续换主题时不用改页面代码。
+    3. 字体族不在这里写死，继续跟随全局字体/系统设置。
     """
 
     def __init__(
@@ -55,61 +55,100 @@ class CaseStatCard(CardFrame):
         title: str,
         value: str = "0",
         unit: str = "例",
-        icon_text: str = "",
+        icon_name: str = "",
         accent: str = "primary",
+        fallback_text: str = "",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(
             parent=parent,
             object_name="StatCard",
-            margins=(16, 14, 16, 14),
+            margins=(16, 15, 18, 15),
             spacing=0,
             shadow=True,
         )
         self.theme = get_theme(DEFAULT_THEME_KEY)
         self.accent = accent
+        self.icon_name = icon_name
+        self.fallback_text = fallback_text
 
         root = QHBoxLayout()
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(14)
+        root.setSpacing(16)
 
-        self.icon_label = QLabel(icon_text)
+        self.icon_label = QLabel()
         self.icon_label.setAlignment(Qt.AlignCenter)
-        self.icon_label.setFixedSize(48, 48)
+        self.icon_label.setFixedSize(50, 50)
         self.icon_label.setObjectName("StatIconBox")
         self._apply_icon_style()
+        self._apply_icon_pixmap()
 
         text_layout = QVBoxLayout()
         text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(4)
+        text_layout.setSpacing(3)
 
         self.title_label = QLabel(title)
-        self.title_label.setObjectName("SectionHint")
+        self.title_label.setObjectName("StatCardTitle")
         self.title_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.title_label.setStyleSheet(
+            f"color: {self.theme.get('text_secondary', '#5E6B7A')}; font-size: 13px; font-weight: 500;"
+        )
 
         value_row = QHBoxLayout()
         value_row.setContentsMargins(0, 0, 0, 0)
         value_row.setSpacing(6)
 
         self.value_label = QLabel(str(value))
-        self.value_label.setObjectName("PageTitle")
+        self.value_label.setObjectName("StatCardValue")
         self.value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.value_label.setStyleSheet(
+            f"color: {self.theme.get('title', '#102A43')}; font-size: 24px; font-weight: 700;"
+        )
 
         self.unit_label = QLabel(unit)
-        self.unit_label.setObjectName("CurrentCaseLabel")
+        self.unit_label.setObjectName("StatCardUnit")
         self.unit_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.unit_label.setStyleSheet(
+            f"color: {self.theme.get('text_secondary', '#5E6B7A')}; font-size: 13px; font-weight: 500;"
+        )
 
         value_row.addWidget(self.value_label, 0, Qt.AlignBottom)
         value_row.addWidget(self.unit_label, 0, Qt.AlignBottom)
         value_row.addStretch(1)
 
+        text_layout.addStretch(1)
         text_layout.addWidget(self.title_label)
         text_layout.addLayout(value_row)
+        text_layout.addStretch(1)
 
         root.addWidget(self.icon_label, 0, Qt.AlignVCenter)
         root.addLayout(text_layout, 1)
         self.body_layout.addLayout(root)
-        self.setMinimumHeight(92)
+        self.setMinimumHeight(88)
+
+    @staticmethod
+    def _project_root() -> Path:
+        return Path(__file__).resolve().parents[1]
+
+    @classmethod
+    def _icons_dir(cls) -> Path:
+        return cls._project_root() / "assets" / "icons"
+
+    def _icon_path(self) -> Optional[Path]:
+        if not self.icon_name:
+            return None
+        candidates = [
+            self._icons_dir() / self.icon_name,
+            Path.cwd() / "assets" / "icons" / self.icon_name,
+            Path.cwd() / self.icon_name,
+        ]
+        for path in candidates:
+            try:
+                if path.exists():
+                    return path
+            except Exception:
+                continue
+        return None
 
     def _accent_colors(self) -> Tuple[str, str, str]:
         theme = self.theme
@@ -123,6 +162,56 @@ class CaseStatCard(CardFrame):
             return theme.get("purple", "#7C3AED"), theme.get("purple_bg", "#F2ECFF"), theme.get("purple_border", "#D8C8FF")
         return theme.get("primary", "#1769E0"), theme.get("primary_light", "#EAF2FF"), theme.get("primary_border", "#BCD7FF")
 
+    @staticmethod
+    def _replace_svg_color(svg_text: str, color: str) -> str:
+        if not color:
+            return svg_text
+        text = svg_text
+        text = re.sub(r'(?i)currentColor', color, text)
+        text = re.sub(r'(?i)color\s*:\s*[^;\"\']+', f'color:{color}', text)
+        text = re.sub(
+            r'(?i)stroke=("|\')(?!none\1|transparent\1|url\()[^"\']*("|\')',
+            f'stroke="{color}"',
+            text,
+        )
+        text = re.sub(
+            r'(?i)fill=("|\')(?!none\1|transparent\1|url\()[^"\']*("|\')',
+            f'fill="{color}"',
+            text,
+        )
+        if "<svg" in text and "color=" not in text[:300] and "color:" not in text[:500]:
+            text = re.sub(r'<svg\b', f'<svg color="{color}"', text, count=1)
+        return text
+
+    def _load_svg_pixmap(self, color: str, canvas_size: int = 32, glyph_size: int = 26) -> QPixmap:
+        pixmap = QPixmap(canvas_size, canvas_size)
+        pixmap.fill(Qt.transparent)
+
+        icon_path = self._icon_path()
+        if icon_path is None or QSvgRenderer is None or icon_path.suffix.lower() != ".svg":
+            return pixmap
+
+        try:
+            svg_text = icon_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            svg_text = icon_path.read_text(encoding="utf-8-sig", errors="ignore")
+        except Exception:
+            return pixmap
+
+        svg_text = self._replace_svg_color(svg_text, color)
+        renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
+        if not renderer.isValid():
+            return pixmap
+
+        margin = (canvas_size - glyph_size) / 2
+        target_rect = QRectF(margin, margin, glyph_size, glyph_size)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        renderer.render(painter, target_rect)
+        painter.end()
+        return pixmap
+
     def _apply_icon_style(self) -> None:
         color, bg, border = self._accent_colors()
         self.icon_label.setStyleSheet(
@@ -132,15 +221,23 @@ class CaseStatCard(CardFrame):
                 background-color: {bg};
                 border: 1px solid {border};
                 border-radius: 12px;
-                font-size: 22px;
+                font-size: 20px;
                 font-weight: 700;
             }}
             """
         )
 
+    def _apply_icon_pixmap(self) -> None:
+        color, _, _ = self._accent_colors()
+        pixmap = self._load_svg_pixmap(color=color, canvas_size=32, glyph_size=25)
+        if not pixmap.isNull() and not pixmap.toImage().isNull():
+            self.icon_label.setPixmap(pixmap)
+            return
+        if self.fallback_text:
+            self.icon_label.setText(self.fallback_text)
+
     def set_value(self, value) -> None:
         self.value_label.setText(str(value))
-
 
 class CaseManagerWindow(QWidget):
     case_selected = Signal(dict)
@@ -445,12 +542,12 @@ class CaseManagerWindow(QWidget):
         # 顶部统计卡片
         stats_layout = QHBoxLayout()
         stats_layout.setContentsMargins(0, 0, 0, 0)
-        stats_layout.setSpacing(14)
+        stats_layout.setSpacing(16)
 
-        self.card_total = CaseStatCard("病例总数", "0", "例", "＋", "primary")
-        self.card_today = CaseStatCard("今日新增", "0", "例", "人", "success")
-        self.card_report = CaseStatCard("已生成报告", "0", "例", "文", "purple")
-        self.card_waiting = CaseStatCard("待分析", "0", "例", "待", "warning")
+        self.card_total = CaseStatCard("病例总数", "0", "例", "stat_cases.svg", "primary", "＋")
+        self.card_today = CaseStatCard("今日新增", "0", "例", "stat_today.svg", "success", "人")
+        self.card_report = CaseStatCard("已生成报告", "0", "例", "stat_report.svg", "purple", "文")
+        self.card_waiting = CaseStatCard("待分析", "0", "例", "stat_pending.svg", "warning", "待")
 
         stats_layout.addWidget(self.card_total, 1)
         stats_layout.addWidget(self.card_today, 1)
