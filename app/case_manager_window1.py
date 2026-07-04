@@ -156,6 +156,7 @@ class CaseManagerWindow(QWidget):
         "检测日期",
         "报告状态",
         "创建时间",
+        "更新时间",
     ]
 
     def __init__(self, database, parent=None):
@@ -490,7 +491,7 @@ class CaseManagerWindow(QWidget):
         # 列宽说明：
         # 1. 不再使用单一 Stretch，也不写固定像素列宽。
         # 2. 采用“最小宽度 + 剩余空间按权重分配”的响应式列宽。
-        # 3. 窗口变宽时，病历号、联系方式、样本号、创建时间会自动变宽；
+        # 3. 窗口变宽时，病历号、联系方式、样本号、时间列会自动变宽；
         #    窗口变窄时，先压缩到最小宽度，仍不够时允许横向滚动。
         for column in range(1, self.table.columnCount()):
             header.setSectionResizeMode(column, QHeaderView.Interactive)
@@ -505,7 +506,8 @@ class CaseManagerWindow(QWidget):
             7: 122,  # 样本号
             8: 92,   # 检测日期
             9: 92,   # 报告状态
-            10: 150, # 创建时间
+            10: 132, # 创建时间
+            11: 132, # 更新时间
         }
         self._column_stretch_weights = {
             1: 0.6,
@@ -517,7 +519,8 @@ class CaseManagerWindow(QWidget):
             7: 1.8,
             8: 1.0,
             9: 1.0,
-            10: 2.2,
+            10: 2.0,
+            11: 2.0,
         }
         QTimer.singleShot(0, self._apply_responsive_table_columns)
 
@@ -646,6 +649,7 @@ class CaseManagerWindow(QWidget):
                 case.get("test_date", ""),
                 report_status,
                 case.get("created_at", ""),
+                case.get("updated_at", ""),
             ]
 
             for col_index, value in enumerate(values):
