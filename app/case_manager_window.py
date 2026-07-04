@@ -4,7 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal, QTimer, QSize, QByteArray
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QByteArray, QRectF
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -240,15 +240,27 @@ class CaseManagerWindow(QWidget):
             text = re.sub(r'<svg\b', f'<svg color="{color}"', text, count=1)
         return text
 
-    def _load_svg_icon(self, icon_name: str, size: int = 18, color: str = "") -> QIcon:
-        """稳定加载 SVG 为 QIcon。
+    def _load_svg_icon(
+        self,
+        icon_name: str,
+        canvas_size: int = 20,
+        color: str = "",
+        glyph_size: Optional[int] = None,
+    ) -> QIcon:
+        """稳定加载 SVG 为 QIcon，并把图标统一放进固定画布。
 
-        优先使用 QSvgRenderer 直接渲染成 QPixmap，避免 QIcon 对部分 SVG 语法支持不一致。
-        如果 QtSvg 不可用，再回退到 QIcon(path)。
+        修正点：
+        1. 不直接把不同 SVG 原始尺寸塞给按钮，避免搜索、刷新、编辑、删除视觉大小不一致。
+        2. 先渲染到固定 canvas，再把真实图形居中绘制到 glyph 区域。
+        3. 颜色统一在这里处理，刷新/编辑为中性灰，删除为红色，主按钮为白色。
         """
         icon_path = self._icon_path(icon_name)
         if icon_path is None:
             return QIcon()
+
+        canvas_size = max(12, int(canvas_size))
+        glyph_size = int(glyph_size or round(canvas_size * 0.82))
+        glyph_size = max(10, min(canvas_size, glyph_size))
 
         if QSvgRenderer is not None and icon_path.suffix.lower() == ".svg":
             try:
@@ -262,11 +274,18 @@ class CaseManagerWindow(QWidget):
                 svg_text = self._replace_svg_color(svg_text, color)
                 renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
                 if renderer.isValid():
-                    pixmap = QPixmap(size, size)
+                    pixmap = QPixmap(canvas_size, canvas_size)
                     pixmap.fill(Qt.transparent)
+
+                    margin = (canvas_size - glyph_size) / 2
+                    target_rect = QRectF(margin, margin, glyph_size, glyph_size)
+
                     painter = QPainter(pixmap)
-                    renderer.render(painter)
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+                    renderer.render(painter, target_rect)
                     painter.end()
+
                     if not pixmap.isNull():
                         return QIcon(pixmap)
 
@@ -275,16 +294,105 @@ class CaseManagerWindow(QWidget):
             return icon
         return QIcon()
 
-    def _set_button_icon(self, button: QPushButton, icon_name: str, size: int = 18, color: str = "") -> None:
-        """给按钮设置 SVG 图标。
-
-        如果图标文件不存在，不影响按钮文字和功能，避免交付环境因缺少图标报错。
-        """
-        icon = self._load_svg_icon(icon_name, size=size, color=color)
+    def _set_button_icon(
+        self,
+        button: QPushButton,
+        icon_name: str,
+        canvas_size: int = 20,
+        glyph_size: int = 16,
+        color: str = "",
+    ) -> None:
+        """给按钮设置统一规格 SVG 图标。"""
+        icon = self._load_svg_icon(
+            icon_name,
+            canvas_size=canvas_size,
+            glyph_size=glyph_size,
+            color=color,
+        )
         if icon.isNull():
             return
         button.setIcon(icon)
-        button.setIconSize(QSize(size, size))
+        button.setIconSize(QSize(canvas_size, canvas_size))
+        button.setLayoutDirection(Qt.LeftToRight)
+
+    def _create_neutral_button(self, text: str, min_width: int = 0) -> QPushButton:
+        """创建中性按钮。
+
+        不使用 SecondaryButton，避免全局 QSS 把文字设成主题蓝。
+        字体继续由全局样式控制，不在这里单独 setFont。
+        """
+        button = QPushButton(text)
+        button.setObjectName("NeutralButton")
+        if min_width > 0:
+            button.setMinimumWidth(min_width)
+        button.setCursor(Qt.PointingHandCursor)
+
+        # 只改颜色，不设置字体，字体继续跟随软件全局设置。
+        theme = get_theme(DEFAULT_THEME_KEY)
+        neutral = theme.get("text_secondary", "#5E6B7A")
+        hover_bg = theme.get("surface_hover", "#F2F7FF")
+        border = theme.get("border", "#DDE6F2")
+        border_hover = theme.get("primary_border", "#BCD7FF")
+        button.setStyleSheet(
+            f"""
+            QPushButton#NeutralButton {{
+                color: {neutral};
+                border-color: {border};
+            }}
+            QPushButton#NeutralButton:hover {{
+                color: {neutral};
+                background-color: {hover_bg};
+                border-color: {border_hover};
+            }}
+            QPushButton#NeutralButton:pressed {{
+                color: {neutral};
+            }}
+            """
+        )
+        return button
+
+
+    def _create_danger_outline_button(self, text: str, min_width: int = 0) -> QPushButton:
+        """创建危险操作按钮。
+
+        不使用全局 DangerButton，避免 font-weight: 600 导致“删除病例”视觉上比其他按钮更粗。
+        字体族、字号继续跟随软件全局设置，只在这里覆盖颜色、边框和字重。
+        """
+        button = QPushButton(text)
+        button.setObjectName("CaseDangerButton")
+        if min_width > 0:
+            button.setMinimumWidth(min_width)
+        button.setCursor(Qt.PointingHandCursor)
+
+        theme = get_theme(DEFAULT_THEME_KEY)
+        danger = theme.get("danger", "#EF4444")
+        danger_bg = theme.get("danger_bg", "#FDECEC")
+        danger_border = theme.get("danger_border", "#F6BFC0")
+        surface = theme.get("surface", "#FFFFFF")
+
+        button.setStyleSheet(
+            f"""
+            QPushButton#CaseDangerButton {{
+                background-color: {surface};
+                border: 1px solid {danger_border};
+                color: {danger};
+                font-weight: 500;
+            }}
+            QPushButton#CaseDangerButton:hover {{
+                background-color: {danger_bg};
+                border-color: {danger};
+                color: {danger};
+                font-weight: 500;
+            }}
+            QPushButton#CaseDangerButton:pressed {{
+                background-color: {danger_bg};
+                border-color: {danger};
+                color: {danger};
+                font-weight: 500;
+            }}
+            """
+        )
+        return button
 
     # ------------------------------------------------------------------
     # UI
@@ -327,16 +435,21 @@ class CaseManagerWindow(QWidget):
         self.search_edit.returnPressed.connect(self.search_cases)
 
         self.btn_search = create_primary_button("搜索", min_width=90)
-        self.btn_refresh = create_secondary_button("刷新", min_width=90)
+        self.btn_refresh = self._create_neutral_button("刷新", min_width=90)
         self.btn_add = create_primary_button("新建病例", min_width=118)
-        self.btn_edit = create_secondary_button("编辑病例", min_width=108)
-        self.btn_delete = create_danger_button("删除病例", min_width=108)
+        self.btn_edit = self._create_neutral_button("编辑病例", min_width=108)
+        self.btn_delete = self._create_danger_outline_button("删除病例", min_width=108)
 
-        self._set_button_icon(self.btn_search, "search_s.svg", 18, "#FFFFFF")
-        self._set_button_icon(self.btn_refresh, "refresh.svg", 18, "#526172")
-        self._set_button_icon(self.btn_add, "add_s.svg", 18, "#FFFFFF")
-        self._set_button_icon(self.btn_edit, "edit.svg", 18, "#526172")
-        self._set_button_icon(self.btn_delete, "delete_danger.svg", 18, "#EF4444")
+        # 按钮图标统一使用 20px 画布、16px 图形区，避免不同 SVG 视觉大小不一致。
+        theme = get_theme(DEFAULT_THEME_KEY)
+        neutral_icon = theme.get("text_secondary", "#5E6B7A")
+        danger_icon = theme.get("danger", "#EF4444")
+
+        self._set_button_icon(self.btn_search, "search_s.svg", canvas_size=20, glyph_size=16, color="#FFFFFF")
+        self._set_button_icon(self.btn_refresh, "refresh.svg", canvas_size=20, glyph_size=16, color=neutral_icon)
+        self._set_button_icon(self.btn_add, "add_s.svg", canvas_size=20, glyph_size=16, color="#FFFFFF")
+        self._set_button_icon(self.btn_edit, "edit.svg", canvas_size=20, glyph_size=16, color=neutral_icon)
+        self._set_button_icon(self.btn_delete, "delete_danger.svg", canvas_size=20, glyph_size=16, color=danger_icon)
 
         toolbar_layout.addWidget(self.search_edit, 1)
         toolbar_layout.addWidget(self.btn_search)
