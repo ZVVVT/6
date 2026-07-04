@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.ui_style import get_main_window_stylesheet
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -340,71 +341,13 @@ class MainWindow(QMainWindow):
     # 统一样式
     # ------------------------------------------------------------------
     def apply_unified_style(self):
-        self.setStyleSheet(
-            """
-            QFrame#SideMenu {
-                background-color: #f3f6fb;
-                border-right: 1px solid #d9e2ef;
-            }
+        """
+        应用主窗口局部样式。
 
-
-            QPushButton#SideButton {
-                min-height: 42px;
-                padding: 0px 14px 0px 14px;
-                border: none;
-                border-left: 4px solid transparent;
-                border-radius: 0px;
-                background-color: transparent;
-                color: #263645;
-                font-size: 14px;
-                font-weight: 500;
-                text-align: left;
-            }
-
-            QPushButton#SideButton:hover {
-                background-color: #eef4fb;
-                color: #1f4e79;
-            }
-
-            QPushButton#SideButton:checked {
-                background-color: #dcecff;
-                color: #0f4c81;
-                border-left: 4px solid #2f80ed;
-                font-weight: 700;
-            }
-
-            QPushButton#SideButton:disabled {
-                background-color: transparent;
-                color: #a8b3c1;
-                border-left: 4px solid transparent;
-            }
-
-            QPushButton#SideButton:disabled:hover {
-                background-color: transparent;
-                color: #a8b3c1;
-            }
-
-            QFrame#ContentFrame {
-                background-color: #f5f7fb;
-            }
-
-            QFrame#UnifiedPageHeader {
-                background-color: #f5f7fb;
-                border-bottom: 1px solid #d9e2ef;
-            }
-
-            QLabel#UnifiedPageTitle {
-                color: #1f4e79;
-                font-size: 22px;
-                font-weight: 700;
-            }
-
-            QLabel#UnifiedPageContext {
-                color: #4d5b6a;
-                font-size: 13px;
-            }
-            """
-        )
+        颜色不再写死，统一由 app/theme.py 控制。
+        后续做主题切换时，只需要让这里传入不同 theme_key。
+        """
+        self.setStyleSheet(get_main_window_stylesheet())
 
     # ------------------------------------------------------------------
     # 配置刷新
