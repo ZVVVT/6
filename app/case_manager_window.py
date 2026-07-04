@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, Signal, QTimer, QSize, QByteArray, QRectF
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractScrollArea,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -162,6 +163,11 @@ class CaseManagerWindow(QWidget):
         super().__init__(parent)
         self.database = database
         self.current_cases: List[Dict] = []
+        self.current_page = 0
+        self._page_size = 1
+        self._table_row_height = 38
+        self._min_page_size = 3
+        self._resize_refresh_timer: Optional[QTimer] = None
         self.init_ui()
         self.load_cases()
 
@@ -393,6 +399,41 @@ class CaseManagerWindow(QWidget):
         )
         return button
 
+    def _create_page_button(self, text: str) -> QPushButton:
+        """创建底部分页小按钮。"""
+        button = QPushButton(text)
+        button.setObjectName("PaginationButton")
+        button.setFixedSize(30, 26)
+        button.setCursor(Qt.PointingHandCursor)
+
+        theme = get_theme(DEFAULT_THEME_KEY)
+        text_color = theme.get("text_secondary", "#5E6B7A")
+        text_muted = theme.get("text_muted", "#8A97A8")
+        border = theme.get("border", "#DDE6F2")
+        hover_bg = theme.get("surface_hover", "#F2F7FF")
+        surface = theme.get("surface", "#FFFFFF")
+        button.setStyleSheet(
+            f"""
+            QPushButton#PaginationButton {{
+                background-color: {surface};
+                border: 1px solid {border};
+                border-radius: 6px;
+                color: {text_color};
+                padding: 0px;
+            }}
+            QPushButton#PaginationButton:hover {{
+                background-color: {hover_bg};
+                color: {text_color};
+            }}
+            QPushButton#PaginationButton:disabled {{
+                background-color: {surface};
+                border-color: {border};
+                color: {text_muted};
+            }}
+            """
+        )
+        return button
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -475,9 +516,13 @@ class CaseManagerWindow(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 病例列表由分页控制行数，避免窗口化时出现半行或竖向滚动。
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
         setup_table(
             self.table,
-            row_height=42,
+            row_height=self._table_row_height,
             alternating=True,
             stretch_last_section=False,
             selection_behavior=QAbstractItemView.SelectRows,
@@ -532,14 +577,25 @@ class CaseManagerWindow(QWidget):
         self.info_label.setObjectName("CurrentCaseLabel")
         self.info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        self.page_label = QLabel("共 0 条    1 / 1")
+        self.page_label = QLabel("共 0 条    每页 0 条    1 / 1")
         self.page_label.setObjectName("CurrentCaseLabel")
         self.page_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        self.btn_prev_page = self._create_page_button("‹")
+        self.btn_next_page = self._create_page_button("›")
+        self.btn_prev_page.clicked.connect(self.goto_prev_page)
+        self.btn_next_page.clicked.connect(self.goto_next_page)
 
         footer_layout.addWidget(self.info_label)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.page_label)
+        footer_layout.addWidget(self.btn_prev_page)
+        footer_layout.addWidget(self.btn_next_page)
         table_card.addWidget(footer)
+
+        self._resize_refresh_timer = QTimer(self)
+        self._resize_refresh_timer.setSingleShot(True)
+        self._resize_refresh_timer.timeout.connect(self._refresh_page_for_current_geometry)
 
         main_layout.addWidget(table_card, 1)
 
@@ -553,6 +609,12 @@ class CaseManagerWindow(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_responsive_table_columns()
+        self._schedule_page_refresh()
+
+    def _schedule_page_refresh(self) -> None:
+        """窗口尺寸变化后延迟刷新分页，避免拖拽窗口时频繁重绘。"""
+        if getattr(self, "_resize_refresh_timer", None) is not None:
+            self._resize_refresh_timer.start(80)
 
     def _apply_responsive_table_columns(self) -> None:
         """根据表格可视宽度动态计算列宽。
@@ -619,13 +681,72 @@ class CaseManagerWindow(QWidget):
             return
 
         self.current_cases = cases
-        self._fill_table(cases)
+        self.current_page = 0
         self._update_summary_cards(cases)
-        self._update_footer(len(cases))
+        self._refresh_page_for_current_geometry()
         self._apply_responsive_table_columns()
+
+    def _calculate_page_size(self) -> int:
+        """根据当前表格可视高度计算每页行数。"""
+        if not hasattr(self, "table"):
+            return max(1, getattr(self, "_page_size", 1))
+
+        row_height = max(24, int(getattr(self, "_table_row_height", 38)))
+        viewport_height = max(0, self.table.viewport().height())
+
+        if viewport_height <= 0:
+            return max(1, getattr(self, "_page_size", 1))
+
+        # 预留 2px，避免底部出现半截行或横向滚动条挤压造成的误差。
+        page_size = int(max(1, (viewport_height - 2) // row_height))
+        return max(getattr(self, "_min_page_size", 3), page_size)
+
+    def _refresh_page_for_current_geometry(self) -> None:
+        """根据当前窗口高度刷新当前页。"""
+        if not hasattr(self, "table"):
+            return
+
+        old_page_size = max(1, int(getattr(self, "_page_size", 1)))
+        old_first_index = max(0, int(getattr(self, "current_page", 0)) * old_page_size)
+
+        new_page_size = self._calculate_page_size()
+        self._page_size = new_page_size
+
+        total_count = len(self.current_cases)
+        total_pages = self._total_pages(total_count)
+
+        if total_count <= 0:
+            self.current_page = 0
+        else:
+            self.current_page = min(total_pages - 1, max(0, old_first_index // new_page_size))
+
+        self._fill_current_page()
+        self._update_footer(total_count)
+        self._apply_responsive_table_columns()
+
+    def _total_pages(self, count: Optional[int] = None) -> int:
+        total_count = len(self.current_cases) if count is None else int(count)
+        if total_count <= 0:
+            return 1
+        return max(1, (total_count + self._page_size - 1) // self._page_size)
+
+    def _current_page_cases(self) -> List[Dict]:
+        total_count = len(self.current_cases)
+        if total_count <= 0:
+            return []
+
+        total_pages = self._total_pages(total_count)
+        self.current_page = min(max(0, self.current_page), total_pages - 1)
+        start = self.current_page * self._page_size
+        end = min(total_count, start + self._page_size)
+        return self.current_cases[start:end]
+
+    def _fill_current_page(self) -> None:
+        self._fill_table(self._current_page_cases())
 
     def _fill_table(self, cases: List[Dict]) -> None:
         self.table.setRowCount(len(cases))
+        self.table.verticalHeader().setDefaultSectionSize(self._table_row_height)
 
         for row_index, case in enumerate(cases):
             case_id = case.get("id", "")
@@ -687,8 +808,34 @@ class CaseManagerWindow(QWidget):
         self.card_waiting.set_value(waiting_count)
 
     def _update_footer(self, count: int) -> None:
+        total_pages = self._total_pages(count)
+        current_page_display = min(self.current_page + 1, total_pages)
         self.info_label.setText(f"当前病例数量：{count}")
-        self.page_label.setText(f"共 {count} 条    1 / 1")
+        self.page_label.setText(f"共 {count} 条    每页 {self._page_size} 条    {current_page_display} / {total_pages}")
+
+        has_prev = count > 0 and self.current_page > 0
+        has_next = count > 0 and self.current_page < total_pages - 1
+        if hasattr(self, "btn_prev_page"):
+            self.btn_prev_page.setEnabled(has_prev)
+        if hasattr(self, "btn_next_page"):
+            self.btn_next_page.setEnabled(has_next)
+
+    def goto_prev_page(self) -> None:
+        if self.current_page <= 0:
+            return
+        self.current_page -= 1
+        self._fill_current_page()
+        self._update_footer(len(self.current_cases))
+        self._apply_responsive_table_columns()
+
+    def goto_next_page(self) -> None:
+        total_pages = self._total_pages()
+        if self.current_page >= total_pages - 1:
+            return
+        self.current_page += 1
+        self._fill_current_page()
+        self._update_footer(len(self.current_cases))
+        self._apply_responsive_table_columns()
 
     # ------------------------------------------------------------------
     # 选择与操作
