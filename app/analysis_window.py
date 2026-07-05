@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QGroupBox,
     QTextEdit,
+    QSplitter,
 )
 
 from app.result_viewer import ResultViewer
@@ -150,8 +151,10 @@ class AnalysisWindow(QWidget):
         self.folder_edit.setPlaceholderText("请选择包含 R / G / DIC / Merge 图片的文件夹")
 
         self.btn_select_folder = QPushButton("选择文件夹")
+        self.btn_select_folder.setObjectName("PrimarySelectFolderButton")
         self.btn_import = QPushButton("导入图片")
         self.btn_run_analysis = QPushButton("运行分析")
+        self.btn_run_analysis.setObjectName("PrimaryRunAnalysisButton")
         self.btn_run_analysis.setEnabled(False)
 
         row2_layout.addWidget(QLabel("图片文件夹："))
@@ -179,6 +182,7 @@ class AnalysisWindow(QWidget):
         # -------------------------
         self.result_viewer = ResultViewer()
         self.result_viewer.setMinimumHeight(600)
+        self.tune_result_viewer_side_panel_width()
         main_layout.addWidget(self.result_viewer, 10)
 
         # -------------------------
@@ -288,6 +292,68 @@ class AnalysisWindow(QWidget):
         self.table.itemSelectionChanged.connect(self.on_import_table_selection_changed)
 
         self.on_protein_changed()
+
+    def tune_result_viewer_side_panel_width(self):
+        """微调结果查看区右侧信息栏宽度。
+
+        右侧包含“当前输出 / 视图控制 / 当前结果摘要”。这些控件属于
+        ResultViewer 内部，AnalysisWindow 这里只做宽度约束，不改结果显示、
+        图片切换、按钮功能和分析逻辑。
+        """
+        if not hasattr(self, "result_viewer") or self.result_viewer is None:
+            return
+
+        target_titles = {"当前输出", "视图控制", "当前结果摘要"}
+        target_groups = []
+
+        for group in self.result_viewer.findChildren(QGroupBox):
+            title = str(group.title() or "").strip()
+            if title in target_titles:
+                target_groups.append(group)
+
+        side_min_width = 342
+        side_max_width = 378
+
+        for group in target_groups:
+            group.setMinimumWidth(side_min_width)
+            group.setMaximumWidth(side_max_width)
+
+        # 如果三个分组位于同一个右侧容器中，同时约束该容器宽度，
+        # 让右侧栏整体变宽一点，并尽量和上方按钮区左边界接近。
+        if target_groups:
+            ancestors = []
+            widget = target_groups[0].parentWidget()
+            while widget is not None and widget is not self.result_viewer:
+                ancestors.append(widget)
+                widget = widget.parentWidget()
+
+            side_panel = None
+            for candidate in ancestors:
+                try:
+                    if all(candidate.isAncestorOf(group) or candidate is group for group in target_groups):
+                        side_panel = candidate
+                        break
+                except Exception:
+                    continue
+
+            if side_panel is not None:
+                side_panel.setMinimumWidth(side_min_width)
+                side_panel.setMaximumWidth(side_max_width)
+
+        # 兼容 ResultViewer 内部使用 QSplitter 的情况：把右侧尺寸调大到约 350px。
+        for splitter in self.result_viewer.findChildren(QSplitter):
+            try:
+                if splitter.orientation() != Qt.Horizontal or splitter.count() < 2:
+                    continue
+                sizes = splitter.sizes()
+                total = sum(sizes) if sizes else 0
+                if total <= 0:
+                    total = 1200
+                right_width = 350
+                left_width = max(420, total - right_width)
+                splitter.setSizes([left_width, right_width])
+            except Exception:
+                pass
 
     def toggle_import_panel(self):
         visible = not self.table.isVisible()
@@ -476,6 +542,37 @@ class AnalysisWindow(QWidget):
                 color: #999999;
                 background-color: #f0f0f0;
                 border-color: #dddddd;
+            }
+
+            QPushButton#PrimaryRunAnalysisButton,
+            QPushButton#PrimarySelectFolderButton {
+                min-height: 28px;
+                min-width: 82px;
+                background-color: #1769E0;
+                border: 1px solid #1769E0;
+                border-radius: 4px;
+                padding: 2px 8px;
+                color: #FFFFFF;
+                font-weight: 500;
+            }
+            QPushButton#PrimaryRunAnalysisButton:hover,
+            QPushButton#PrimarySelectFolderButton:hover {
+                background-color: #0F5AC8;
+                border-color: #0F5AC8;
+                color: #FFFFFF;
+            }
+            QPushButton#PrimaryRunAnalysisButton:pressed,
+            QPushButton#PrimarySelectFolderButton:pressed {
+                background-color: #0A4EAE;
+                border-color: #0A4EAE;
+                color: #FFFFFF;
+            }
+            QPushButton#PrimaryRunAnalysisButton:disabled,
+            QPushButton#PrimarySelectFolderButton:disabled {
+                background-color: #F0F0F0;
+                border-color: #DDDDDD;
+                color: #999999;
+                font-weight: 400;
             }
             QHeaderView::section {
                 background-color: #eef3f9;
