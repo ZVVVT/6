@@ -82,37 +82,8 @@ class CaseDetailWindow(QWidget):
         except Exception:
             return QIcon(str(icon_file))
 
-    @classmethod
-    def make_svg_icon_original(cls, icon_name: str, size: int = 20) -> QIcon:
-        """按 SVG 文件原始颜色渲染图标。
-
-        用于按钮“可用状态”：显示设计师准备好的原图颜色。
-        强制染色只用于禁用状态或统计卡片等需要主题色的场景。
-        """
-        icon_file = cls.icon_path(icon_name)
-        if not icon_file.exists():
-            return QIcon()
-        try:
-            svg_text = icon_file.read_text(encoding="utf-8", errors="ignore")
-            renderer = QSvgRenderer(svg_text.encode("utf-8"))
-            pixmap = QPixmap(size, size)
-            pixmap.fill(Qt.transparent)
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            renderer.render(painter, pixmap.rect().adjusted(2, 2, -2, -2))
-            painter.end()
-            return QIcon(pixmap)
-        except Exception:
-            return QIcon(str(icon_file))
-
     def set_button_icon(self, button: QPushButton, icon_name: str, color: str, size: int = 18) -> None:
         icon = self.make_svg_icon(icon_name, color, size + 2)
-        if not icon.isNull():
-            button.setIcon(icon)
-            button.setIconSize(QSize(size, size))
-
-    def set_button_icon_original(self, button: QPushButton, icon_name: str, size: int = 18) -> None:
-        icon = self.make_svg_icon_original(icon_name, size + 2)
         if not icon.isNull():
             button.setIcon(icon)
             button.setIconSize(QSize(size, size))
@@ -121,7 +92,6 @@ class CaseDetailWindow(QWidget):
         self.config.load()
         self.config.ensure_default_config()
         self.refresh_analysis_table()
-        self.update_action_buttons_state()
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -147,8 +117,6 @@ class CaseDetailWindow(QWidget):
         self.btn_open_report.clicked.connect(self.open_report)
         self.btn_open_workspace.clicked.connect(self.open_workspace)
 
-        self.update_action_buttons_state()
-
     def create_header(self) -> QHBoxLayout:
         """顶部当前病例提示条。
 
@@ -172,10 +140,10 @@ class CaseDetailWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self.sample_no_stat = self.create_stat_card("样本号", "-", "detail_sample.svg", "info")
-        self.test_date_stat = self.create_stat_card("检查日期", "-", "detail_date.svg", "cyan")
-        self.completed_stat = self.create_stat_card("已完成蛋白数", "0 / 0", "detail_complete.svg", "success")
-        self.report_status_stat = self.create_stat_card("报告状态", "未生成", "detail_report.svg", "purple")
+        self.sample_no_stat = self.create_stat_card("样本号", "-", "case_detail.svg", "info")
+        self.test_date_stat = self.create_stat_card("检查日期", "-", "form_calendar.svg", "cyan")
+        self.completed_stat = self.create_stat_card("已完成蛋白数", "0 / 0", "stat_today.svg", "success")
+        self.report_status_stat = self.create_stat_card("报告状态", "未生成", "stat_report.svg", "purple")
 
         layout.addWidget(self.sample_no_stat["card"], 1)
         layout.addWidget(self.test_date_stat["card"], 1)
@@ -231,7 +199,7 @@ class CaseDetailWindow(QWidget):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
-        layout.addWidget(self.create_section_title("基本信息", "section_basic.svg", self.theme.get("primary", "#1769E0")))
+        layout.addWidget(self.create_section_title("基本信息", "case_manager.svg", self.theme.get("primary", "#1769E0")))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(28)
@@ -278,7 +246,7 @@ class CaseDetailWindow(QWidget):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
-        layout.addWidget(self.create_section_title("样本信息", "section_sample.svg", self.theme.get("primary", "#1769E0")))
+        layout.addWidget(self.create_section_title("样本信息", "stat_cases.svg", self.theme.get("primary", "#1769E0")))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(28)
@@ -341,21 +309,27 @@ class CaseDetailWindow(QWidget):
 
         self.btn_refresh = QPushButton("刷新详情")
         self.btn_refresh.setObjectName("DetailNeutralButton")
+        self.set_button_icon(self.btn_refresh, "refresh.svg", self.theme.get("text_secondary", "#5E6B7A"), 17)
 
         self.btn_start_analysis = QPushButton("开始蛋白分析")
         self.btn_start_analysis.setObjectName("PrimaryButton")
+        self.set_button_icon(self.btn_start_analysis, "protein_analysis_s.svg", "#FFFFFF", 17)
 
         self.btn_batch_analysis = QPushButton("批量蛋白分析")
         self.btn_batch_analysis.setObjectName("DetailNeutralButton")
+        self.set_button_icon(self.btn_batch_analysis, "case_manager.svg", self.theme.get("primary", "#1769E0"), 17)
 
         self.btn_report = QPushButton("进入报告管理")
         self.btn_report.setObjectName("DetailNeutralButton")
+        self.set_button_icon(self.btn_report, "report.svg", self.theme.get("primary", "#1769E0"), 17)
 
         self.btn_open_report = QPushButton("打开报告")
         self.btn_open_report.setObjectName("DetailNeutralButton")
+        self.set_button_icon(self.btn_open_report, "stat_report.svg", self.theme.get("primary", "#1769E0"), 17)
 
         self.btn_open_workspace = QPushButton("打开病例工作目录")
         self.btn_open_workspace.setObjectName("DetailNeutralButton")
+        self.set_button_icon(self.btn_open_workspace, "case_detail.svg", self.theme.get("primary", "#1769E0"), 17)
 
         for button in [
             self.btn_refresh,
@@ -369,37 +343,8 @@ class CaseDetailWindow(QWidget):
             button.setMinimumHeight(36)
             button.setMinimumWidth(118)
             layout.addWidget(button)
-
-        self.update_action_button_icons()
         layout.addStretch()
         return layout
-
-    def update_action_button_icons(self) -> None:
-        """根据按钮可用状态刷新图标。
-
-        可用状态：使用 assets/icons 中 SVG 的原始颜色。
-        不可用状态：统一转成浅灰，避免看起来像可点击。
-        """
-        disabled_color = "#B8C2CC"
-
-        action_icons = [
-            (self.btn_refresh, "detail_refresh.svg"),
-            (self.btn_batch_analysis, "detail_batch.svg"),
-            (self.btn_report, "detail_report_manage.svg"),
-            (self.btn_open_report, "detail_open_report.svg"),
-            (self.btn_open_workspace, "detail_open_folder.svg"),
-        ]
-
-        for button, icon_name in action_icons:
-            if button.isEnabled():
-                self.set_button_icon_original(button, icon_name, 17)
-            else:
-                self.set_button_icon(button, icon_name, disabled_color, 17)
-
-        if self.btn_start_analysis.isEnabled():
-            self.set_button_icon_original(self.btn_start_analysis, "detail_start_s.svg", 17)
-        else:
-            self.set_button_icon_original(self.btn_start_analysis, "detail_start_disabled.svg", 17)
 
     def create_analysis_card(self) -> QFrame:
         card = QFrame()
@@ -411,7 +356,7 @@ class CaseDetailWindow(QWidget):
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(8)
-        title_widget = self.create_section_title("蛋白检测状态总览", "section_analysis.svg", self.theme.get("primary", "#1769E0"))
+        title_widget = self.create_section_title("蛋白检测状态总览", "protein_analysis.svg", self.theme.get("primary", "#1769E0"))
         self.analysis_summary_label = QLabel("未选择病例")
         self.analysis_summary_label.setObjectName("DetailSummaryLabel")
         title_row.addWidget(title_widget)
@@ -539,25 +484,6 @@ class CaseDetailWindow(QWidget):
                 border-color: {t.get('primary_border', '#BCD7FF')};
                 color: {t.get('primary', '#1769E0')};
             }}
-            QPushButton#PrimaryButton {{
-                min-height: 34px;
-                padding: 5px 16px;
-                border: 1px solid {t.get('primary', '#1769E0')};
-                border-radius: 6px;
-                background-color: {t.get('primary', '#1769E0')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-                font-weight: 600;
-            }}
-            QPushButton#PrimaryButton:hover {{
-                background-color: {t.get('primary_hover', '#0F5ED7')};
-                border-color: {t.get('primary_hover', '#0F5ED7')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-            }}
-            QPushButton#PrimaryButton:pressed {{
-                background-color: {t.get('primary_pressed', '#0B4DB5')};
-                border-color: {t.get('primary_pressed', '#0B4DB5')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-            }}
             QTableWidget {{
                 background-color: {t.get('surface', '#FFFFFF')};
                 alternate-background-color: {t.get('table_alt_bg', '#F8FAFD')};
@@ -672,7 +598,6 @@ class CaseDetailWindow(QWidget):
         self.total_motility_label.setText(self.v(case.get("total_motility")))
 
         self.refresh_analysis_table()
-        self.update_action_buttons_state()
 
     def clear_detail(self):
         self.status_label.setText("未选择病例")
@@ -682,7 +607,6 @@ class CaseDetailWindow(QWidget):
         self.report_status_stat["value"].setText("未生成")
         self.analysis_summary_label.setText("未选择病例")
         self.analysis_table.setRowCount(0)
-        self.update_action_buttons_state()
 
     def refresh_analysis_table(self):
         if not self.current_case:
@@ -798,23 +722,6 @@ class CaseDetailWindow(QWidget):
             except Exception:
                 analysis_map[protein_key] = row
         return analysis_map
-
-    def update_action_buttons_state(self) -> None:
-        """刷新操作按钮可用状态与对应图标。
-
-        只有“打开报告”依赖报告文件路径，没有报告时禁用。
-        其他按钮保持可点击：没有当前病例时，由按钮对应逻辑给出提示。
-        """
-        has_case = bool(self.current_case)
-        has_report = bool(has_case and str(self.current_case.get("report_path", "")).strip())
-
-        self.btn_refresh.setEnabled(True)
-        self.btn_start_analysis.setEnabled(True)
-        self.btn_batch_analysis.setEnabled(True)
-        self.btn_report.setEnabled(True)
-        self.btn_open_workspace.setEnabled(True)
-        self.btn_open_report.setEnabled(has_report)
-        self.update_action_button_icons()
 
     # ------------------------------------------------------------------
     # 操作

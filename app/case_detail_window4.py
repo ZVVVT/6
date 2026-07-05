@@ -82,37 +82,8 @@ class CaseDetailWindow(QWidget):
         except Exception:
             return QIcon(str(icon_file))
 
-    @classmethod
-    def make_svg_icon_original(cls, icon_name: str, size: int = 20) -> QIcon:
-        """按 SVG 文件原始颜色渲染图标。
-
-        用于按钮“可用状态”：显示设计师准备好的原图颜色。
-        强制染色只用于禁用状态或统计卡片等需要主题色的场景。
-        """
-        icon_file = cls.icon_path(icon_name)
-        if not icon_file.exists():
-            return QIcon()
-        try:
-            svg_text = icon_file.read_text(encoding="utf-8", errors="ignore")
-            renderer = QSvgRenderer(svg_text.encode("utf-8"))
-            pixmap = QPixmap(size, size)
-            pixmap.fill(Qt.transparent)
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            renderer.render(painter, pixmap.rect().adjusted(2, 2, -2, -2))
-            painter.end()
-            return QIcon(pixmap)
-        except Exception:
-            return QIcon(str(icon_file))
-
     def set_button_icon(self, button: QPushButton, icon_name: str, color: str, size: int = 18) -> None:
         icon = self.make_svg_icon(icon_name, color, size + 2)
-        if not icon.isNull():
-            button.setIcon(icon)
-            button.setIconSize(QSize(size, size))
-
-    def set_button_icon_original(self, button: QPushButton, icon_name: str, size: int = 18) -> None:
-        icon = self.make_svg_icon_original(icon_name, size + 2)
         if not icon.isNull():
             button.setIcon(icon)
             button.setIconSize(QSize(size, size))
@@ -375,31 +346,19 @@ class CaseDetailWindow(QWidget):
         return layout
 
     def update_action_button_icons(self) -> None:
-        """根据按钮可用状态刷新图标。
+        neutral_color = self.theme.get("text_secondary", "#5E6B7A")
+        neutral_disabled = self.theme.get("disabled_text", "#B8C2CC")
 
-        可用状态：使用 assets/icons 中 SVG 的原始颜色。
-        不可用状态：统一转成浅灰，避免看起来像可点击。
-        """
-        disabled_color = "#B8C2CC"
-
-        action_icons = [
-            (self.btn_refresh, "detail_refresh.svg"),
-            (self.btn_batch_analysis, "detail_batch.svg"),
-            (self.btn_report, "detail_report_manage.svg"),
-            (self.btn_open_report, "detail_open_report.svg"),
-            (self.btn_open_workspace, "detail_open_folder.svg"),
-        ]
-
-        for button, icon_name in action_icons:
-            if button.isEnabled():
-                self.set_button_icon_original(button, icon_name, 17)
-            else:
-                self.set_button_icon(button, icon_name, disabled_color, 17)
+        self.set_button_icon(self.btn_refresh, "detail_refresh.svg", neutral_color, 17)
+        self.set_button_icon(self.btn_batch_analysis, "detail_batch.svg", neutral_color, 17)
+        self.set_button_icon(self.btn_report, "detail_report_manage.svg", neutral_color, 17)
+        self.set_button_icon(self.btn_open_report, "detail_open_report.svg", neutral_color, 17)
+        self.set_button_icon(self.btn_open_workspace, "detail_open_folder.svg", neutral_color, 17)
 
         if self.btn_start_analysis.isEnabled():
-            self.set_button_icon_original(self.btn_start_analysis, "detail_start_s.svg", 17)
+            self.set_button_icon(self.btn_start_analysis, "detail_start_s.svg", "#FFFFFF", 17)
         else:
-            self.set_button_icon_original(self.btn_start_analysis, "detail_start_disabled.svg", 17)
+            self.set_button_icon(self.btn_start_analysis, "detail_start_disabled.svg", neutral_disabled, 17)
 
     def create_analysis_card(self) -> QFrame:
         card = QFrame()
@@ -539,25 +498,6 @@ class CaseDetailWindow(QWidget):
                 border-color: {t.get('primary_border', '#BCD7FF')};
                 color: {t.get('primary', '#1769E0')};
             }}
-            QPushButton#PrimaryButton {{
-                min-height: 34px;
-                padding: 5px 16px;
-                border: 1px solid {t.get('primary', '#1769E0')};
-                border-radius: 6px;
-                background-color: {t.get('primary', '#1769E0')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-                font-weight: 600;
-            }}
-            QPushButton#PrimaryButton:hover {{
-                background-color: {t.get('primary_hover', '#0F5ED7')};
-                border-color: {t.get('primary_hover', '#0F5ED7')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-            }}
-            QPushButton#PrimaryButton:pressed {{
-                background-color: {t.get('primary_pressed', '#0B4DB5')};
-                border-color: {t.get('primary_pressed', '#0B4DB5')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-            }}
             QTableWidget {{
                 background-color: {t.get('surface', '#FFFFFF')};
                 alternate-background-color: {t.get('table_alt_bg', '#F8FAFD')};
@@ -672,7 +612,6 @@ class CaseDetailWindow(QWidget):
         self.total_motility_label.setText(self.v(case.get("total_motility")))
 
         self.refresh_analysis_table()
-        self.update_action_buttons_state()
 
     def clear_detail(self):
         self.status_label.setText("未选择病例")
@@ -800,20 +739,15 @@ class CaseDetailWindow(QWidget):
         return analysis_map
 
     def update_action_buttons_state(self) -> None:
-        """刷新操作按钮可用状态与对应图标。
-
-        只有“打开报告”依赖报告文件路径，没有报告时禁用。
-        其他按钮保持可点击：没有当前病例时，由按钮对应逻辑给出提示。
-        """
         has_case = bool(self.current_case)
-        has_report = bool(has_case and str(self.current_case.get("report_path", "")).strip())
+        has_report = bool(has_case and self.current_case.get("report_path"))
 
-        self.btn_refresh.setEnabled(True)
-        self.btn_start_analysis.setEnabled(True)
-        self.btn_batch_analysis.setEnabled(True)
-        self.btn_report.setEnabled(True)
-        self.btn_open_workspace.setEnabled(True)
+        self.btn_refresh.setEnabled(has_case)
+        self.btn_start_analysis.setEnabled(has_case)
+        self.btn_batch_analysis.setEnabled(has_case)
+        self.btn_report.setEnabled(has_case)
         self.btn_open_report.setEnabled(has_report)
+        self.btn_open_workspace.setEnabled(has_case)
         self.update_action_button_icons()
 
     # ------------------------------------------------------------------

@@ -539,25 +539,6 @@ class CaseDetailWindow(QWidget):
                 border-color: {t.get('primary_border', '#BCD7FF')};
                 color: {t.get('primary', '#1769E0')};
             }}
-            QPushButton#PrimaryButton {{
-                min-height: 34px;
-                padding: 5px 16px;
-                border: 1px solid {t.get('primary', '#1769E0')};
-                border-radius: 6px;
-                background-color: {t.get('primary', '#1769E0')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-                font-weight: 600;
-            }}
-            QPushButton#PrimaryButton:hover {{
-                background-color: {t.get('primary_hover', '#0F5ED7')};
-                border-color: {t.get('primary_hover', '#0F5ED7')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-            }}
-            QPushButton#PrimaryButton:pressed {{
-                background-color: {t.get('primary_pressed', '#0B4DB5')};
-                border-color: {t.get('primary_pressed', '#0B4DB5')};
-                color: {t.get('text_inverse', '#FFFFFF')};
-            }}
             QTableWidget {{
                 background-color: {t.get('surface', '#FFFFFF')};
                 alternate-background-color: {t.get('table_alt_bg', '#F8FAFD')};
@@ -802,18 +783,20 @@ class CaseDetailWindow(QWidget):
     def update_action_buttons_state(self) -> None:
         """刷新操作按钮可用状态与对应图标。
 
-        只有“打开报告”依赖报告文件路径，没有报告时禁用。
-        其他按钮保持可点击：没有当前病例时，由按钮对应逻辑给出提示。
+        说明：
+        1. 当前页面已经进入某个病例时，刷新、分析、批量分析、报告管理、工作目录均应可用。
+        2. 只有“打开报告”依赖 report_path，没有报告时保持禁用。
+        3. 按钮状态变化后必须重新设置图标，否则 Qt 会显示禁用态灰色图标。
         """
         has_case = bool(self.current_case)
         has_report = bool(has_case and str(self.current_case.get("report_path", "")).strip())
 
-        self.btn_refresh.setEnabled(True)
-        self.btn_start_analysis.setEnabled(True)
-        self.btn_batch_analysis.setEnabled(True)
-        self.btn_report.setEnabled(True)
-        self.btn_open_workspace.setEnabled(True)
+        self.btn_refresh.setEnabled(has_case)
+        self.btn_start_analysis.setEnabled(has_case)
+        self.btn_batch_analysis.setEnabled(has_case)
+        self.btn_report.setEnabled(has_case)
         self.btn_open_report.setEnabled(has_report)
+        self.btn_open_workspace.setEnabled(has_case)
         self.update_action_button_icons()
 
     # ------------------------------------------------------------------
