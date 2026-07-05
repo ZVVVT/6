@@ -2,7 +2,7 @@ isPipeline
 Version:5
 DateRevision:426
 GitHash:
-ModuleCount:28
+ModuleCount:23
 HasImagePlaneDetails:False
 
 Images:[module_num:1|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['质控荧光强度的微球']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
@@ -211,31 +211,7 @@ CalculateMath(计算数学表达式):[module_num:14|svn_version:'Unknown'|variab
     是否限制结果的上界？:No
     请输入上界数值:1.0
 
-CalculateMath(计算数学表达式):[module_num:15|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['单个精子荧光强度 = IntDen / Area', '平均荧光强度（0-1）']|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
-    为输出测量命名:G_MeanIntensity0_1
-    运算类型:Divide
-    选择 分子 测量类型:Object
-    选择 分子 对象:G_objects
-    选择 分子 测量值:Intensity_IntegratedIntensity_G_Gray
-    将上述操作数乘以:1.0
-    将上述操作数乘方至:1.0
-    选择 分母 测量类型:Object
-    选择 分母 对象:G_objects
-    选择 分母 测量值:AreaShape_Area
-    将上述操作数乘以:1.0
-    将上述操作数乘方至:1.0
-    是否对结果取以10为底的对数？:No
-    将结果乘以:1.0
-    将结果乘方至:1.0
-    将数值加到结果上:0.0
-    输出值应如何四舍五入？:Rounded to a specified number of decimal places
-    请输入要四舍五入到的小数位数:2
-    是否限制结果的下界？:No
-    请输入下界数值:0.0
-    是否限制结果的上界？:No
-    请输入上界数值:1.0
-
-DisplayDataOnImage(在图像上显示数据):[module_num:16|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['序号']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+DisplayDataOnImage(在图像上显示数据):[module_num:15|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['序号']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     显示对象测量值还是图像测量值?:Object
     选择输入对象:G_objects
     选择要显示的测量值:Number_Object_Number
@@ -255,7 +231,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:16|svn_version:'Unknown
     是否使用科学计数法?:No
     字体粗细:normal
 
-DisplayDataOnImage(在图像上显示数据):[module_num:17|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['IntDen', '255区域总荧光强度']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+DisplayDataOnImage(在图像上显示数据):[module_num:16|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['IntDen', '255区域总荧光强度']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     显示对象测量值还是图像测量值?:Object
     选择输入对象:G_objects
     选择要显示的测量值:Math_G_IntegratedIntensity255
@@ -275,27 +251,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:17|svn_version:'Unknown
     是否使用科学计数法?:No
     字体粗细:normal
 
-DisplayDataOnImage(在图像上显示数据):[module_num:18|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['IntDen', '归一区域总荧光强度']|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
-    显示对象测量值还是图像测量值?:Object
-    选择输入对象:G_objects
-    选择要显示的测量值:Intensity_IntegratedIntensity_G_Gray
-    选择显示测量值的背景图像:G_objects_OrigOverlay
-    文字颜色:red
-    输出图像名称（叠加测量值）:IntDen0_1
-    字体大小（磅值）:9
-    小数位数:0
-    保存的图像元素:Image
-    标注偏移量（像素）:0
-    显示模式:Text
-    色彩映射表:Default
-    是否显示背景图像?:Yes
-    颜色映射范围模式:Use this image's measurement range
-    颜色映射范围（手动模式）:0.0,1.0
-    字体:Arial
-    是否使用科学计数法?:No
-    字体粗细:normal
-
-DisplayDataOnImage(在图像上显示数据):[module_num:19|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['Area', '面积']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+DisplayDataOnImage(在图像上显示数据):[module_num:17|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['Area', '面积']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     显示对象测量值还是图像测量值?:Object
     选择输入对象:G_objects
     选择要显示的测量值:AreaShape_Area
@@ -315,7 +271,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:19|svn_version:'Unknown
     是否使用科学计数法?:No
     字体粗细:normal
 
-DisplayDataOnImage(在图像上显示数据):[module_num:20|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['单个荧光强度', '8-bit 等效平均荧光强度（A.U.）', '平均荧光强度（A.U.）', '255']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+DisplayDataOnImage(在图像上显示数据):[module_num:18|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['单个荧光强度', '8-bit 等效平均荧光强度（A.U.）', '平均荧光强度（A.U.）', '255']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     显示对象测量值还是图像测量值?:Object
     选择输入对象:G_objects
     选择要显示的测量值:Math_G_MeanIntensity255
@@ -335,27 +291,7 @@ DisplayDataOnImage(在图像上显示数据):[module_num:20|svn_version:'Unknown
     是否使用科学计数法?:No
     字体粗细:normal
 
-DisplayDataOnImage(在图像上显示数据):[module_num:21|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['归一平均荧光强度(0-1)']|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
-    显示对象测量值还是图像测量值?:Object
-    选择输入对象:G_objects
-    选择要显示的测量值:Math_G_MeanIntensity0_1
-    选择显示测量值的背景图像:G_objects_OrigOverlay
-    文字颜色:red
-    输出图像名称（叠加测量值）:MeanIntensity0_1
-    字体大小（磅值）:10
-    小数位数:2
-    保存的图像元素:Image
-    标注偏移量（像素）:0
-    显示模式:Text
-    色彩映射表:Default
-    是否显示背景图像?:Yes
-    颜色映射范围模式:Use this image's measurement range
-    颜色映射范围（手动模式）:0.0,1.0
-    字体:Arial
-    是否使用科学计数法?:No
-    字体粗细:normal
-
-SaveImages(保存图像):[module_num:22|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['序号']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:19|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['序号']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):Number
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -375,7 +311,7 @@ SaveImages(保存图像):[module_num:22|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:23|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['IntDen8-bit ', '']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:20|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['IntDen8-bit ', '']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):IntDen255
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -395,7 +331,7 @@ SaveImages(保存图像):[module_num:23|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:24|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['Area']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:21|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['Area']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):Area
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -415,7 +351,7 @@ SaveImages(保存图像):[module_num:24|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:25|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['8-bit 等效平均荧光强度（A.U.）', '平均荧光强度（A.U.）', '255']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:22|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['8-bit 等效平均荧光强度（A.U.）', '平均荧光强度（A.U.）', '255']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):MeanIntensity255
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -435,47 +371,7 @@ SaveImages(保存图像):[module_num:25|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:26|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
-    Select the type of image to save(选择要保存的图像类型):Image
-    Select the image to save(选择要保存的图像):IntDen0_1
-    Select method for constructing file names(选择构建文件名的方法):From image filename
-    Select image name for file prefix(选择图像名称作为文件前缀):G
-    Enter single file name(输入单个文件名):OrigBlue
-    Number of digits(数字位数):4
-    Append a suffix to the image file name(为图像文件名添加后缀)?:Yes
-    Text to append to the image name(附加到图像名称的文本):_4总荧光强度(0-1)
-    Saved file format(保存的文件格式):png
-    Output file location(输出文件位置):Default Output Folder|
-    Image bit depth(图像位深度):8-bit integer
-    Overwrite existing files without warning(不发出警告覆盖现有文件)?:Yes
-    When to save(何时保存):Every cycle
-    Record the file and path information to the saved image(记录保存图像的文件和路径信息)?:No
-    Create subfolders in the output folder(在输出文件夹中创建子文件夹)?:No
-    Base image folder(基础图像文件夹):Elsewhere...|
-    How to save the series(如何保存序列):T (Time)
-    Save with lossless compression(使用无损压缩保存)?:Yes
-
-SaveImages(保存图像):[module_num:27|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:False|wants_pause:False]
-    Select the type of image to save(选择要保存的图像类型):Image
-    Select the image to save(选择要保存的图像):MeanIntensity0_1
-    Select method for constructing file names(选择构建文件名的方法):From image filename
-    Select image name for file prefix(选择图像名称作为文件前缀):G
-    Enter single file name(输入单个文件名):OrigBlue
-    Number of digits(数字位数):4
-    Append a suffix to the image file name(为图像文件名添加后缀)?:Yes
-    Text to append to the image name(附加到图像名称的文本):_5平均荧光强度(0-1)
-    Saved file format(保存的文件格式):png
-    Output file location(输出文件位置):Default Output Folder|
-    Image bit depth(图像位深度):8-bit integer
-    Overwrite existing files without warning(不发出警告覆盖现有文件)?:Yes
-    When to save(何时保存):Every cycle
-    Record the file and path information to the saved image(记录保存图像的文件和路径信息)?:No
-    Create subfolders in the output folder(在输出文件夹中创建子文件夹)?:No
-    Base image folder(基础图像文件夹):Elsewhere...|
-    How to save the series(如何保存序列):T (Time)
-    Save with lossless compression(使用无损压缩保存)?:Yes
-
-ExportToSpreadsheet(导出到表格):[module_num:28|svn_version:'Unknown'|variable_revision_number:13|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+ExportToSpreadsheet(导出到表格):[module_num:23|svn_version:'Unknown'|variable_revision_number:13|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择列分隔符:Comma (",")
     将图像元数据列添加到对象数据文件?:No
     将图像文件和文件夹名称添加到对象数据文件?:No

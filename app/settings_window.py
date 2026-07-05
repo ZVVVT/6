@@ -152,8 +152,8 @@ class SettingsWindow(QWidget):
         form.addRow("界面字体：", font_row)
 
         hint = QLabel(
-            "说明：这里控制窗口标题、任务栏图标、左侧品牌区和软件界面字体。"
-            "字体路径为空或字体文件找不到时，会使用系统默认字体；报告字体和报告 LOGO 暂不受这里影响。"
+            "说明：这里控制窗口标题、任务栏图标和软件界面字体。"
+            "字体路径为空或字体文件找不到时，会使用系统默认字体；报告字体暂不受这里影响。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666666;")
@@ -191,7 +191,7 @@ class SettingsWindow(QWidget):
         form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
 
         hint = QLabel(
-            "说明：当前版本直接调用 MvImageID 虚拟环境中的 python.exe。"
+            "说明："
             "每次分析日志会自动写入对应蛋白输出目录的 run_mvimageid.log。"
         )
         hint.setWordWrap(True)
