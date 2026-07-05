@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from core.config_manager import ConfigManager
 from app.batch_analysis_dialog import BatchAnalysisDialog
 from app.theme import DEFAULT_THEME_KEY, get_theme
+from app.ui_components import apply_shadow
 
 
 class CaseDetailWindow(QWidget):
@@ -129,7 +130,7 @@ class CaseDetailWindow(QWidget):
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(18, 16, 18, 14)
-        main_layout.setSpacing(12)
+        main_layout.setSpacing(14)
 
         main_layout.addLayout(self.create_header())
         main_layout.addLayout(self.create_stat_cards())
@@ -170,7 +171,7 @@ class CaseDetailWindow(QWidget):
     def create_stat_cards(self) -> QHBoxLayout:
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
 
         self.sample_no_stat = self.create_stat_card("样本号", "-", "detail_sample.svg", "info")
         self.test_date_stat = self.create_stat_card("检查日期", "-", "detail_date.svg", "cyan")
@@ -184,6 +185,15 @@ class CaseDetailWindow(QWidget):
         return layout
 
     def create_stat_card(self, title: str, value: str, icon_name: str, tone: str):
+        """病例详情顶部统计卡片。
+
+        与病例管理页的统计卡片保持同一套尺寸逻辑：
+        - 卡片高度 92px
+        - 卡片内边距 16/14/16/14
+        - 图标块 48px
+        - 卡片间距由 create_stat_cards() 统一设置为 14px
+        这样在“病例管理 / 病例详情”之间切换时，顶部卡片不会出现跳动感。
+        """
         color_map = {
             "info": self.theme.get("primary", "#1769E0"),
             "cyan": "#0EA5A6",
@@ -195,10 +205,13 @@ class CaseDetailWindow(QWidget):
 
         card = QFrame()
         card.setObjectName("DetailStatCard")
-        card.setMinimumHeight(76)
+        card.setMinimumHeight(92)
+        card.setMaximumHeight(92)
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        apply_shadow(card)
+
         row = QHBoxLayout(card)
-        row.setContentsMargins(16, 12, 16, 12)
+        row.setContentsMargins(16, 14, 16, 14)
         row.setSpacing(14)
 
         icon_box = QFrame()
@@ -214,14 +227,22 @@ class CaseDetailWindow(QWidget):
         text_layout = QVBoxLayout()
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(4)
+
         title_label = QLabel(title)
         title_label.setObjectName("DetailStatTitle")
+        title_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
         value_label = QLabel(value)
         value_label.setObjectName(f"DetailStatValue_{tone}")
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        # 保持和病例管理页一致：标题一行，数值一行，并在垂直方向居中。
+        text_layout.addStretch(1)
         text_layout.addWidget(title_label)
         text_layout.addWidget(value_label)
+        text_layout.addStretch(1)
 
-        row.addWidget(icon_box)
+        row.addWidget(icon_box, 0, Qt.AlignVCenter)
         row.addLayout(text_layout, 1)
         return {"card": card, "title": title_label, "value": value_label, "icon": icon_label, "color": color}
 
@@ -492,29 +513,29 @@ class CaseDetailWindow(QWidget):
             QFrame#DetailStatIconBox_info {{
                 background-color: {t.get('primary_light', '#EAF2FF')};
                 border: 1px solid {t.get('primary_border', '#BCD7FF')};
-                border-radius: 10px;
+                border-radius: 12px;
             }}
             QFrame#DetailStatIconBox_cyan {{
                 background-color: #E6FAFA;
                 border: 1px solid #B7ECEC;
-                border-radius: 10px;
+                border-radius: 12px;
             }}
             QFrame#DetailStatIconBox_success {{
                 background-color: {t.get('success_bg', '#EAF8EF')};
                 border: 1px solid {t.get('success_border', '#BDEACB')};
-                border-radius: 10px;
+                border-radius: 12px;
             }}
             QFrame#DetailStatIconBox_purple {{
                 background-color: {t.get('purple_bg', '#F2ECFF')};
                 border: 1px solid {t.get('purple_border', '#D8C8FF')};
-                border-radius: 10px;
+                border-radius: 12px;
             }}
             QLabel#DetailStatTitle {{
-                color: {t.get('text_secondary', '#5E6B7A')};
-                font-size: 13px;
+                color: {t.get('text_muted', '#8A97A8')};
+                font-size: 12px;
             }}
             QLabel#DetailStatValue_info, QLabel#DetailStatValue_cyan, QLabel#DetailStatValue_success, QLabel#DetailStatValue_purple, QLabel#DetailStatValue_warning {{
-                font-size: 17px;
+                font-size: 22px;
                 font-weight: 700;
                 color: {t.get('text_primary', '#1F2D3D')};
             }}
