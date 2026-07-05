@@ -140,10 +140,10 @@ class CaseDetailWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self.sample_no_stat = self.create_stat_card("样本号", "-", "case_detail.svg", "info")
-        self.test_date_stat = self.create_stat_card("检查日期", "-", "form_calendar.svg", "cyan")
-        self.completed_stat = self.create_stat_card("已完成蛋白数", "0 / 0", "stat_today.svg", "success")
-        self.report_status_stat = self.create_stat_card("报告状态", "未生成", "stat_report.svg", "purple")
+        self.sample_no_stat = self.create_stat_card("样本号", "-", "detail_sample.svg", "info")
+        self.test_date_stat = self.create_stat_card("检查日期", "-", "detail_date.svg", "cyan")
+        self.completed_stat = self.create_stat_card("已完成蛋白数", "0 / 0", "detail_complete.svg", "success")
+        self.report_status_stat = self.create_stat_card("报告状态", "未生成", "detail_report.svg", "purple")
 
         layout.addWidget(self.sample_no_stat["card"], 1)
         layout.addWidget(self.test_date_stat["card"], 1)
@@ -199,7 +199,7 @@ class CaseDetailWindow(QWidget):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
-        layout.addWidget(self.create_section_title("基本信息", "case_manager.svg", self.theme.get("primary", "#1769E0")))
+        layout.addWidget(self.create_section_title("基本信息", "section_basic.svg", self.theme.get("primary", "#1769E0")))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(28)
@@ -246,7 +246,7 @@ class CaseDetailWindow(QWidget):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
-        layout.addWidget(self.create_section_title("样本信息", "stat_cases.svg", self.theme.get("primary", "#1769E0")))
+        layout.addWidget(self.create_section_title("样本信息", "section_sample.svg", self.theme.get("primary", "#1769E0")))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(28)
@@ -356,7 +356,7 @@ class CaseDetailWindow(QWidget):
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(8)
-        title_widget = self.create_section_title("蛋白检测状态总览", "protein_analysis.svg", self.theme.get("primary", "#1769E0"))
+        title_widget = self.create_section_title("蛋白检测状态总览", "section_analysis.svg", self.theme.get("primary", "#1769E0"))
         self.analysis_summary_label = QLabel("未选择病例")
         self.analysis_summary_label.setObjectName("DetailSummaryLabel")
         title_row.addWidget(title_widget)
