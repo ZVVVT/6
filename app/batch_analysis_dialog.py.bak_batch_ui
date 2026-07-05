@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
-    QWidget,
     QVBoxLayout,
 )
 
@@ -409,12 +408,9 @@ class BatchAnalysisDialog(QDialog):
         self._refreshing_table = False
 
         self.setWindowTitle("批量蛋白分析")
-        self.resize(1060, 780)
-        self.setMinimumSize(980, 720)
+        self.resize(980, 760)
+        self.setMinimumSize(920, 700)
         self.init_ui()
-
-        self.apply_modern_style()
-
         self.scan_parent_folder()
 
     def init_ui(self):
@@ -458,11 +454,9 @@ class BatchAnalysisDialog(QDialog):
         layout.addWidget(hint)
 
         table_group = QGroupBox("预检查结果")
-        table_group.setMinimumHeight(250)
-        table_group.setMaximumHeight(290)
+        table_group.setMinimumHeight(300)
+        table_group.setMaximumHeight(360)
         table_layout = QVBoxLayout(table_group)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        table_layout.setSpacing(6)
 
         self.table = QTableWidget()
         self.table.setColumnCount(9)
@@ -471,9 +465,9 @@ class BatchAnalysisDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        self.table.setMinimumHeight(214)
-        self.table.setMaximumHeight(226)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.setMinimumHeight(245)
+        self.table.setMaximumHeight(300)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         header = self.table.horizontalHeader()
@@ -487,7 +481,7 @@ class BatchAnalysisDialog(QDialog):
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         table_layout.addWidget(self.table)
-        layout.addWidget(table_group, 0)
+        layout.addWidget(table_group, 2)
 
         progress_layout = QHBoxLayout()
         self.progress_label = QLabel("等待开始")
@@ -525,329 +519,6 @@ class BatchAnalysisDialog(QDialog):
         self.btn_start.clicked.connect(self.start_batch_analysis)
         self.btn_cancel_next.clicked.connect(self.cancel_after_current)
         self.btn_close.clicked.connect(self.close)
-
-    def apply_modern_style(self):
-        """应用批量分析弹窗局部样式。
-
-        说明：
-        1. 此弹窗从病例详情页打开，必须显式设置 QDialog/QWidget 背景，
-           避免父页面透明背景样式传递后出现黑底。
-        2. 只处理 UI 显示，不修改任何批量分析业务逻辑。
-        """
-        self.setObjectName("BatchAnalysisDialog")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-
-        # 标题、当前病例、说明文字对象名。
-        for label in self.findChildren(QLabel):
-            text = label.text().strip()
-            if text == "批量蛋白分析":
-                label.setObjectName("BatchDialogTitle")
-            elif text.startswith("当前病例："):
-                label.setObjectName("BatchCaseInfo")
-            elif text.startswith("说明："):
-                label.setObjectName("BatchHintLabel")
-
-        # 分组卡片。
-        for group in self.findChildren(QGroupBox):
-            group.setObjectName("BatchGroup")
-            group.setAttribute(Qt.WA_StyledBackground, True)
-
-        # 关键控件。
-        if hasattr(self, "folder_edit"):
-            self.folder_edit.setObjectName("BatchPathEdit")
-            self.folder_edit.setMinimumHeight(34)
-
-        if hasattr(self, "table"):
-            self.table.setObjectName("BatchPreviewTable")
-            self.table.verticalHeader().setDefaultSectionSize(34)
-            self.table.setShowGrid(True)
-            self.table.setAlternatingRowColors(True)
-            self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        if hasattr(self, "log_edit"):
-            self.log_edit.setObjectName("BatchLogEdit")
-            self.log_edit.setMinimumHeight(96)
-
-        if hasattr(self, "progress_bar"):
-            self.progress_bar.setObjectName("BatchProgressBar")
-            self.progress_bar.setTextVisible(True)
-            self.progress_bar.setMinimumHeight(18)
-
-        # 按钮对象名。
-        for name in ["btn_select_folder", "btn_start"]:
-            if hasattr(self, name):
-                getattr(self, name).setObjectName("BatchPrimaryButton")
-
-        for name in ["btn_scan", "btn_alias_rules", "btn_save_mapping", "btn_cancel_next", "btn_close"]:
-            if hasattr(self, name):
-                getattr(self, name).setObjectName("BatchNeutralButton")
-
-        for button in self.findChildren(QPushButton):
-            button.setMinimumHeight(34)
-            button.setCursor(Qt.PointingHandCursor if button.isEnabled() else Qt.ArrowCursor)
-
-        self.setStyleSheet("""
-            QDialog#BatchAnalysisDialog {
-                background-color: #F5F8FC;
-                color: #1F2D3D;
-                font-family: "Microsoft YaHei";
-                font-size: 13px;
-            }
-
-            QDialog#BatchAnalysisDialog QWidget {
-                color: #1F2D3D;
-                background: transparent;
-            }
-
-            QLabel#BatchDialogTitle {
-                color: #102A43;
-                font-size: 22px;
-                font-weight: 700;
-                padding: 2px 0 0 0;
-            }
-
-            QLabel#BatchCaseInfo {
-                color: #5E6B7A;
-                font-size: 13px;
-                padding: 2px 0 4px 0;
-            }
-
-            QLabel#BatchHintLabel {
-                color: #5E6B7A;
-                font-size: 12px;
-                line-height: 1.4;
-            }
-
-            QGroupBox#BatchGroup {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding: 14px 12px 12px 12px;
-                color: #102A43;
-                font-weight: 700;
-            }
-
-            QGroupBox#BatchGroup::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                top: 0px;
-                padding: 0px 6px;
-                color: #1769E0;
-                background-color: #F5F8FC;
-            }
-
-            QLineEdit#BatchPathEdit {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                padding: 5px 10px;
-                color: #1F2D3D;
-                selection-background-color: #DCEBFF;
-            }
-
-            QLineEdit#BatchPathEdit:focus {
-                border-color: #1769E0;
-            }
-
-            QPushButton#BatchPrimaryButton {
-                min-height: 34px;
-                padding: 5px 16px;
-                border: 1px solid #1769E0;
-                border-radius: 6px;
-                background-color: #1769E0;
-                color: #FFFFFF;
-                font-weight: 600;
-            }
-
-            QPushButton#BatchPrimaryButton:hover {
-                background-color: #0F5ED7;
-                border-color: #0F5ED7;
-            }
-
-            QPushButton#BatchPrimaryButton:pressed {
-                background-color: #0B4DB5;
-                border-color: #0B4DB5;
-            }
-
-            QPushButton#BatchPrimaryButton:disabled {
-                background-color: #EEF4FB;
-                border-color: #DDE6F2;
-                color: #8A97A8;
-            }
-
-            QPushButton#BatchNeutralButton {
-                min-height: 34px;
-                padding: 5px 14px;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                background-color: #FFFFFF;
-                color: #1F2D3D;
-                font-weight: 500;
-            }
-
-            QPushButton#BatchNeutralButton:hover {
-                background-color: #F2F7FF;
-                border-color: #BCD7FF;
-                color: #1769E0;
-            }
-
-            QPushButton#BatchNeutralButton:pressed {
-                background-color: #EAF2FF;
-                border-color: #1769E0;
-            }
-
-            QPushButton#BatchNeutralButton:disabled {
-                background-color: #F8FAFD;
-                border-color: #E8EEF6;
-                color: #9AA6B2;
-            }
-
-            QTableWidget#BatchPreviewTable {
-                background-color: #FFFFFF;
-                alternate-background-color: #F8FAFD;
-                gridline-color: #DDE6F2;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                selection-background-color: #DCEBFF;
-                selection-color: #1F2D3D;
-                color: #1F2D3D;
-            }
-
-            QTableWidget#BatchPreviewTable::item {
-                padding: 4px;
-            }
-
-            QTableWidget#BatchPreviewTable::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
-            }
-
-            QHeaderView::section {
-                background-color: #EEF4FB;
-                color: #1F2D3D;
-                font-weight: 700;
-                border: none;
-                border-right: 1px solid #DDE6F2;
-                border-bottom: 1px solid #DDE6F2;
-                padding: 6px 5px;
-                min-height: 28px;
-            }
-
-            QComboBox {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 5px;
-                padding: 3px 24px 3px 8px;
-                color: #1F2D3D;
-                min-height: 26px;
-            }
-
-            QComboBox#BatchTableCombo {
-                min-height: 28px;
-                max-height: 28px;
-                border-radius: 5px;
-                padding: 2px 24px 2px 8px;
-                background-color: #FFFFFF;
-            }
-
-            QComboBox:hover {
-                border-color: #BCD7FF;
-                background-color: #F8FAFD;
-            }
-
-            QComboBox:focus {
-                border-color: #1769E0;
-                background-color: #FFFFFF;
-            }
-
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 22px;
-                border: none;
-                background: transparent;
-            }
-
-            QComboBox::down-arrow {
-                width: 10px;
-                height: 10px;
-            }
-
-            QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                color: #1F2D3D;
-                border: 1px solid #DDE6F2;
-                selection-background-color: #DCEBFF;
-                selection-color: #1F2D3D;
-                outline: none;
-                padding: 4px;
-            }
-
-            QComboBox QAbstractItemView::item {
-                min-height: 26px;
-                padding: 4px 8px;
-            }
-
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #F2F7FF;
-                color: #1769E0;
-            }
-
-            QComboBox QAbstractItemView::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
-            }
-
-            QProgressBar#BatchProgressBar {
-                background-color: #EEF4FB;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                min-height: 18px;
-                text-align: center;
-                color: #1F2D3D;
-            }
-
-            QProgressBar#BatchProgressBar::chunk {
-                background-color: #1769E0;
-                border-radius: 5px;
-            }
-
-            QTextEdit#BatchLogEdit {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                color: #1F2D3D;
-                padding: 6px;
-            }
-
-            QScrollBar:vertical {
-                background-color: #EEF4FB;
-                width: 10px;
-                margin: 0px;
-                border: none;
-            }
-
-            QScrollBar::handle:vertical {
-                background-color: #DDE6F2;
-                min-height: 30px;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:vertical:hover {
-                background-color: #BCD7FF;
-            }
-
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: none;
-                border: none;
-            }
-        """)
-
-
 
     # ---------- 匹配规则 ----------
 
@@ -1167,35 +838,6 @@ class BatchAnalysisDialog(QDialog):
         counts["_unmatched_files"] = len(result.unmatched_files)
         return counts
 
-    @staticmethod
-    def style_table_combo(combo: QComboBox) -> None:
-        """统一预检查表格内下拉框样式，避免弹出列表黑底或单元格内偏低。"""
-        combo.setMinimumHeight(28)
-        combo.setMaximumHeight(28)
-        combo.view().setStyleSheet("""
-            QListView {
-                background-color: #FFFFFF;
-                color: #1F2D3D;
-                border: 1px solid #DDE6F2;
-                outline: none;
-                padding: 4px;
-                selection-background-color: #DCEBFF;
-                selection-color: #1F2D3D;
-            }
-            QListView::item {
-                min-height: 26px;
-                padding: 4px 8px;
-            }
-            QListView::item:hover {
-                background-color: #F2F7FF;
-                color: #1769E0;
-            }
-            QListView::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
-            }
-        """)
-
     def refresh_table(self):
         self._refreshing_table = True
         try:
@@ -1210,7 +852,6 @@ class BatchAnalysisDialog(QDialog):
                 self.table.setItem(row_index, 0, protein_item)
 
                 combo = QComboBox()
-                combo.setObjectName("BatchTableCombo")
                 combo.addItem("- 未选择 -", "")
                 for name in folder_names:
                     combo.addItem(name, name)
@@ -1221,17 +862,7 @@ class BatchAnalysisDialog(QDialog):
                     if idx >= 0:
                         combo.setCurrentIndex(idx)
                 combo.currentIndexChanged.connect(lambda _idx, r=row_index: self.on_folder_combo_changed(r))
-                self.style_table_combo(combo)
-
-                combo_wrapper = QWidget()
-                combo_wrapper.setObjectName("BatchComboCell")
-                combo_wrapper.setStyleSheet("QWidget#BatchComboCell { background: transparent; }")
-                combo_layout = QHBoxLayout(combo_wrapper)
-                combo_layout.setContentsMargins(8, 2, 8, 2)
-                combo_layout.setSpacing(0)
-                combo_layout.addWidget(combo)
-                self.table.setCellWidget(row_index, 1, combo_wrapper)
-                self.table.setRowHeight(row_index, 34)
+                self.table.setCellWidget(row_index, 1, combo)
 
                 pipeline_check = row.get("pipeline", {}) or {}
                 env_check = row.get("environment", {}) or {}
@@ -1265,13 +896,7 @@ class BatchAnalysisDialog(QDialog):
         if row_index < 0 or row_index >= len(self.scan_rows):
             return
 
-        cell_widget = self.table.cellWidget(row_index, 1)
-        combo = None
-        if isinstance(cell_widget, QComboBox):
-            combo = cell_widget
-        elif isinstance(cell_widget, QWidget):
-            combo = cell_widget.findChild(QComboBox)
-
+        combo = self.table.cellWidget(row_index, 1)
         folder_name = combo.currentData() if isinstance(combo, QComboBox) else ""
         folder_path: Optional[Path] = None
         if folder_name and self.parent_folder:

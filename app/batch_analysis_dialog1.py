@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
-    QWidget,
     QVBoxLayout,
 )
 
@@ -458,11 +457,9 @@ class BatchAnalysisDialog(QDialog):
         layout.addWidget(hint)
 
         table_group = QGroupBox("预检查结果")
-        table_group.setMinimumHeight(250)
-        table_group.setMaximumHeight(290)
+        table_group.setMinimumHeight(300)
+        table_group.setMaximumHeight(360)
         table_layout = QVBoxLayout(table_group)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        table_layout.setSpacing(6)
 
         self.table = QTableWidget()
         self.table.setColumnCount(9)
@@ -471,9 +468,9 @@ class BatchAnalysisDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        self.table.setMinimumHeight(214)
-        self.table.setMaximumHeight(226)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.setMinimumHeight(245)
+        self.table.setMaximumHeight(300)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         header = self.table.horizontalHeader()
@@ -487,7 +484,7 @@ class BatchAnalysisDialog(QDialog):
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         table_layout.addWidget(self.table)
-        layout.addWidget(table_group, 0)
+        layout.addWidget(table_group, 2)
 
         progress_layout = QHBoxLayout()
         self.progress_label = QLabel("等待开始")
@@ -559,7 +556,7 @@ class BatchAnalysisDialog(QDialog):
 
         if hasattr(self, "table"):
             self.table.setObjectName("BatchPreviewTable")
-            self.table.verticalHeader().setDefaultSectionSize(34)
+            self.table.verticalHeader().setDefaultSectionSize(32)
             self.table.setShowGrid(True)
             self.table.setAlternatingRowColors(True)
             self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -739,65 +736,21 @@ class BatchAnalysisDialog(QDialog):
                 background-color: #FFFFFF;
                 border: 1px solid #DDE6F2;
                 border-radius: 5px;
-                padding: 3px 24px 3px 8px;
+                padding: 4px 22px 4px 8px;
                 color: #1F2D3D;
                 min-height: 26px;
-            }
-
-            QComboBox#BatchTableCombo {
-                min-height: 28px;
-                max-height: 28px;
-                border-radius: 5px;
-                padding: 2px 24px 2px 8px;
-                background-color: #FFFFFF;
-            }
-
-            QComboBox:hover {
-                border-color: #BCD7FF;
-                background-color: #F8FAFD;
             }
 
             QComboBox:focus {
                 border-color: #1769E0;
-                background-color: #FFFFFF;
-            }
-
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 22px;
-                border: none;
-                background: transparent;
-            }
-
-            QComboBox::down-arrow {
-                width: 10px;
-                height: 10px;
             }
 
             QComboBox QAbstractItemView {
                 background-color: #FFFFFF;
-                color: #1F2D3D;
                 border: 1px solid #DDE6F2;
                 selection-background-color: #DCEBFF;
                 selection-color: #1F2D3D;
                 outline: none;
-                padding: 4px;
-            }
-
-            QComboBox QAbstractItemView::item {
-                min-height: 26px;
-                padding: 4px 8px;
-            }
-
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #F2F7FF;
-                color: #1769E0;
-            }
-
-            QComboBox QAbstractItemView::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
             }
 
             QProgressBar#BatchProgressBar {
@@ -1167,35 +1120,6 @@ class BatchAnalysisDialog(QDialog):
         counts["_unmatched_files"] = len(result.unmatched_files)
         return counts
 
-    @staticmethod
-    def style_table_combo(combo: QComboBox) -> None:
-        """统一预检查表格内下拉框样式，避免弹出列表黑底或单元格内偏低。"""
-        combo.setMinimumHeight(28)
-        combo.setMaximumHeight(28)
-        combo.view().setStyleSheet("""
-            QListView {
-                background-color: #FFFFFF;
-                color: #1F2D3D;
-                border: 1px solid #DDE6F2;
-                outline: none;
-                padding: 4px;
-                selection-background-color: #DCEBFF;
-                selection-color: #1F2D3D;
-            }
-            QListView::item {
-                min-height: 26px;
-                padding: 4px 8px;
-            }
-            QListView::item:hover {
-                background-color: #F2F7FF;
-                color: #1769E0;
-            }
-            QListView::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
-            }
-        """)
-
     def refresh_table(self):
         self._refreshing_table = True
         try:
@@ -1210,7 +1134,6 @@ class BatchAnalysisDialog(QDialog):
                 self.table.setItem(row_index, 0, protein_item)
 
                 combo = QComboBox()
-                combo.setObjectName("BatchTableCombo")
                 combo.addItem("- 未选择 -", "")
                 for name in folder_names:
                     combo.addItem(name, name)
@@ -1221,17 +1144,7 @@ class BatchAnalysisDialog(QDialog):
                     if idx >= 0:
                         combo.setCurrentIndex(idx)
                 combo.currentIndexChanged.connect(lambda _idx, r=row_index: self.on_folder_combo_changed(r))
-                self.style_table_combo(combo)
-
-                combo_wrapper = QWidget()
-                combo_wrapper.setObjectName("BatchComboCell")
-                combo_wrapper.setStyleSheet("QWidget#BatchComboCell { background: transparent; }")
-                combo_layout = QHBoxLayout(combo_wrapper)
-                combo_layout.setContentsMargins(8, 2, 8, 2)
-                combo_layout.setSpacing(0)
-                combo_layout.addWidget(combo)
-                self.table.setCellWidget(row_index, 1, combo_wrapper)
-                self.table.setRowHeight(row_index, 34)
+                self.table.setCellWidget(row_index, 1, combo)
 
                 pipeline_check = row.get("pipeline", {}) or {}
                 env_check = row.get("environment", {}) or {}
@@ -1265,13 +1178,7 @@ class BatchAnalysisDialog(QDialog):
         if row_index < 0 or row_index >= len(self.scan_rows):
             return
 
-        cell_widget = self.table.cellWidget(row_index, 1)
-        combo = None
-        if isinstance(cell_widget, QComboBox):
-            combo = cell_widget
-        elif isinstance(cell_widget, QWidget):
-            combo = cell_widget.findChild(QComboBox)
-
+        combo = self.table.cellWidget(row_index, 1)
         folder_name = combo.currentData() if isinstance(combo, QComboBox) else ""
         folder_path: Optional[Path] = None
         if folder_name and self.parent_folder:
