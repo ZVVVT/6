@@ -675,7 +675,11 @@ class CaseDetailWindow(QWidget):
                 self.current_case = fresh_case
 
         case = self.current_case
-        self.status_label.setText(f"当前病例：{case.get('case_no', '')} - {case.get('patient_name', '')}")
+        self.status_label.setText(
+            f"当前病例：{case.get('case_no', '')}    "
+            f"姓名：{case.get('patient_name', '')}    "
+            f"样本号：{case.get('sample_no', '')}"
+        )
 
         self.case_no_label.setText(self.v(case.get("case_no")))
         self.patient_name_label.setText(self.v(case.get("patient_name")))

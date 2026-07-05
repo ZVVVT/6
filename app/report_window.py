@@ -629,7 +629,9 @@ class ReportWindow(QWidget):
         if not self.current_case:
             self.current_case_pill.setText("未选择病例")
         else:
-            self.current_case_pill.setText(f"当前病例：{case_no} - {patient_name}")
+            self.current_case_pill.setText(
+                f"当前病例：{case_no}    姓名：{patient_name}    样本号：{sample_no}"
+            )
 
         self.case_no_label.setText(case_no)
         self.patient_name_label.setText(patient_name)
@@ -641,7 +643,7 @@ class ReportWindow(QWidget):
         self.sample_no_stat["value"].setText(sample_no)
         self.test_date_stat["value"].setText(test_date)
         self.report_status_stat["value"].setText("可用" if case.get("report_path") else "未生成")
-        self.report_status_stat["value"].setObjectName("ReportStatValue_success" if case.get("report_path") else "ReportStatValue_purple")
+        self.report_status_stat["value"].setObjectName("ReportStatValue_purple")
         self.report_status_stat["value"].style().unpolish(self.report_status_stat["value"])
         self.report_status_stat["value"].style().polish(self.report_status_stat["value"])
         self.update_buttons_state()

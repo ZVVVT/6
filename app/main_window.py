@@ -424,14 +424,12 @@ class MainWindow(QMainWindow):
         sample_no = self.current_case.get("sample_no", "")
         test_date = self.current_case.get("test_date", "")
 
-        if title == "蛋白分析":
+        if title in ("病例详情", "蛋白分析", "报告管理"):
             self.header_context_label.setText(
-                f"当前病例：{case_no} 姓名：{patient_name} 样本号：{sample_no} 检测日期：{test_date}"
+                f"当前病例：{case_no}    姓名：{patient_name}    样本号：{sample_no}"
             )
-        elif title == "报告管理":
-            self.header_context_label.setText(f"当前病例：{case_no} - {patient_name}")
         else:
-            self.header_context_label.setText(f"当前病例：{case_no} - {patient_name}")
+            self.header_context_label.setText("")
 
     def hide_old_context_labels(self, page: QWidget):
         if page is None:

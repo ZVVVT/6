@@ -598,7 +598,7 @@ class AnalysisWindow(QWidget):
         test_date = str(self.current_case.get("test_date", "") or "")
 
         self.case_summary_label.setText(
-            f"当前病例：{case_no}    姓名：{patient_name}    样本号：{sample_no}    检测日期：{test_date}"
+            f"当前病例：{case_no}    姓名：{patient_name}    样本号：{sample_no}"
         )
 
     def update_import_status_label(self, image_items=None):
