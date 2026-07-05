@@ -68,8 +68,6 @@ class CaseEditDialog(QDialog):
         self.phone_edit = QLineEdit()
         self.phone_edit.setPlaceholderText("联系方式")
 
-        self.protein_analysis_check = QCheckBox("蛋白分析")
-        self.protein_analysis_check.setChecked(True)
 
         self.add_row3(
             basic_layout,
@@ -86,8 +84,6 @@ class CaseEditDialog(QDialog):
             ("联系方式", self.phone_edit),
         )
 
-        basic_layout.addWidget(QLabel("项目"), 2, 0)
-        basic_layout.addWidget(self.protein_analysis_check, 2, 1)
 
         main_layout.addWidget(self.basic_group)
 
@@ -529,9 +525,6 @@ class CaseEditDialog(QDialog):
         self.set_combo_text(self.occupation_combo, self.case_data.get("occupation", ""))
         self.phone_edit.setText(str(self.case_data.get("phone", "")))
 
-        self.protein_analysis_check.setChecked(
-            self.to_bool(self.case_data.get("protein_analysis_enabled", 1))
-        )
 
         test_date = self.case_data.get("test_date", "")
         date_obj = QDate.fromString(str(test_date), "yyyy-MM-dd")
@@ -620,8 +613,6 @@ class CaseEditDialog(QDialog):
             "sex": self.sex_combo.currentText().strip(),
             "occupation": self.occupation_combo.currentText().strip(),
             "phone": self.phone_edit.text().strip(),
-
-            "protein_analysis_enabled": 1 if self.protein_analysis_check.isChecked() else 0,
 
             "test_date": self.test_date_edit.date().toString("yyyy-MM-dd"),
             "collect_time": self.collect_time_edit.time().toString("HH:mm:ss"),
