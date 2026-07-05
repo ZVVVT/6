@@ -118,21 +118,37 @@ class CaseDetailWindow(QWidget):
         self.btn_open_workspace.clicked.connect(self.open_workspace)
 
     def create_header(self) -> QHBoxLayout:
-        """顶部当前病例提示条。
-
-        主窗口上方已经有“病例详情”页面标题，因此这里不再重复显示
-        图标、标题和说明，只保留右侧当前病例信息，避免页面顶部信息重复。
-        """
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(12)
+
+        icon_box = QFrame()
+        icon_box.setObjectName("DetailHeaderIconBox")
+        icon_box.setFixedSize(52, 52)
+        icon_layout = QHBoxLayout(icon_box)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setPixmap(self.make_svg_icon("case_detail.svg", self.theme.get("primary", "#1769E0"), 30).pixmap(30, 30))
+        icon_layout.addWidget(icon_label)
+
+        title_layout = QVBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(3)
+        title = QLabel("病例详情")
+        title.setObjectName("DetailPageTitle")
+        subtitle = QLabel("查看病例基本信息、样本信息与蛋白检测结果")
+        subtitle.setObjectName("DetailPageSubtitle")
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
 
         self.status_label = QLabel("未选择病例")
         self.status_label.setObjectName("DetailCurrentCasePill")
         self.status_label.setAlignment(Qt.AlignCenter)
 
-        layout.addStretch()
-        layout.addWidget(self.status_label, 0, Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(icon_box)
+        layout.addLayout(title_layout, 1)
+        layout.addWidget(self.status_label, 0, Qt.AlignRight | Qt.AlignTop)
         return layout
 
     def create_stat_cards(self) -> QHBoxLayout:
