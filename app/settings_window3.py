@@ -346,17 +346,11 @@ class SettingsWindow(QWidget):
         self.protein_table.setColumnWidth(2, 96)
         self.protein_table.setColumnWidth(4, 110)
         self.protein_table.setColumnWidth(5, 120)
-        self.protein_table.setColumnWidth(6, 104)
+        self.protein_table.setColumnWidth(6, 72)
 
         layout.addWidget(self.protein_table, 1)
 
-        # 蛋白配置维护按钮暂时隐藏。
-        # 保留控件和信号连接，后续如需恢复，只需把 setVisible(False) 改为 True。
-        self.protein_action_bar = QWidget()
-        button_layout = QHBoxLayout(self.protein_action_bar)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(8)
-
+        button_layout = QHBoxLayout()
         self.btn_reset_protein_defaults = QPushButton("恢复默认蛋白配置")
         self.btn_add_protein_row = QPushButton("增加一行")
         self.btn_remove_protein_row = QPushButton("删除选中行")
@@ -365,8 +359,7 @@ class SettingsWindow(QWidget):
         button_layout.addWidget(self.btn_add_protein_row)
         button_layout.addWidget(self.btn_remove_protein_row)
         button_layout.addStretch()
-        layout.addWidget(self.protein_action_bar)
-        self.protein_action_bar.setVisible(False)
+        layout.addLayout(button_layout)
 
         self.btn_reset_protein_defaults.clicked.connect(self.reset_protein_defaults)
         self.btn_add_protein_row.clicked.connect(self.add_empty_protein_row)
@@ -894,11 +887,11 @@ class SettingsWindow(QWidget):
 
         btn_select = QPushButton("选择")
         btn_select.setObjectName("ProteinSelectButton")
-        btn_select.setFixedSize(68, 28)
+        btn_select.setFixedSize(52, 28)
         btn_select.clicked.connect(
             lambda checked=False, button=btn_select: self.select_protein_pipeline_for_button(button)
         )
-        self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select, margin_left=8, margin_right=8))
+        self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select))
 
     def add_empty_protein_row(self):
         next_index = self.protein_table.rowCount() + 1

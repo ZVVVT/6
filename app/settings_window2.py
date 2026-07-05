@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QListView,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -118,6 +119,21 @@ class SettingsWindow(QWidget):
         self.app_logo_path_edit.setReadOnly(True)
         self.app_font_path_edit = QLineEdit()
         self.app_font_path_edit.setReadOnly(True)
+        self.app_font_size_spin = QSpinBox()
+        self.app_font_size_spin.setObjectName("AppFontSizeSpin")
+        self.app_font_size_spin.setRange(8, 18)
+        self.app_font_size_spin.setValue(10)
+        self.app_font_size_spin.setSuffix(" pt")
+        self.app_font_size_spin.setFixedWidth(120)
+        self.app_font_size_spin.setMinimumHeight(32)
+
+        font_size_row = QWidget()
+        font_size_layout = QHBoxLayout(font_size_row)
+        font_size_layout.setContentsMargins(0, 0, 0, 0)
+        font_size_layout.setSpacing(0)
+        font_size_layout.addWidget(self.app_font_size_spin)
+        font_size_layout.addStretch()
+
         self.logo_preview_label = QLabel()
         self.logo_preview_label.setFixedSize(80, 80)
         self.logo_preview_label.setAlignment(Qt.AlignCenter)
@@ -150,6 +166,7 @@ class SettingsWindow(QWidget):
         form.addRow("LOGO 预览：", self.logo_preview_label)
         form.addRow("LOGO 图片：", logo_row)
         form.addRow("界面字体：", font_row)
+        form.addRow("界面字号：", font_size_row)
 
         hint = QLabel(
             "说明：这里控制窗口标题、任务栏图标、左侧品牌区和软件界面字体。"
@@ -346,17 +363,11 @@ class SettingsWindow(QWidget):
         self.protein_table.setColumnWidth(2, 96)
         self.protein_table.setColumnWidth(4, 110)
         self.protein_table.setColumnWidth(5, 120)
-        self.protein_table.setColumnWidth(6, 104)
+        self.protein_table.setColumnWidth(6, 72)
 
         layout.addWidget(self.protein_table, 1)
 
-        # 蛋白配置维护按钮暂时隐藏。
-        # 保留控件和信号连接，后续如需恢复，只需把 setVisible(False) 改为 True。
-        self.protein_action_bar = QWidget()
-        button_layout = QHBoxLayout(self.protein_action_bar)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(8)
-
+        button_layout = QHBoxLayout()
         self.btn_reset_protein_defaults = QPushButton("恢复默认蛋白配置")
         self.btn_add_protein_row = QPushButton("增加一行")
         self.btn_remove_protein_row = QPushButton("删除选中行")
@@ -365,8 +376,7 @@ class SettingsWindow(QWidget):
         button_layout.addWidget(self.btn_add_protein_row)
         button_layout.addWidget(self.btn_remove_protein_row)
         button_layout.addStretch()
-        layout.addWidget(self.protein_action_bar)
-        self.protein_action_bar.setVisible(False)
+        layout.addLayout(button_layout)
 
         self.btn_reset_protein_defaults.clicked.connect(self.reset_protein_defaults)
         self.btn_add_protein_row.clicked.connect(self.add_empty_protein_row)
@@ -546,6 +556,12 @@ class SettingsWindow(QWidget):
                 border-color: #1769E0;
             }
 
+            QSpinBox#AppFontSizeSpin {
+                min-height: 32px;
+                max-height: 32px;
+                padding: 0px 24px 0px 9px;
+            }
+
             QPushButton {
                 min-height: 32px;
                 padding: 0px 14px;
@@ -617,6 +633,7 @@ class SettingsWindow(QWidget):
         self.app_logo_path_edit.setText(str(self.config.get_app_logo_path()))
         # 字体路径为空表示使用系统默认字体。不能显示为 "."。
         self.app_font_path_edit.setText(str(self.config.get_app_font_path() or ""))
+        self.app_font_size_spin.setValue(self.config.get_app_font_size())
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
         self.source_project_dir_edit.setText(self.config.get_mvimageid("source_project_dir", ""))
@@ -656,11 +673,12 @@ class SettingsWindow(QWidget):
 
         app_logo_path = self.prepare_app_logo_for_save(self.app_logo_path_edit.text().strip())
         app_font_path = self.prepare_app_font_for_save(self.app_font_path_edit.text().strip())
+        app_font_size = str(self.app_font_size_spin.value())
+
         self.config.set("AppInfo", "app_name", app_name)
         self.config.set("AppInfo", "logo_path", app_logo_path)
         self.config.set("AppInfo", "font_path", app_font_path)
-        # 界面字号功能已取消，保留默认字号，避免旧配置继续影响界面。
-        self.config.set("AppInfo", "font_size", "10")
+        self.config.set("AppInfo", "font_size", app_font_size)
         # 同步旧字段，避免其他旧代码仍读取 [Software] name。
         self.config.set("Software", "name", app_name)
 
@@ -732,6 +750,7 @@ class SettingsWindow(QWidget):
         self.app_name_edit.setText("人精子蛋白质量分析软件")
         self.app_logo_path_edit.setText(r"assets\logo.png")
         self.app_font_path_edit.setText("")
+        self.app_font_size_spin.setValue(10)
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
     def prepare_app_logo_for_save(self, logo_path_text: str) -> str:
@@ -801,6 +820,7 @@ class SettingsWindow(QWidget):
 
     def reset_app_font(self):
         self.app_font_path_edit.setText("")
+        self.app_font_size_spin.setValue(10)
 
     def prepare_app_font_for_save(self, font_path_text: str) -> str:
         if not font_path_text or font_path_text.strip() in (".", "系统默认字体"):
@@ -894,11 +914,11 @@ class SettingsWindow(QWidget):
 
         btn_select = QPushButton("选择")
         btn_select.setObjectName("ProteinSelectButton")
-        btn_select.setFixedSize(68, 28)
+        btn_select.setFixedSize(52, 28)
         btn_select.clicked.connect(
             lambda checked=False, button=btn_select: self.select_protein_pipeline_for_button(button)
         )
-        self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select, margin_left=8, margin_right=8))
+        self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select))
 
     def add_empty_protein_row(self):
         next_index = self.protein_table.rowCount() + 1

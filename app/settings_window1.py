@@ -1,6 +1,5 @@
 import shutil
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
@@ -13,16 +12,15 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListView,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QSizePolicy,
 )
 
 from core.config_manager import ConfigManager
@@ -61,10 +59,7 @@ class SettingsWindow(QWidget):
             return str(path)
 
     def init_ui(self):
-        self.setObjectName("SettingsWindow")
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 14, 16, 14)
-        main_layout.setSpacing(10)
 
         title_label = QLabel("系统设置")
         title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
@@ -101,8 +96,6 @@ class SettingsWindow(QWidget):
         self.btn_test.clicked.connect(self.check_paths)
         self.btn_save.clicked.connect(self.save_config)
 
-        self.apply_settings_style()
-
     # ------------------------------------------------------------------
     # Tab 初始化
     # ------------------------------------------------------------------
@@ -118,6 +111,11 @@ class SettingsWindow(QWidget):
         self.app_logo_path_edit.setReadOnly(True)
         self.app_font_path_edit = QLineEdit()
         self.app_font_path_edit.setReadOnly(True)
+        self.app_font_size_spin = QSpinBox()
+        self.app_font_size_spin.setRange(8, 18)
+        self.app_font_size_spin.setValue(10)
+        self.app_font_size_spin.setSuffix(" pt")
+
         self.logo_preview_label = QLabel()
         self.logo_preview_label.setFixedSize(80, 80)
         self.logo_preview_label.setAlignment(Qt.AlignCenter)
@@ -150,6 +148,7 @@ class SettingsWindow(QWidget):
         form.addRow("LOGO 预览：", self.logo_preview_label)
         form.addRow("LOGO 图片：", logo_row)
         form.addRow("界面字体：", font_row)
+        form.addRow("界面字号：", self.app_font_size_spin)
 
         hint = QLabel(
             "说明：这里控制窗口标题、任务栏图标、左侧品牌区和软件界面字体。"
@@ -324,39 +323,20 @@ class SettingsWindow(QWidget):
                 "选择",
             ]
         )
-        self.protein_table.setObjectName("ProteinConfigTable")
         self.protein_table.setAlternatingRowColors(True)
         self.protein_table.verticalHeader().setVisible(False)
-        self.protein_table.verticalHeader().setDefaultSectionSize(38)
-        self.protein_table.setShowGrid(True)
-        self.protein_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.protein_table.setFocusPolicy(Qt.NoFocus)
 
         header = self.protein_table.horizontalHeader()
-        header.setFixedHeight(36)
         header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.Fixed)
-        header.setSectionResizeMode(6, QHeaderView.Fixed)
-        self.protein_table.setColumnWidth(0, 78)
-        self.protein_table.setColumnWidth(1, 160)
-        self.protein_table.setColumnWidth(2, 96)
-        self.protein_table.setColumnWidth(4, 110)
-        self.protein_table.setColumnWidth(5, 120)
-        self.protein_table.setColumnWidth(6, 104)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
 
         layout.addWidget(self.protein_table, 1)
 
-        # 蛋白配置维护按钮暂时隐藏。
-        # 保留控件和信号连接，后续如需恢复，只需把 setVisible(False) 改为 True。
-        self.protein_action_bar = QWidget()
-        button_layout = QHBoxLayout(self.protein_action_bar)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(8)
-
+        button_layout = QHBoxLayout()
         self.btn_reset_protein_defaults = QPushButton("恢复默认蛋白配置")
         self.btn_add_protein_row = QPushButton("增加一行")
         self.btn_remove_protein_row = QPushButton("删除选中行")
@@ -365,8 +345,7 @@ class SettingsWindow(QWidget):
         button_layout.addWidget(self.btn_add_protein_row)
         button_layout.addWidget(self.btn_remove_protein_row)
         button_layout.addStretch()
-        layout.addWidget(self.protein_action_bar)
-        self.protein_action_bar.setVisible(False)
+        layout.addLayout(button_layout)
 
         self.btn_reset_protein_defaults.clicked.connect(self.reset_protein_defaults)
         self.btn_add_protein_row.clicked.connect(self.add_empty_protein_row)
@@ -378,233 +357,14 @@ class SettingsWindow(QWidget):
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
 
         button = QPushButton(button_text)
-        button.setObjectName("SettingsSmallButton")
-        button.setFixedSize(64, 32)
+        button.setFixedWidth(60)
         button.clicked.connect(callback)
 
         layout.addWidget(line_edit, 1)
         layout.addWidget(button)
         return widget
-
-    def make_cell_widget(self, inner_widget: QWidget, margin_left: int = 4, margin_right: int = 4) -> QWidget:
-        wrapper = QWidget()
-        wrapper.setObjectName("SettingsTableCellWidget")
-        wrapper.setAttribute(Qt.WA_StyledBackground, True)
-        wrapper.setStyleSheet("QWidget#SettingsTableCellWidget { background: transparent; border: none; }")
-        layout = QHBoxLayout(wrapper)
-        layout.setContentsMargins(margin_left, 0, margin_right, 0)
-        layout.setSpacing(0)
-        layout.addWidget(inner_widget, 0, Qt.AlignCenter)
-        return wrapper
-
-    def style_part_combo(self, combo: QComboBox) -> None:
-        combo.setObjectName("ProteinPartCombo")
-        combo.setFixedSize(76, 28)
-        combo.setFocusPolicy(Qt.NoFocus)
-        combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        view = QListView(combo)
-        view.setUniformItemSizes(True)
-        combo.setView(view)
-        arrow_icon = (self.project_root / "assets" / "icons" / "form_chevron_down.svg").as_posix()
-        combo.setStyleSheet(f'''
-            QComboBox#ProteinPartCombo {{
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 5px;
-                padding: 0px 22px 0px 9px;
-                color: #1F2D3D;
-                min-height: 28px;
-                max-height: 28px;
-            }}
-            QComboBox#ProteinPartCombo:hover {{
-                background-color: #F8FBFF;
-                border-color: #BCD7FF;
-            }}
-            QComboBox#ProteinPartCombo::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 22px;
-                border: none;
-                background: transparent;
-            }}
-            QComboBox#ProteinPartCombo::down-arrow {{
-                image: url("{arrow_icon}");
-                width: 10px;
-                height: 10px;
-            }}
-        ''')
-        view.setStyleSheet('''
-            QListView {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                color: #1F2D3D;
-                outline: none;
-                padding: 3px;
-                selection-background-color: #DCEBFF;
-                selection-color: #1F2D3D;
-            }
-            QListView::item {
-                min-height: 28px;
-                padding: 4px 8px;
-                background-color: #FFFFFF;
-                color: #1F2D3D;
-            }
-            QListView::item:hover {
-                background-color: #F2F7FF;
-                color: #1769E0;
-            }
-            QListView::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
-            }
-        ''')
-
-    def get_part_combo_from_row(self, row: int) -> Optional[QComboBox]:
-        cell = self.protein_table.cellWidget(row, 2)
-        if isinstance(cell, QComboBox):
-            return cell
-        if isinstance(cell, QWidget):
-            return cell.findChild(QComboBox)
-        return None
-
-    def get_button_from_row(self, row: int) -> Optional[QPushButton]:
-        cell = self.protein_table.cellWidget(row, 6)
-        if isinstance(cell, QPushButton):
-            return cell
-        if isinstance(cell, QWidget):
-            return cell.findChild(QPushButton)
-        return None
-
-    def apply_settings_style(self):
-        self.setStyleSheet('''
-            QWidget#SettingsWindow {
-                background-color: #F5F8FC;
-                color: #1F2D3D;
-            }
-
-            QTabWidget::pane {
-                border: 1px solid #DDE6F2;
-                background-color: #FFFFFF;
-            }
-
-            QTabBar::tab {
-                min-width: 82px;
-                min-height: 30px;
-                padding: 0px 12px;
-                border: 1px solid #DDE6F2;
-                background-color: #F8FAFD;
-                color: #1F2D3D;
-            }
-
-            QTabBar::tab:selected {
-                background-color: #FFFFFF;
-                color: #1769E0;
-                font-weight: 600;
-                border-bottom-color: #FFFFFF;
-            }
-
-            QGroupBox {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding: 14px 12px 12px 12px;
-                color: #102A43;
-                font-weight: 700;
-            }
-
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                top: 0px;
-                padding: 0px 6px;
-                color: #102A43;
-                background-color: #FFFFFF;
-            }
-
-            QLineEdit, QTextEdit, QSpinBox {
-                background-color: #FFFFFF;
-                border: 1px solid #DDE6F2;
-                border-radius: 5px;
-                color: #1F2D3D;
-                selection-background-color: #DCEBFF;
-            }
-
-            QLineEdit {
-                min-height: 30px;
-                padding: 0px 9px;
-            }
-
-            QTextEdit {
-                padding: 6px 8px;
-            }
-
-            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {
-                border-color: #1769E0;
-            }
-
-            QPushButton {
-                min-height: 32px;
-                padding: 0px 14px;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                background-color: #FFFFFF;
-                color: #1F2D3D;
-                font-weight: 500;
-            }
-
-            QPushButton:hover {
-                background-color: #F2F7FF;
-                border-color: #BCD7FF;
-                color: #1769E0;
-            }
-
-            QPushButton:pressed {
-                background-color: #EAF2FF;
-                border-color: #1769E0;
-            }
-
-            QPushButton:disabled {
-                background-color: #F8FAFD;
-                border-color: #E8EEF6;
-                color: #9AA6B2;
-            }
-
-            QTableWidget#ProteinConfigTable {
-                background-color: #FFFFFF;
-                alternate-background-color: #F8FAFD;
-                gridline-color: #DDE6F2;
-                border: 1px solid #DDE6F2;
-                border-radius: 6px;
-                color: #1F2D3D;
-                outline: none;
-                selection-background-color: #DCEBFF;
-                selection-color: #1F2D3D;
-            }
-
-            QTableWidget#ProteinConfigTable::item {
-                padding: 0px 6px;
-            }
-
-            QTableWidget#ProteinConfigTable::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
-                outline: none;
-            }
-
-            QHeaderView::section {
-                background-color: #EEF4FB;
-                color: #1F2D3D;
-                font-weight: 700;
-                border: none;
-                border-right: 1px solid #DDE6F2;
-                border-bottom: 1px solid #DDE6F2;
-                padding: 6px 6px;
-            }
-        ''')
 
     # ------------------------------------------------------------------
     # 加载 / 保存
@@ -617,6 +377,7 @@ class SettingsWindow(QWidget):
         self.app_logo_path_edit.setText(str(self.config.get_app_logo_path()))
         # 字体路径为空表示使用系统默认字体。不能显示为 "."。
         self.app_font_path_edit.setText(str(self.config.get_app_font_path() or ""))
+        self.app_font_size_spin.setValue(self.config.get_app_font_size())
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
         self.source_project_dir_edit.setText(self.config.get_mvimageid("source_project_dir", ""))
@@ -656,11 +417,12 @@ class SettingsWindow(QWidget):
 
         app_logo_path = self.prepare_app_logo_for_save(self.app_logo_path_edit.text().strip())
         app_font_path = self.prepare_app_font_for_save(self.app_font_path_edit.text().strip())
+        app_font_size = str(self.app_font_size_spin.value())
+
         self.config.set("AppInfo", "app_name", app_name)
         self.config.set("AppInfo", "logo_path", app_logo_path)
         self.config.set("AppInfo", "font_path", app_font_path)
-        # 界面字号功能已取消，保留默认字号，避免旧配置继续影响界面。
-        self.config.set("AppInfo", "font_size", "10")
+        self.config.set("AppInfo", "font_size", app_font_size)
         # 同步旧字段，避免其他旧代码仍读取 [Software] name。
         self.config.set("Software", "name", app_name)
 
@@ -732,6 +494,7 @@ class SettingsWindow(QWidget):
         self.app_name_edit.setText("人精子蛋白质量分析软件")
         self.app_logo_path_edit.setText(r"assets\logo.png")
         self.app_font_path_edit.setText("")
+        self.app_font_size_spin.setValue(10)
         self.update_logo_preview(self.app_logo_path_edit.text().strip())
 
     def prepare_app_logo_for_save(self, logo_path_text: str) -> str:
@@ -801,6 +564,7 @@ class SettingsWindow(QWidget):
 
     def reset_app_font(self):
         self.app_font_path_edit.setText("")
+        self.app_font_size_spin.setValue(10)
 
     def prepare_app_font_for_save(self, font_path_text: str) -> str:
         if not font_path_text or font_path_text.strip() in (".", "系统默认字体"):
@@ -875,7 +639,6 @@ class SettingsWindow(QWidget):
     ):
         row = self.protein_table.rowCount()
         self.protein_table.insertRow(row)
-        self.protein_table.setRowHeight(row, 38)
 
         self.protein_table.setItem(row, 0, QTableWidgetItem(str(key)))
         self.protein_table.setItem(row, 1, QTableWidgetItem(str(name)))
@@ -885,20 +648,17 @@ class SettingsWindow(QWidget):
         if part not in ["head", "tail"]:
             part = "head"
         part_combo.setCurrentText(part)
-        self.style_part_combo(part_combo)
-        self.protein_table.setCellWidget(row, 2, self.make_cell_widget(part_combo))
+        self.protein_table.setCellWidget(row, 2, part_combo)
 
         self.protein_table.setItem(row, 3, QTableWidgetItem(str(pipeline)))
         self.protein_table.setItem(row, 4, QTableWidgetItem(str(intensity_min)))
         self.protein_table.setItem(row, 5, QTableWidgetItem(str(rate_min)))
 
         btn_select = QPushButton("选择")
-        btn_select.setObjectName("ProteinSelectButton")
-        btn_select.setFixedSize(68, 28)
         btn_select.clicked.connect(
             lambda checked=False, button=btn_select: self.select_protein_pipeline_for_button(button)
         )
-        self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select, margin_left=8, margin_right=8))
+        self.protein_table.setCellWidget(row, 6, btn_select)
 
     def add_empty_protein_row(self):
         next_index = self.protein_table.rowCount() + 1
@@ -960,7 +720,7 @@ class SettingsWindow(QWidget):
 
     def find_button_row(self, button):
         for row in range(self.protein_table.rowCount()):
-            cell_button = self.get_button_from_row(row)
+            cell_button = self.protein_table.cellWidget(row, 6)
             if cell_button is button:
                 return row
         return -1
@@ -976,7 +736,7 @@ class SettingsWindow(QWidget):
             intensity_min = self.get_table_text(row, 4).strip()
             rate_min = self.get_table_text(row, 5).strip()
 
-            part_widget = self.get_part_combo_from_row(row)
+            part_widget = self.protein_table.cellWidget(row, 2)
             part = part_widget.currentText().strip() if isinstance(part_widget, QComboBox) else "head"
 
             if not key:

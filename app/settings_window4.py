@@ -350,13 +350,7 @@ class SettingsWindow(QWidget):
 
         layout.addWidget(self.protein_table, 1)
 
-        # 蛋白配置维护按钮暂时隐藏。
-        # 保留控件和信号连接，后续如需恢复，只需把 setVisible(False) 改为 True。
-        self.protein_action_bar = QWidget()
-        button_layout = QHBoxLayout(self.protein_action_bar)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(8)
-
+        button_layout = QHBoxLayout()
         self.btn_reset_protein_defaults = QPushButton("恢复默认蛋白配置")
         self.btn_add_protein_row = QPushButton("增加一行")
         self.btn_remove_protein_row = QPushButton("删除选中行")
@@ -365,8 +359,7 @@ class SettingsWindow(QWidget):
         button_layout.addWidget(self.btn_add_protein_row)
         button_layout.addWidget(self.btn_remove_protein_row)
         button_layout.addStretch()
-        layout.addWidget(self.protein_action_bar)
-        self.protein_action_bar.setVisible(False)
+        layout.addLayout(button_layout)
 
         self.btn_reset_protein_defaults.clicked.connect(self.reset_protein_defaults)
         self.btn_add_protein_row.clicked.connect(self.add_empty_protein_row)
