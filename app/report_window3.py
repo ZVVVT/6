@@ -354,8 +354,6 @@ class ReportWindow(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             button.setFixedHeight(40)
             button.setMinimumWidth(118)
-            button.setAutoDefault(False)
-            button.setDefault(False)
             layout.addWidget(button)
         layout.addStretch()
         return layout
@@ -365,7 +363,7 @@ class ReportWindow(QWidget):
         card.setObjectName("ReportResultCard")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -411,6 +409,7 @@ class ReportWindow(QWidget):
         self.setStyleSheet(f"""
             QWidget {{
                 color: #1F2D3D;
+                font-family: "Microsoft YaHei";
                 font-size: 13px;
             }}
 
@@ -423,7 +422,7 @@ class ReportWindow(QWidget):
 
             QLabel#ReportCurrentCasePill {{
                 min-height: 28px;
-                padding: 7px 14px;
+                padding: 0 14px;
                 border: 1px solid #DDE6F2;
                 border-radius: 6px;
                 background-color: #F3F7FC;
@@ -441,29 +440,25 @@ class ReportWindow(QWidget):
 
             QFrame#ReportStatIconBox_info {{
                 background-color: #EAF2FF;
-                border: 1px solid #BCD7FF;
-                border-radius: 12px;
+                border-radius: 10px;
             }}
             QFrame#ReportStatIconBox_cyan {{
                 background-color: #E6FAFA;
-                border: 1px solid #B7ECEC;
-                border-radius: 12px;
+                border-radius: 10px;
             }}
             QFrame#ReportStatIconBox_success {{
                 background-color: #EAF8EF;
-                border: 1px solid #BDEACB;
-                border-radius: 12px;
+                border-radius: 10px;
             }}
             QFrame#ReportStatIconBox_purple {{
-                background-color: #F2ECFF;
-                border: 1px solid #D8C8FF;
-                border-radius: 12px;
+                background-color: #F1EAFE;
+                border-radius: 10px;
             }}
 
             QLabel#ReportStatTitle {{
-                color: #8A97A8;
-                font-size: 12px;
-                font-weight: 400;
+                color: #5E6B7A;
+                font-size: 13px;
+                font-weight: 500;
             }}
             QLabel#ReportStatValue_info,
             QLabel#ReportStatValue_cyan,
@@ -480,19 +475,17 @@ class ReportWindow(QWidget):
 
             QLabel#ReportSectionTitle {{
                 color: #102A43;
-                font-size: 15px;
+                font-size: 16px;
                 font-weight: 700;
             }}
             QLabel#ReportNameLabel {{
                 color: #5E6B7A;
-                font-size: 13px;
-                font-weight: 400;
+                font-weight: 600;
                 min-width: 72px;
             }}
             QLabel#ReportValueLabel {{
                 color: #1F2D3D;
-                font-size: 13px;
-                font-weight: 400;
+                font-weight: 500;
                 min-height: 22px;
             }}
             QLabel#ReportProgressLabel {{
@@ -502,22 +495,16 @@ class ReportWindow(QWidget):
 
             QPushButton#ReportPrimaryButton {{
                 min-height: 38px;
-                max-height: 38px;
-                padding: 0px 15px;
+                padding: 6px 18px;
                 border: 1px solid {primary};
                 border-radius: 6px;
                 background-color: {primary};
                 color: #FFFFFF;
-                font-weight: 500;
+                font-weight: 600;
             }}
             QPushButton#ReportPrimaryButton:hover {{
                 background-color: {primary_hover};
                 border-color: {primary_hover};
-                color: #FFFFFF;
-            }}
-            QPushButton#ReportPrimaryButton:pressed {{
-                background-color: #0B4DB5;
-                border-color: #0B4DB5;
                 color: #FFFFFF;
             }}
             QPushButton#ReportPrimaryButton:disabled {{
@@ -528,8 +515,7 @@ class ReportWindow(QWidget):
 
             QPushButton#ReportNeutralButton {{
                 min-height: 38px;
-                max-height: 38px;
-                padding: 0px 15px;
+                padding: 6px 16px;
                 border: 1px solid #DDE6F2;
                 border-radius: 6px;
                 background-color: #FFFFFF;
@@ -546,11 +532,6 @@ class ReportWindow(QWidget):
                 border-color: #E8EEF6;
                 color: #9AA6B2;
             }}
-            QPushButton#ReportNeutralButton:disabled:hover {{
-                background-color: #F8FAFD;
-                border-color: #E8EEF6;
-                color: #9AA6B2;
-            }}
 
             QTableWidget#ReportResultTable {{
                 background-color: #FFFFFF;
@@ -563,7 +544,7 @@ class ReportWindow(QWidget):
                 outline: none;
             }}
             QTableWidget#ReportResultTable::item {{
-                padding: 6px 5px;
+                padding: 5px 6px;
             }}
             QTableWidget#ReportResultTable::item:selected {{
                 background-color: #DCEBFF;
@@ -577,8 +558,7 @@ class ReportWindow(QWidget):
                 border: none;
                 border-right: 1px solid #DDE6F2;
                 border-bottom: 1px solid #DDE6F2;
-                padding: 6px 5px;
-                min-height: 30px;
+                padding: 7px 6px;
             }}
         """)
 

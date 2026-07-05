@@ -249,9 +249,9 @@ class ReportWindow(QWidget):
         layout.setSpacing(8)
 
         icon = QLabel()
-        icon.setFixedSize(22, 22)
+        icon.setFixedSize(18, 18)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setPixmap(self.make_svg_icon(icon_name, self.theme.get("primary", "#1769E0"), 20).pixmap(20, 20))
+        icon.setPixmap(self.make_svg_icon(icon_name, self.theme.get("primary", "#1769E0"), 18).pixmap(18, 18))
 
         label = QLabel(title)
         label.setObjectName("ReportSectionTitle")
@@ -261,11 +261,6 @@ class ReportWindow(QWidget):
         return box
 
     def create_case_card(self) -> QFrame:
-        """当前病例信息卡片。
-
-        这里改为和病例详情页一致的 3 列信息布局，避免原来“字段块”
-        背景、字号和换行不统一导致页面看起来发散。
-        """
         card = QFrame()
         card.setObjectName("ReportInfoCard")
         layout = QVBoxLayout(card)
@@ -274,7 +269,7 @@ class ReportWindow(QWidget):
         layout.addWidget(self.create_section_title("当前病例信息", "section_basic.svg"))
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(28)
+        grid.setHorizontalSpacing(30)
         grid.setVerticalSpacing(8)
 
         self.case_no_label = QLabel("-")
@@ -282,52 +277,39 @@ class ReportWindow(QWidget):
         self.sample_no_label = QLabel("-")
         self.test_date_label = QLabel("-")
         self.report_path_label = QLabel("-")
-        self.report_path_label.setWordWrap(False)
+        self.report_path_label.setWordWrap(True)
 
-        self.add_info_row3(
-            grid,
-            0,
+        fields = [
             ("病历编号", self.case_no_label),
             ("姓名", self.patient_name_label),
             ("样本号", self.sample_no_label),
-        )
-        self.add_info_row3(
-            grid,
-            1,
             ("检测日期", self.test_date_label),
             ("报告路径", self.report_path_label),
-            ("", QLabel("")),
-        )
+        ]
+        positions = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
+        for (name, value_label), (row, col) in zip(fields, positions):
+            item = self.create_info_item(name, value_label)
+            grid.addWidget(item, row, col)
 
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
         layout.addLayout(grid)
         return card
 
-    def add_info_row3(self, layout: QGridLayout, row: int, item1, item2, item3) -> None:
-        label1, widget1 = item1
-        label2, widget2 = item2
-        label3, widget3 = item3
-
-        layout.addWidget(self.make_name_label(label1), row, 0)
-        layout.addWidget(self.make_value_widget(widget1), row, 1)
-        layout.addWidget(self.make_name_label(label2), row, 2)
-        layout.addWidget(self.make_value_widget(widget2), row, 3)
-        layout.addWidget(self.make_name_label(label3), row, 4)
-        layout.addWidget(self.make_value_widget(widget3), row, 5)
-        layout.setColumnStretch(1, 1)
-        layout.setColumnStretch(3, 1)
-        layout.setColumnStretch(5, 1)
-
-    def make_name_label(self, text: str) -> QLabel:
-        label = QLabel(f"{text}：" if text else "")
-        label.setObjectName("ReportNameLabel")
-        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        return label
-
-    def make_value_widget(self, widget: QLabel) -> QLabel:
-        widget.setObjectName("ReportValueLabel")
-        widget.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        return widget
+    def create_info_item(self, name: str, value_label: QLabel) -> QWidget:
+        box = QWidget()
+        box.setObjectName("ReportInfoItem")
+        layout = QHBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        name_label = QLabel(f"{name}：")
+        name_label.setObjectName("ReportInfoName")
+        value_label.setObjectName("ReportInfoValue")
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(name_label, 0, Qt.AlignTop)
+        layout.addWidget(value_label, 1)
+        return box
 
     def create_action_bar(self) -> QHBoxLayout:
         layout = QHBoxLayout()
@@ -352,10 +334,8 @@ class ReportWindow(QWidget):
 
         for button in [self.btn_refresh, self.btn_generate, self.btn_open_report, self.btn_open_report_dir]:
             button.setCursor(Qt.PointingHandCursor)
-            button.setFixedHeight(40)
-            button.setMinimumWidth(118)
-            button.setAutoDefault(False)
-            button.setDefault(False)
+            button.setMinimumHeight(40)
+            button.setMinimumWidth(120)
             layout.addWidget(button)
         layout.addStretch()
         return layout
@@ -365,7 +345,7 @@ class ReportWindow(QWidget):
         card.setObjectName("ReportResultCard")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -400,7 +380,7 @@ class ReportWindow(QWidget):
         self.analysis_table.setColumnWidth(0, 92)
         self.analysis_table.setColumnWidth(1, 84)
         self.analysis_table.setColumnWidth(2, 72)
-        self.analysis_table.setColumnWidth(7, 96)
+        self.analysis_table.setColumnWidth(7, 90)
 
         layout.addWidget(self.analysis_table, 1)
         return card
@@ -411,19 +391,13 @@ class ReportWindow(QWidget):
         self.setStyleSheet(f"""
             QWidget {{
                 color: #1F2D3D;
+                font-family: "Microsoft YaHei";
                 font-size: 13px;
-            }}
-
-            QFrame#ReportInfoCard QWidget,
-            QFrame#ReportInfoCard QLabel,
-            QFrame#ReportResultCard QWidget,
-            QFrame#ReportResultCard QLabel {{
-                background: transparent;
             }}
 
             QLabel#ReportCurrentCasePill {{
                 min-height: 28px;
-                padding: 7px 14px;
+                padding: 0 14px;
                 border: 1px solid #DDE6F2;
                 border-radius: 6px;
                 background-color: #F3F7FC;
@@ -441,29 +415,25 @@ class ReportWindow(QWidget):
 
             QFrame#ReportStatIconBox_info {{
                 background-color: #EAF2FF;
-                border: 1px solid #BCD7FF;
-                border-radius: 12px;
+                border-radius: 10px;
             }}
             QFrame#ReportStatIconBox_cyan {{
                 background-color: #E6FAFA;
-                border: 1px solid #B7ECEC;
-                border-radius: 12px;
+                border-radius: 10px;
             }}
             QFrame#ReportStatIconBox_success {{
                 background-color: #EAF8EF;
-                border: 1px solid #BDEACB;
-                border-radius: 12px;
+                border-radius: 10px;
             }}
             QFrame#ReportStatIconBox_purple {{
-                background-color: #F2ECFF;
-                border: 1px solid #D8C8FF;
-                border-radius: 12px;
+                background-color: #F1EAFE;
+                border-radius: 10px;
             }}
 
             QLabel#ReportStatTitle {{
-                color: #8A97A8;
-                font-size: 12px;
-                font-weight: 400;
+                color: #5E6B7A;
+                font-size: 13px;
+                font-weight: 500;
             }}
             QLabel#ReportStatValue_info,
             QLabel#ReportStatValue_cyan,
@@ -480,20 +450,16 @@ class ReportWindow(QWidget):
 
             QLabel#ReportSectionTitle {{
                 color: #102A43;
-                font-size: 15px;
+                font-size: 16px;
                 font-weight: 700;
             }}
-            QLabel#ReportNameLabel {{
+            QLabel#ReportInfoName {{
                 color: #5E6B7A;
-                font-size: 13px;
-                font-weight: 400;
-                min-width: 72px;
+                font-weight: 600;
             }}
-            QLabel#ReportValueLabel {{
+            QLabel#ReportInfoValue {{
                 color: #1F2D3D;
-                font-size: 13px;
-                font-weight: 400;
-                min-height: 22px;
+                font-weight: 500;
             }}
             QLabel#ReportProgressLabel {{
                 color: #5E6B7A;
@@ -502,22 +468,16 @@ class ReportWindow(QWidget):
 
             QPushButton#ReportPrimaryButton {{
                 min-height: 38px;
-                max-height: 38px;
-                padding: 0px 15px;
+                padding: 6px 18px;
                 border: 1px solid {primary};
                 border-radius: 6px;
                 background-color: {primary};
                 color: #FFFFFF;
-                font-weight: 500;
+                font-weight: 600;
             }}
             QPushButton#ReportPrimaryButton:hover {{
                 background-color: {primary_hover};
                 border-color: {primary_hover};
-                color: #FFFFFF;
-            }}
-            QPushButton#ReportPrimaryButton:pressed {{
-                background-color: #0B4DB5;
-                border-color: #0B4DB5;
                 color: #FFFFFF;
             }}
             QPushButton#ReportPrimaryButton:disabled {{
@@ -528,8 +488,7 @@ class ReportWindow(QWidget):
 
             QPushButton#ReportNeutralButton {{
                 min-height: 38px;
-                max-height: 38px;
-                padding: 0px 15px;
+                padding: 6px 16px;
                 border: 1px solid #DDE6F2;
                 border-radius: 6px;
                 background-color: #FFFFFF;
@@ -546,11 +505,6 @@ class ReportWindow(QWidget):
                 border-color: #E8EEF6;
                 color: #9AA6B2;
             }}
-            QPushButton#ReportNeutralButton:disabled:hover {{
-                background-color: #F8FAFD;
-                border-color: #E8EEF6;
-                color: #9AA6B2;
-            }}
 
             QTableWidget#ReportResultTable {{
                 background-color: #FFFFFF;
@@ -563,7 +517,7 @@ class ReportWindow(QWidget):
                 outline: none;
             }}
             QTableWidget#ReportResultTable::item {{
-                padding: 6px 5px;
+                padding: 5px 6px;
             }}
             QTableWidget#ReportResultTable::item:selected {{
                 background-color: #DCEBFF;
@@ -577,8 +531,7 @@ class ReportWindow(QWidget):
                 border: none;
                 border-right: 1px solid #DDE6F2;
                 border-bottom: 1px solid #DDE6F2;
-                padding: 6px 5px;
-                min-height: 30px;
+                padding: 7px 6px;
             }}
         """)
 
@@ -609,15 +562,6 @@ class ReportWindow(QWidget):
         text = str(value or "").strip()
         return text if text else default
 
-    @staticmethod
-    def short_path(path_text: str, max_len: int = 58) -> str:
-        text = str(path_text or "").strip()
-        if not text or text == "-" or len(text) <= max_len:
-            return text or "-"
-        prefix = text[:18]
-        suffix = text[-(max_len - 21):]
-        return f"{prefix}...{suffix}"
-
     def update_case_card(self):
         case = self.current_case or {}
         case_no = self.v(case.get("case_no"), "未选择")
@@ -635,8 +579,7 @@ class ReportWindow(QWidget):
         self.patient_name_label.setText(patient_name)
         self.sample_no_label.setText(sample_no)
         self.test_date_label.setText(test_date)
-        self.report_path_label.setText(self.short_path(report_path))
-        self.report_path_label.setToolTip(report_path if report_path != "-" else "")
+        self.report_path_label.setText(report_path)
 
         self.sample_no_stat["value"].setText(sample_no)
         self.test_date_stat["value"].setText(test_date)
