@@ -1074,7 +1074,7 @@ class BatchAnalysisDialog(QDialog):
             }
 
             QTableWidget#BatchPreviewTable::item {
-                padding: 4px;
+                padding: 0px 4px;
             }
 
             QTableWidget#BatchPreviewTable::item:selected {
@@ -1506,15 +1506,16 @@ class BatchAnalysisDialog(QDialog):
     def style_folder_combo(self, combo: QComboBox) -> None:
         """统一预检表格中的文件夹下拉框样式。
 
-        本版采用“表格单元格原生下拉”的视觉：去掉 QComboBox 自己的边框，
-        只保留文字和箭头，由表格网格线承担边界。这样不会出现额外上边界、
-        双线边框或第一行焦点线，视觉上也更接近普通表格内容。
+        这里不再让下拉框占满整行高度。QComboBox 本身的文字绘制基线和
+        QTableWidgetItem 不完全一致，控件过高时视觉上会偏下。现在采用：
+        表格行高 38px，下拉框高度 28px，由单元格容器做垂直居中。
         """
         combo.setObjectName("BatchFolderCombo")
-        combo.setFixedHeight(getattr(self, "preview_row_height", 38))
+        combo.setFixedHeight(28)
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         combo.setMaxVisibleItems(10)
         combo.setFocusPolicy(Qt.NoFocus)
+        combo.setContentsMargins(0, 0, 0, 0)
         try:
             combo.setFrame(False)
         except Exception:
@@ -1533,8 +1534,8 @@ class BatchAnalysisDialog(QDialog):
                 border-radius: 0px;
                 padding: 0px 24px 0px 14px;
                 color: #1F2D3D;
-                min-height: 38px;
-                max-height: 38px;
+                min-height: 28px;
+                max-height: 28px;
             }}
             QComboBox#BatchFolderCombo:hover {{
                 background-color: #F2F7FF;
@@ -1598,6 +1599,7 @@ class BatchAnalysisDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(combo)
+        layout.setAlignment(combo, Qt.AlignVCenter)
         return wrapper
 
     def adjust_preview_table_height(self) -> None:
