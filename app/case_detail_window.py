@@ -366,7 +366,7 @@ class CaseDetailWindow(QWidget):
             self.btn_open_workspace,
         ]:
             button.setCursor(Qt.PointingHandCursor)
-            button.setFixedHeight(36)
+            button.setFixedHeight(40)
             button.setMinimumWidth(118)
             layout.addWidget(button)
 
@@ -427,16 +427,28 @@ class CaseDetailWindow(QWidget):
         self.analysis_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.analysis_table.setAlternatingRowColors(True)
         self.analysis_table.verticalHeader().setVisible(False)
-        self.analysis_table.verticalHeader().setDefaultSectionSize(34)
+        self.analysis_table.verticalHeader().setDefaultSectionSize(38)
         self.analysis_table.setWordWrap(False)
         self.analysis_table.setShowGrid(True)
 
         header = self.analysis_table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignCenter)
         header.setSectionResizeMode(QHeaderView.Stretch)
-        for column in [0, 1, 2, 3]:
-            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+
+        # 关键列使用固定宽度，避免全屏/窗口化时被 Stretch 算法压得过窄。
+        # “检测状态”列里放的是状态标签控件，QHeaderView.ResizeToContents
+        # 不会稳定参考 setCellWidget() 的真实宽度，所以需要显式给足空间。
+        fixed_widths = {
+            0: 86,   # 蛋白名称
+            1: 74,   # 表达部位
+            2: 96,   # 检测状态
+            3: 62,   # 视野数
+            8: 132,  # 分析时间
+        }
+        for column, width in fixed_widths.items():
+            header.setSectionResizeMode(column, QHeaderView.Fixed)
+            self.analysis_table.setColumnWidth(column, width)
+
         header.setSectionResizeMode(9, QHeaderView.Stretch)
 
         layout.addWidget(self.analysis_table, 1)
@@ -526,9 +538,9 @@ class CaseDetailWindow(QWidget):
                 font-size: 13px;
             }}
             QPushButton#DetailNeutralButton {{
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0px 14px;
+                min-height: 38px;
+                max-height: 38px;
+                padding: 0px 15px;
                 border: 1px solid {t.get('border', '#DDE6F2')};
                 border-radius: 6px;
                 background-color: {t.get('surface', '#FFFFFF')};
@@ -551,9 +563,9 @@ class CaseDetailWindow(QWidget):
                 color: {t.get('text_muted', '#8A97A8')};
             }}
             QPushButton#DetailPrimaryButton {{
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0px 14px;
+                min-height: 38px;
+                max-height: 38px;
+                padding: 0px 15px;
                 border: 1px solid {t.get('primary', '#1769E0')};
                 border-radius: 6px;
                 background-color: {t.get('primary', '#1769E0')};
@@ -580,7 +592,7 @@ class CaseDetailWindow(QWidget):
                 selection-color: {t.get('text_primary', '#1F2D3D')};
             }}
             QTableWidget::item {{
-                padding: 4px;
+                padding: 6px 5px;
             }}
             QHeaderView::section {{
                 background-color: {t.get('table_header_bg', '#EEF4FB')};
@@ -590,7 +602,7 @@ class CaseDetailWindow(QWidget):
                 border-right: 1px solid {t.get('table_grid', '#DDE6F2')};
                 border-bottom: 1px solid {t.get('table_grid', '#DDE6F2')};
                 padding: 6px 5px;
-                min-height: 28px;
+                min-height: 30px;
             }}
         """)
 
@@ -761,13 +773,24 @@ class CaseDetailWindow(QWidget):
         )
 
     def set_status_badge(self, row: int, column: int, text: str, status: str) -> None:
+        """在“检测状态”列中绘制状态标签。
+
+        外层 wrapper 填满表格单元格，内部 QLabel 使用固定高度并居中放置。
+        这样“已完成 / 未检测”会处在绿色或橙色标签框内的上下正中。
+        """
         wrapper = QWidget()
-        wrapper.setStyleSheet("background: transparent;")
+        wrapper.setObjectName("DetailStatusBadgeCell")
+        wrapper.setAttribute(Qt.WA_StyledBackground, True)
+        wrapper.setStyleSheet("QWidget#DetailStatusBadgeCell { background: transparent; }")
+
         layout = QHBoxLayout(wrapper)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
         label = QLabel(text)
         label.setAlignment(Qt.AlignCenter)
+        label.setFixedSize(66, 24)
+        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         label.setObjectName("DetailStatusBadge")
         if status == "success":
             label.setProperty("status", "success")
@@ -776,18 +799,23 @@ class CaseDetailWindow(QWidget):
         else:
             label.setProperty("status", "info")
         label.setStyleSheet(self.status_badge_qss(status))
-        layout.addStretch()
-        layout.addWidget(label)
-        layout.addStretch()
+
+        layout.addWidget(label, 0, Qt.AlignCenter)
         self.analysis_table.setCellWidget(row, column, wrapper)
 
     def status_badge_qss(self, status: str) -> str:
         t = self.theme
+        base = (
+            "border-radius: 12px; "
+            "padding: 0px 8px; "
+            "font-weight: 700; "
+            "font-size: 12px;"
+        )
         if status == "success":
-            return f"color: {t.get('success', '#16A34A')}; background: {t.get('success_bg', '#EAF8EF')}; border: 1px solid {t.get('success_border', '#BDEACB')}; border-radius: 10px; padding: 2px 10px; font-weight: 700;"
+            return f"color: {t.get('success', '#16A34A')}; background: {t.get('success_bg', '#EAF8EF')}; border: 1px solid {t.get('success_border', '#BDEACB')}; {base}"
         if status == "warning":
-            return f"color: {t.get('warning', '#F59E0B')}; background: {t.get('warning_bg', '#FFF5E5')}; border: 1px solid {t.get('warning_border', '#FAD89A')}; border-radius: 10px; padding: 2px 10px; font-weight: 700;"
-        return f"color: {t.get('info', '#2563EB')}; background: {t.get('info_bg', '#EEF4FF')}; border: 1px solid {t.get('info_border', '#C7D8FF')}; border-radius: 10px; padding: 2px 10px; font-weight: 700;"
+            return f"color: {t.get('warning', '#F59E0B')}; background: {t.get('warning_bg', '#FFF5E5')}; border: 1px solid {t.get('warning_border', '#FAD89A')}; {base}"
+        return f"color: {t.get('info', '#2563EB')}; background: {t.get('info_bg', '#EEF4FF')}; border: 1px solid {t.get('info_border', '#C7D8FF')}; {base}"
 
     def build_analysis_map(self, analysis_rows):
         analysis_map = {}
