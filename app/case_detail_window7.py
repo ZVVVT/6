@@ -343,7 +343,7 @@ class CaseDetailWindow(QWidget):
         self.btn_refresh.setObjectName("DetailNeutralButton")
 
         self.btn_start_analysis = QPushButton("开始蛋白分析")
-        self.btn_start_analysis.setObjectName("DetailPrimaryButton")
+        self.btn_start_analysis.setObjectName("PrimaryButton")
 
         self.btn_batch_analysis = QPushButton("批量蛋白分析")
         self.btn_batch_analysis.setObjectName("DetailNeutralButton")
@@ -366,7 +366,7 @@ class CaseDetailWindow(QWidget):
             self.btn_open_workspace,
         ]:
             button.setCursor(Qt.PointingHandCursor)
-            button.setFixedHeight(36)
+            button.setMinimumHeight(36)
             button.setMinimumWidth(118)
             layout.addWidget(button)
 
@@ -527,8 +527,7 @@ class CaseDetailWindow(QWidget):
             }}
             QPushButton#DetailNeutralButton {{
                 min-height: 34px;
-                max-height: 34px;
-                padding: 0px 14px;
+                padding: 5px 14px;
                 border: 1px solid {t.get('border', '#DDE6F2')};
                 border-radius: 6px;
                 background-color: {t.get('surface', '#FFFFFF')};
@@ -540,32 +539,21 @@ class CaseDetailWindow(QWidget):
                 border-color: {t.get('primary_border', '#BCD7FF')};
                 color: {t.get('primary', '#1769E0')};
             }}
-            QPushButton#DetailNeutralButton:disabled {{
-                background-color: {t.get('surface_alt', '#F8FAFD')};
-                border-color: {t.get('border_light', '#E8EEF6')};
-                color: {t.get('text_muted', '#8A97A8')};
-            }}
-            QPushButton#DetailNeutralButton:disabled:hover {{
-                background-color: {t.get('surface_alt', '#F8FAFD')};
-                border-color: {t.get('border_light', '#E8EEF6')};
-                color: {t.get('text_muted', '#8A97A8')};
-            }}
-            QPushButton#DetailPrimaryButton {{
+            QPushButton#PrimaryButton {{
                 min-height: 34px;
-                max-height: 34px;
-                padding: 0px 14px;
+                padding: 5px 16px;
                 border: 1px solid {t.get('primary', '#1769E0')};
                 border-radius: 6px;
                 background-color: {t.get('primary', '#1769E0')};
                 color: {t.get('text_inverse', '#FFFFFF')};
-                font-weight: 500;
+                font-weight: 600;
             }}
-            QPushButton#DetailPrimaryButton:hover {{
+            QPushButton#PrimaryButton:hover {{
                 background-color: {t.get('primary_hover', '#0F5ED7')};
                 border-color: {t.get('primary_hover', '#0F5ED7')};
                 color: {t.get('text_inverse', '#FFFFFF')};
             }}
-            QPushButton#DetailPrimaryButton:pressed {{
+            QPushButton#PrimaryButton:pressed {{
                 background-color: {t.get('primary_pressed', '#0B4DB5')};
                 border-color: {t.get('primary_pressed', '#0B4DB5')};
                 color: {t.get('text_inverse', '#FFFFFF')};
@@ -826,7 +814,6 @@ class CaseDetailWindow(QWidget):
         self.btn_report.setEnabled(True)
         self.btn_open_workspace.setEnabled(True)
         self.btn_open_report.setEnabled(has_report)
-        self.btn_open_report.setCursor(Qt.PointingHandCursor if has_report else Qt.ArrowCursor)
         self.update_action_button_icons()
 
     # ------------------------------------------------------------------
