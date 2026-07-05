@@ -16,14 +16,16 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListView,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
-    QWidget,
     QVBoxLayout,
+    QWidget,
+    QSizePolicy,
 )
 
 from core.config_manager import ConfigManager
@@ -52,6 +54,114 @@ PROTEIN_DISPLAY_FALLBACK: Dict[str, str] = {
     "protein4": "Q8IYV9",
     "protein5": "W5XKT8",
 }
+
+MODERN_MESSAGE_BOX_QSS = """
+    QMessageBox#ModernMessageBox {
+        background-color: #F5F8FC;
+        color: #1F2D3D;
+        font-family: "Microsoft YaHei";
+        font-size: 13px;
+    }
+
+    QMessageBox#ModernMessageBox QWidget {
+        background-color: #F5F8FC;
+        color: #1F2D3D;
+    }
+
+    QMessageBox#ModernMessageBox QLabel {
+        background-color: transparent;
+        color: #1F2D3D;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    QMessageBox#ModernMessageBox QLabel#qt_msgbox_label {
+        min-width: 260px;
+        padding: 4px 4px 8px 4px;
+    }
+
+    QMessageBox#ModernMessageBox QPushButton {
+        min-width: 72px;
+        min-height: 32px;
+        padding: 5px 16px;
+        border: 1px solid #DDE6F2;
+        border-radius: 6px;
+        background-color: #FFFFFF;
+        color: #1F2D3D;
+        font-weight: 500;
+    }
+
+    QMessageBox#ModernMessageBox QPushButton:hover {
+        background-color: #F2F7FF;
+        border-color: #BCD7FF;
+        color: #1769E0;
+    }
+
+    QMessageBox#ModernMessageBox QPushButton:pressed {
+        background-color: #EAF2FF;
+        border-color: #1769E0;
+    }
+
+    QMessageBox#ModernMessageBox QPushButton:default {
+        background-color: #1769E0;
+        border-color: #1769E0;
+        color: #FFFFFF;
+        font-weight: 600;
+    }
+
+    QMessageBox#ModernMessageBox QPushButton:default:hover {
+        background-color: #0F5ED7;
+        border-color: #0F5ED7;
+        color: #FFFFFF;
+    }
+"""
+
+
+def show_modern_message(
+    parent,
+    icon: QMessageBox.Icon,
+    title: str,
+    text: str,
+    buttons=QMessageBox.Ok,
+    default_button=QMessageBox.NoButton,
+):
+    """显示浅色统一风格消息弹窗，避免继承父窗口透明/暗色样式导致黑底。"""
+    box = QMessageBox(parent)
+    box.setObjectName("ModernMessageBox")
+    box.setAttribute(Qt.WA_StyledBackground, True)
+    box.setWindowTitle(title)
+    box.setIcon(icon)
+    box.setText(text)
+    box.setStandardButtons(buttons)
+    if default_button != QMessageBox.NoButton:
+        box.setDefaultButton(default_button)
+    box.setMinimumWidth(380)
+    box.setStyleSheet(MODERN_MESSAGE_BOX_QSS)
+
+    for button in box.findChildren(QPushButton):
+        button.setMinimumHeight(32)
+        button.setCursor(Qt.PointingHandCursor)
+
+    return box.exec()
+
+
+def show_batch_information(parent, title: str, text: str):
+    return show_modern_message(parent, QMessageBox.Information, title, text, QMessageBox.Ok, QMessageBox.Ok)
+
+
+def show_batch_warning(parent, title: str, text: str):
+    return show_modern_message(parent, QMessageBox.Warning, title, text, QMessageBox.Ok, QMessageBox.Ok)
+
+
+def show_batch_question(
+    parent,
+    title: str,
+    text: str,
+    buttons=QMessageBox.Yes | QMessageBox.No,
+    default_button=QMessageBox.No,
+):
+    return show_modern_message(parent, QMessageBox.Question, title, text, buttons, default_button)
+
 
 
 class FolderAliasStore:
@@ -193,10 +303,11 @@ class FolderAliasDialog(QDialog):
         self.aliases = self.alias_store.load_aliases()
 
         self.setWindowTitle("批量文件夹匹配规则")
-        self.resize(900, 420)
-        self.setMinimumSize(800, 360)
+        self.resize(980, 520)
+        self.setMinimumSize(900, 460)
         self.init_ui()
         self.load_table()
+        self.apply_modern_style()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -241,6 +352,196 @@ class FolderAliasDialog(QDialog):
         self.btn_save.clicked.connect(self.save_rules)
         self.btn_cancel.clicked.connect(self.reject)
 
+    def apply_primary_button_styles(self):
+        """强制主按钮保持蓝底白字。
+
+        这两个按钮在父窗口/全局 QSS 影响下，普通状态可能被渲染成白底，
+        只有 hover 才变蓝。这里给按钮本身设置局部样式，确保普通状态也
+        始终为蓝色主按钮。
+        """
+        primary_css = """
+            QPushButton#BatchPrimaryButton {
+                min-height: 34px;
+                padding: 5px 16px;
+                border: 1px solid #1769E0;
+                border-radius: 6px;
+                background-color: #1769E0;
+                color: #FFFFFF;
+                font-weight: 600;
+            }
+            QPushButton#BatchPrimaryButton:hover {
+                background-color: #0F5ED7;
+                border-color: #0F5ED7;
+                color: #FFFFFF;
+            }
+            QPushButton#BatchPrimaryButton:pressed {
+                background-color: #0B4DB5;
+                border-color: #0B4DB5;
+                color: #FFFFFF;
+            }
+            QPushButton#BatchPrimaryButton:disabled {
+                background-color: #EEF4FB;
+                border-color: #DDE6F2;
+                color: #8A97A8;
+            }
+        """
+        for name in ["btn_select_folder", "btn_start"]:
+            if not hasattr(self, name):
+                continue
+            button = getattr(self, name)
+            button.setObjectName("BatchPrimaryButton")
+            button.setFlat(False)
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            button.setMinimumHeight(34)
+            button.setStyleSheet(primary_css)
+
+    def apply_modern_style(self):
+        """匹配规则弹窗独立样式，避免继承父窗口透明/黑底样式。"""
+        self.setObjectName("FolderAliasDialog")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        for label in self.findChildren(QLabel):
+            text = label.text().strip()
+            if text == "批量文件夹匹配规则":
+                label.setObjectName("AliasDialogTitle")
+            else:
+                label.setObjectName("AliasDialogHint")
+
+        self.table.setObjectName("AliasRulesTable")
+        self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.setShowGrid(True)
+        self.table.setAlternatingRowColors(True)
+
+        self.btn_save.setObjectName("AliasPrimaryButton")
+        self.btn_defaults.setObjectName("AliasNeutralButton")
+        self.btn_cancel.setObjectName("AliasNeutralButton")
+        for button in [self.btn_defaults, self.btn_save, self.btn_cancel]:
+            button.setMinimumHeight(34)
+            button.setCursor(Qt.PointingHandCursor)
+
+        self.setStyleSheet("""
+            QDialog#FolderAliasDialog {
+                background-color: #F5F8FC;
+                color: #1F2D3D;
+                font-family: "Microsoft YaHei";
+                font-size: 13px;
+            }
+
+            QDialog#FolderAliasDialog QWidget {
+                color: #1F2D3D;
+                background: transparent;
+            }
+
+            QLabel#AliasDialogTitle {
+                color: #102A43;
+                font-size: 20px;
+                font-weight: 700;
+                padding: 2px 0 0 0;
+            }
+
+            QLabel#AliasDialogHint {
+                color: #5E6B7A;
+                font-size: 13px;
+                line-height: 1.4;
+            }
+
+            QTableWidget#AliasRulesTable {
+                background-color: #FFFFFF;
+                alternate-background-color: #F8FAFD;
+                gridline-color: #DDE6F2;
+                border: 1px solid #DDE6F2;
+                border-radius: 8px;
+                selection-background-color: #DCEBFF;
+                selection-color: #1F2D3D;
+                color: #1F2D3D;
+            }
+
+            QTableWidget#AliasRulesTable::item {
+                padding: 6px 8px;
+            }
+
+            QTableWidget#AliasRulesTable::item:selected {
+                background-color: #DCEBFF;
+                color: #1F2D3D;
+            }
+
+            QTableWidget#AliasRulesTable QLineEdit {
+                background-color: #FFFFFF;
+                color: #1F2D3D;
+                border: 1px solid #BCD7FF;
+                border-radius: 4px;
+                padding: 4px 8px;
+                selection-background-color: #DCEBFF;
+            }
+
+            QHeaderView::section {
+                background-color: #EEF4FB;
+                color: #1F2D3D;
+                font-weight: 700;
+                border: none;
+                border-right: 1px solid #DDE6F2;
+                border-bottom: 1px solid #DDE6F2;
+                padding: 7px 6px;
+                min-height: 30px;
+            }
+
+            QPushButton#AliasPrimaryButton {
+                min-height: 34px;
+                padding: 5px 18px;
+                border: 1px solid #1769E0;
+                border-radius: 6px;
+                background-color: #1769E0;
+                color: #FFFFFF;
+                font-weight: 600;
+            }
+
+            QPushButton#AliasPrimaryButton:hover {
+                background-color: #0F5ED7;
+                border-color: #0F5ED7;
+            }
+
+            QPushButton#AliasNeutralButton {
+                min-height: 34px;
+                padding: 5px 16px;
+                border: 1px solid #DDE6F2;
+                border-radius: 6px;
+                background-color: #FFFFFF;
+                color: #1F2D3D;
+                font-weight: 500;
+            }
+
+            QPushButton#AliasNeutralButton:hover {
+                background-color: #F2F7FF;
+                border-color: #BCD7FF;
+                color: #1769E0;
+            }
+
+            QScrollBar:vertical {
+                background-color: #EEF4FB;
+                width: 10px;
+                margin: 0px;
+                border: none;
+            }
+
+            QScrollBar::handle:vertical {
+                background-color: #DDE6F2;
+                min-height: 30px;
+                border-radius: 5px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background-color: #BCD7FF;
+            }
+
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: none;
+                border: none;
+            }
+        """)
+
     def load_table(self):
         self.table.setRowCount(len(self.protein_items))
         for row, protein in enumerate(self.protein_items):
@@ -284,7 +585,7 @@ class FolderAliasDialog(QDialog):
                 conflicts.append(f"{alias_norm} → {'、'.join(unique_keys)}")
 
         if conflicts:
-            QMessageBox.warning(
+            show_batch_warning(
                 self,
                 "匹配名冲突",
                 "以下匹配名同时配置到了多个蛋白，请修改后再保存：\n" + "\n".join(conflicts[:20]),
@@ -292,7 +593,7 @@ class FolderAliasDialog(QDialog):
             return
 
         self.alias_store.save_aliases(new_aliases)
-        QMessageBox.information(self, "提示", "批量文件夹匹配规则已保存。")
+        show_batch_information(self, "提示", "批量文件夹匹配规则已保存。")
         self.accept()
 
 
@@ -458,11 +759,14 @@ class BatchAnalysisDialog(QDialog):
         layout.addWidget(hint)
 
         table_group = QGroupBox("预检查结果")
-        table_group.setMinimumHeight(250)
-        table_group.setMaximumHeight(290)
+        self.table_group = table_group
+        self.preview_row_height = 38
+        self.preview_header_height = 36
+        table_group.setMinimumHeight(282)
+        table_group.setMaximumHeight(282)
         table_layout = QVBoxLayout(table_group)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        table_layout.setSpacing(6)
+        table_layout.setContentsMargins(12, 14, 12, 10)
+        table_layout.setSpacing(0)
 
         self.table = QTableWidget()
         self.table.setColumnCount(9)
@@ -471,23 +775,30 @@ class BatchAnalysisDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        self.table.setMinimumHeight(214)
-        self.table.setMaximumHeight(226)
+        self.table.verticalHeader().setDefaultSectionSize(self.preview_row_height)
+        self.table.setMinimumHeight(228)
+        self.table.setMaximumHeight(228)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setFocusPolicy(Qt.NoFocus)
 
         header = self.table.horizontalHeader()
+        header.setFixedHeight(self.preview_header_height)
         header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        for column in [2, 3, 4, 5, 6, 7, 8]:
+            header.setSectionResizeMode(column, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 78)
+        self.table.setColumnWidth(2, 44)
+        self.table.setColumnWidth(3, 44)
+        self.table.setColumnWidth(4, 56)
+        self.table.setColumnWidth(5, 66)
+        self.table.setColumnWidth(6, 82)
+        self.table.setColumnWidth(7, 66)
+        self.table.setColumnWidth(8, 82)
         table_layout.addWidget(self.table)
-        layout.addWidget(table_group, 0)
+        layout.addWidget(table_group, 2)
 
         progress_layout = QHBoxLayout()
         self.progress_label = QLabel("等待开始")
@@ -526,6 +837,50 @@ class BatchAnalysisDialog(QDialog):
         self.btn_cancel_next.clicked.connect(self.cancel_after_current)
         self.btn_close.clicked.connect(self.close)
 
+    def apply_primary_button_styles(self):
+        """强制主按钮保持蓝底白字。
+
+        这两个按钮在父窗口/全局 QSS 影响下，普通状态可能被渲染成白底，
+        只有 hover 才变蓝。这里给按钮本身设置局部样式，确保普通状态也
+        始终为蓝色主按钮。
+        """
+        primary_css = """
+            QPushButton#BatchPrimaryButton {
+                min-height: 34px;
+                padding: 5px 16px;
+                border: 1px solid #1769E0;
+                border-radius: 6px;
+                background-color: #1769E0;
+                color: #FFFFFF;
+                font-weight: 600;
+            }
+            QPushButton#BatchPrimaryButton:hover {
+                background-color: #0F5ED7;
+                border-color: #0F5ED7;
+                color: #FFFFFF;
+            }
+            QPushButton#BatchPrimaryButton:pressed {
+                background-color: #0B4DB5;
+                border-color: #0B4DB5;
+                color: #FFFFFF;
+            }
+            QPushButton#BatchPrimaryButton:disabled {
+                background-color: #EEF4FB;
+                border-color: #DDE6F2;
+                color: #8A97A8;
+            }
+        """
+        for name in ["btn_select_folder", "btn_start"]:
+            if not hasattr(self, name):
+                continue
+            button = getattr(self, name)
+            button.setObjectName("BatchPrimaryButton")
+            button.setFlat(False)
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            button.setMinimumHeight(34)
+            button.setStyleSheet(primary_css)
+
     def apply_modern_style(self):
         """应用批量分析弹窗局部样式。
 
@@ -559,11 +914,13 @@ class BatchAnalysisDialog(QDialog):
 
         if hasattr(self, "table"):
             self.table.setObjectName("BatchPreviewTable")
-            self.table.verticalHeader().setDefaultSectionSize(34)
+            self.table.verticalHeader().setDefaultSectionSize(getattr(self, "preview_row_height", 38))
+            self.table.horizontalHeader().setFixedHeight(getattr(self, "preview_header_height", 38))
             self.table.setShowGrid(True)
             self.table.setAlternatingRowColors(True)
-            self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setFocusPolicy(Qt.NoFocus)
 
         if hasattr(self, "log_edit"):
             self.log_edit.setObjectName("BatchLogEdit")
@@ -713,6 +1070,7 @@ class BatchAnalysisDialog(QDialog):
                 selection-background-color: #DCEBFF;
                 selection-color: #1F2D3D;
                 color: #1F2D3D;
+                outline: none;
             }
 
             QTableWidget#BatchPreviewTable::item {
@@ -722,6 +1080,12 @@ class BatchAnalysisDialog(QDialog):
             QTableWidget#BatchPreviewTable::item:selected {
                 background-color: #DCEBFF;
                 color: #1F2D3D;
+                outline: none;
+            }
+
+            QTableWidget#BatchPreviewTable::item:focus {
+                border: none;
+                outline: none;
             }
 
             QHeaderView::section {
@@ -732,72 +1096,43 @@ class BatchAnalysisDialog(QDialog):
                 border-right: 1px solid #DDE6F2;
                 border-bottom: 1px solid #DDE6F2;
                 padding: 6px 5px;
-                min-height: 28px;
+                min-height: 26px;
             }
 
             QComboBox {
                 background-color: #FFFFFF;
                 border: 1px solid #DDE6F2;
                 border-radius: 5px;
-                padding: 3px 24px 3px 8px;
+                padding: 0px 26px 0px 8px;
                 color: #1F2D3D;
-                min-height: 26px;
-            }
-
-            QComboBox#BatchTableCombo {
                 min-height: 28px;
-                max-height: 28px;
-                border-radius: 5px;
-                padding: 2px 24px 2px 8px;
-                background-color: #FFFFFF;
             }
 
-            QComboBox:hover {
-                border-color: #BCD7FF;
-                background-color: #F8FAFD;
+            QComboBox:hover, QComboBox#BatchFolderCombo:hover {
+                background-color: #F8FBFF;
+                border-color: #BFD5F5;
             }
 
-            QComboBox:focus {
+            QComboBox:focus, QComboBox#BatchFolderCombo:focus {
                 border-color: #1769E0;
-                background-color: #FFFFFF;
             }
 
-            QComboBox::drop-down {
+            QComboBox::drop-down, QComboBox#BatchFolderCombo::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
-                width: 22px;
+                width: 24px;
                 border: none;
                 background: transparent;
             }
 
-            QComboBox::down-arrow {
-                width: 10px;
-                height: 10px;
-            }
-
-            QComboBox QAbstractItemView {
+            QComboBox QAbstractItemView, QComboBox#BatchFolderCombo QAbstractItemView {
                 background-color: #FFFFFF;
-                color: #1F2D3D;
                 border: 1px solid #DDE6F2;
                 selection-background-color: #DCEBFF;
                 selection-color: #1F2D3D;
+                color: #1F2D3D;
                 outline: none;
                 padding: 4px;
-            }
-
-            QComboBox QAbstractItemView::item {
-                min-height: 26px;
-                padding: 4px 8px;
-            }
-
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #F2F7FF;
-                color: #1769E0;
-            }
-
-            QComboBox QAbstractItemView::item:selected {
-                background-color: #DCEBFF;
-                color: #1F2D3D;
             }
 
             QProgressBar#BatchProgressBar {
@@ -847,6 +1182,7 @@ class BatchAnalysisDialog(QDialog):
             }
         """)
 
+        self.apply_primary_button_styles()
 
 
     # ---------- 匹配规则 ----------
@@ -928,9 +1264,9 @@ class BatchAnalysisDialog(QDialog):
                 mapping[row.get("protein_key", "")] = Path(folder).name
         changed = self.alias_store.add_current_mapping(mapping)
         if changed:
-            QMessageBox.information(self, "提示", f"已保存 {changed} 条当前匹配关系到批量匹配规则。")
+            show_batch_information(self, "提示", f"已保存 {changed} 条当前匹配关系到批量匹配规则。")
         else:
-            QMessageBox.information(self, "提示", "当前匹配关系已经在规则中，无需重复保存。")
+            show_batch_information(self, "提示", "当前匹配关系已经在规则中，无需重复保存。")
         self.scan_parent_folder()
 
     # ---------- 扫描与表格 ----------
@@ -1167,24 +1503,76 @@ class BatchAnalysisDialog(QDialog):
         counts["_unmatched_files"] = len(result.unmatched_files)
         return counts
 
-    @staticmethod
-    def style_table_combo(combo: QComboBox) -> None:
-        """统一预检查表格内下拉框样式，避免弹出列表黑底或单元格内偏低。"""
-        combo.setMinimumHeight(28)
-        combo.setMaximumHeight(28)
-        combo.view().setStyleSheet("""
+    def style_folder_combo(self, combo: QComboBox) -> None:
+        """统一预检表格中的文件夹下拉框样式。
+
+        本版采用“表格单元格原生下拉”的视觉：去掉 QComboBox 自己的边框，
+        只保留文字和箭头，由表格网格线承担边界。这样不会出现额外上边界、
+        双线边框或第一行焦点线，视觉上也更接近普通表格内容。
+        """
+        combo.setObjectName("BatchFolderCombo")
+        combo.setFixedHeight(getattr(self, "preview_row_height", 38))
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        combo.setMaxVisibleItems(10)
+        combo.setFocusPolicy(Qt.NoFocus)
+        try:
+            combo.setFrame(False)
+        except Exception:
+            pass
+
+        # 强制使用独立 QListView，避免继承父窗口/系统暗色弹出列表。
+        view = QListView(combo)
+        view.setUniformItemSizes(True)
+        combo.setView(view)
+
+        arrow_icon = (Path(__file__).resolve().parents[1] / "assets" / "icons" / "form_chevron_down.svg").as_posix()
+        combo.setStyleSheet(f"""
+            QComboBox#BatchFolderCombo {{
+                background-color: transparent;
+                border: none;
+                border-radius: 0px;
+                padding: 0px 24px 0px 14px;
+                color: #1F2D3D;
+                min-height: 38px;
+                max-height: 38px;
+            }}
+            QComboBox#BatchFolderCombo:hover {{
+                background-color: #F2F7FF;
+                border: none;
+            }}
+            QComboBox#BatchFolderCombo:focus {{
+                background-color: #F2F7FF;
+                border: none;
+                outline: none;
+            }}
+            QComboBox#BatchFolderCombo::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border: none;
+                background: transparent;
+            }}
+            QComboBox#BatchFolderCombo::down-arrow {{
+                image: url("{arrow_icon}");
+                width: 10px;
+                height: 10px;
+            }}
+        """)
+        view.setStyleSheet("""
             QListView {
                 background-color: #FFFFFF;
+                border: 1px solid #D8E3F0;
                 color: #1F2D3D;
-                border: 1px solid #DDE6F2;
                 outline: none;
-                padding: 4px;
+                padding: 3px;
                 selection-background-color: #DCEBFF;
                 selection-color: #1F2D3D;
             }
             QListView::item {
-                min-height: 26px;
+                min-height: 28px;
                 padding: 4px 8px;
+                color: #1F2D3D;
+                background-color: #FFFFFF;
             }
             QListView::item:hover {
                 background-color: #F2F7FF;
@@ -1196,13 +1584,59 @@ class BatchAnalysisDialog(QDialog):
             }
         """)
 
+    def make_combo_cell_widget(self, combo: QComboBox) -> QWidget:
+        wrapper = QWidget()
+        wrapper.setObjectName("BatchComboCell")
+        wrapper.setAttribute(Qt.WA_StyledBackground, True)
+        wrapper.setStyleSheet("""
+            QWidget#BatchComboCell {
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(combo)
+        return wrapper
+
+    def adjust_preview_table_height(self) -> None:
+        """按实际蛋白行数精确计算预检表格高度，避免底部空白或行被裁切。"""
+        if not hasattr(self, "table"):
+            return
+
+        row_count = max(self.table.rowCount(), 1)
+        row_height = getattr(self, "preview_row_height", 38)
+        header_height = getattr(self, "preview_header_height", 38)
+
+        for row in range(self.table.rowCount()):
+            self.table.setRowHeight(row, row_height)
+
+        table_height = header_height + row_count * row_height + 2
+        self.table.setFixedHeight(table_height)
+
+        if hasattr(self, "table_group"):
+            group_height = table_height + 54
+            self.table_group.setMinimumHeight(group_height)
+            self.table_group.setMaximumHeight(group_height)
+
+    def get_folder_combo_from_row(self, row_index: int) -> Optional[QComboBox]:
+        cell_widget = self.table.cellWidget(row_index, 1)
+        if isinstance(cell_widget, QComboBox):
+            return cell_widget
+        if isinstance(cell_widget, QWidget):
+            return cell_widget.findChild(QComboBox)
+        return None
+
     def refresh_table(self):
         self._refreshing_table = True
         try:
             self.table.setRowCount(len(self.scan_rows))
+            self.table.verticalHeader().setDefaultSectionSize(getattr(self, "preview_row_height", 38))
             folder_names = [folder.name for folder in self.available_folders]
 
             for row_index, row in enumerate(self.scan_rows):
+                self.table.setRowHeight(row_index, getattr(self, "preview_row_height", 38))
                 channels = row.get("channels", {})
 
                 protein_item = QTableWidgetItem(str(row.get("protein_name", "")))
@@ -1210,7 +1644,7 @@ class BatchAnalysisDialog(QDialog):
                 self.table.setItem(row_index, 0, protein_item)
 
                 combo = QComboBox()
-                combo.setObjectName("BatchTableCombo")
+                self.style_folder_combo(combo)
                 combo.addItem("- 未选择 -", "")
                 for name in folder_names:
                     combo.addItem(name, name)
@@ -1221,17 +1655,7 @@ class BatchAnalysisDialog(QDialog):
                     if idx >= 0:
                         combo.setCurrentIndex(idx)
                 combo.currentIndexChanged.connect(lambda _idx, r=row_index: self.on_folder_combo_changed(r))
-                self.style_table_combo(combo)
-
-                combo_wrapper = QWidget()
-                combo_wrapper.setObjectName("BatchComboCell")
-                combo_wrapper.setStyleSheet("QWidget#BatchComboCell { background: transparent; }")
-                combo_layout = QHBoxLayout(combo_wrapper)
-                combo_layout.setContentsMargins(8, 2, 8, 2)
-                combo_layout.setSpacing(0)
-                combo_layout.addWidget(combo)
-                self.table.setCellWidget(row_index, 1, combo_wrapper)
-                self.table.setRowHeight(row_index, 34)
+                self.table.setCellWidget(row_index, 1, self.make_combo_cell_widget(combo))
 
                 pipeline_check = row.get("pipeline", {}) or {}
                 env_check = row.get("environment", {}) or {}
@@ -1256,6 +1680,8 @@ class BatchAnalysisDialog(QDialog):
                     elif offset == 8:
                         self.apply_status_color(item, str(value))
                     self.table.setItem(row_index, offset, item)
+
+            self.adjust_preview_table_height()
         finally:
             self._refreshing_table = False
 
@@ -1265,13 +1691,7 @@ class BatchAnalysisDialog(QDialog):
         if row_index < 0 or row_index >= len(self.scan_rows):
             return
 
-        cell_widget = self.table.cellWidget(row_index, 1)
-        combo = None
-        if isinstance(cell_widget, QComboBox):
-            combo = cell_widget
-        elif isinstance(cell_widget, QWidget):
-            combo = cell_widget.findChild(QComboBox)
-
+        combo = self.get_folder_combo_from_row(row_index)
         folder_name = combo.currentData() if isinstance(combo, QComboBox) else ""
         folder_path: Optional[Path] = None
         if folder_name and self.parent_folder:
@@ -1347,12 +1767,12 @@ class BatchAnalysisDialog(QDialog):
 
     def start_batch_analysis(self):
         if not self.case_data or not self.case_data.get("id"):
-            QMessageBox.information(self, "提示", "当前病例无效，请先选择病例。")
+            show_batch_information(self, "提示", "当前病例无效，请先选择病例。")
             return
 
         duplicates = self.validate_duplicate_folders()
         if duplicates:
-            QMessageBox.warning(
+            show_batch_warning(
                 self,
                 "文件夹重复",
                 "同一个文件夹不能同时分配给多个蛋白，请调整后再开始分析：\n" + "\n".join(duplicates[:20]),
@@ -1361,12 +1781,12 @@ class BatchAnalysisDialog(QDialog):
 
         tasks = self.get_ready_tasks()
         if not tasks:
-            QMessageBox.information(self, "提示", "没有可分析的蛋白文件夹。请检查文件夹匹配、R/G 图片、Pipeline 文件和 MvImageID 环境。")
+            show_batch_information(self, "提示", "没有可分析的蛋白文件夹。请检查文件夹匹配、R/G 图片、Pipeline 文件和 MvImageID 环境。")
             return
 
         existing_names = self.get_existing_protein_names(tasks)
         if existing_names:
-            reply = QMessageBox.question(
+            reply = show_batch_question(
                 self,
                 "确认覆盖分析",
                 "当前病例已有以下蛋白分析结果：\n"
@@ -1379,7 +1799,7 @@ class BatchAnalysisDialog(QDialog):
             if reply != QMessageBox.Yes:
                 return
 
-        reply = QMessageBox.question(
+        reply = show_batch_question(
             self,
             "开始批量分析",
             f"将按顺序分析 {len(tasks)} 个蛋白。\n批量分析期间主界面暂时不可操作。\n\n是否开始？",
@@ -1455,9 +1875,9 @@ class BatchAnalysisDialog(QDialog):
 
         if errors:
             error_text = "\n".join([f"{e.get('protein_name', '')}：{e.get('message', '')}" for e in errors])
-            QMessageBox.warning(self, "批量分析完成", f"成功 {saved_count} 个，失败/跳过 {len(errors)} 个。\n\n{error_text}")
+            show_batch_warning(self, "批量分析完成", f"成功 {saved_count} 个，失败/跳过 {len(errors)} 个。\n\n{error_text}")
         else:
-            QMessageBox.information(self, "批量分析完成", f"已完成 {saved_count} 个蛋白分析。")
+            show_batch_information(self, "批量分析完成", f"已完成 {saved_count} 个蛋白分析。")
 
     def save_result_to_database(self, result: dict) -> Tuple[bool, str]:
         case_id = result.get("case_id")
@@ -1520,13 +1940,16 @@ class BatchAnalysisDialog(QDialog):
         self.btn_start.setEnabled(not running)
         self.btn_cancel_next.setEnabled(running)
         self.btn_close.setEnabled(not running)
+        for button in [self.btn_select_folder, self.btn_scan, self.btn_alias_rules, self.btn_save_mapping, self.btn_start, self.btn_cancel_next, self.btn_close]:
+            button.setCursor(Qt.PointingHandCursor if button.isEnabled() else Qt.ArrowCursor)
+        self.apply_primary_button_styles()
 
     def append_log(self, message: str):
         self.log_edit.append(str(message))
 
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():
-            QMessageBox.information(self, "提示", "批量分析正在运行，暂时不能关闭窗口。")
+            show_batch_information(self, "提示", "批量分析正在运行，暂时不能关闭窗口。")
             event.ignore()
             return
         super().closeEvent(event)
