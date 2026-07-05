@@ -49,7 +49,8 @@ class ResultViewer(QWidget):
         self.current_pixmap = None
         self.current_image_mode = "g"
         self.zoom_factor = 1.0
-        self.view_mode = "height"  # height / fit / original / zoom
+        self.current_display_scale = 1.0
+        self.view_mode = "fit"  # fit / original / zoom；height 模式保留为兼容旧逻辑，不再显示入口
 
         self.init_ui()
 
@@ -215,7 +216,6 @@ class ResultViewer(QWidget):
         view_layout.setContentsMargins(8, 8, 8, 8)
         view_layout.setSpacing(6)
 
-        self.btn_height_fit = QPushButton("按高度铺满")
         self.btn_fit = QPushButton("适应窗口")
         self.btn_1_1 = QPushButton("1:1")
 
@@ -231,7 +231,6 @@ class ResultViewer(QWidget):
         nav_row.addWidget(self.btn_prev_image)
         nav_row.addWidget(self.btn_next_image)
 
-        view_layout.addWidget(self.btn_height_fit)
         view_layout.addWidget(self.btn_fit)
         view_layout.addWidget(self.btn_1_1)
         view_layout.addLayout(zoom_row)
@@ -378,7 +377,6 @@ class ResultViewer(QWidget):
         self.btn_show_r.clicked.connect(lambda: self.switch_image_mode("r"))
         self.btn_show_colocalized.clicked.connect(lambda: self.switch_image_mode("colocalized"))
 
-        self.btn_height_fit.clicked.connect(self.show_height_fit)
         self.btn_fit.clicked.connect(self.show_fit_to_window)
         self.btn_1_1.clicked.connect(self.show_1_to_1)
         self.btn_zoom_in.clicked.connect(self.zoom_in)
@@ -407,6 +405,9 @@ class ResultViewer(QWidget):
         self.current_field_no = None
         self.current_image_path = None
         self.current_pixmap = None
+        self.zoom_factor = 1.0
+        self.current_display_scale = 1.0
+        self.view_mode = "fit"
 
         self.summary_label.setText(message)
         self.summary_table.setRowCount(0)
@@ -739,6 +740,48 @@ class ResultViewer(QWidget):
         self.update_summary_label()
         self.schedule_image_refit()
 
+    def calculate_view_scale(self, mode: str = None):
+        """计算当前画布下的真实显示比例。
+
+        适应窗口模式下，图片实际不是 1:1 显示，
+        放大和缩小应当从这个真实比例继续变化，而不是从 1.0 开始。
+        """
+        if self.current_pixmap is None or self.current_pixmap.isNull():
+            return 1.0
+
+        mode = mode or self.view_mode
+
+        viewport_size = self.scroll_area.viewport().size()
+        viewport_width = max(viewport_size.width(), 100)
+        viewport_height = max(viewport_size.height(), 100)
+
+        image_width = max(self.current_pixmap.width(), 1)
+        image_height = max(self.current_pixmap.height(), 1)
+
+        if mode == "height":
+            target_height = max(viewport_height - 12, 100)
+            return target_height / image_height
+
+        if mode == "fit":
+            target_width = max(viewport_width - 12, 100)
+            target_height = max(viewport_height - 12, 100)
+            return min(target_width / image_width, target_height / image_height)
+
+        if mode == "original":
+            return 1.0
+
+        return max(float(self.zoom_factor or 1.0), 0.1)
+
+    def get_current_zoom_base(self):
+        """返回放大/缩小时应该使用的当前比例。"""
+        if self.view_mode in {"height", "fit"}:
+            return self.calculate_view_scale(self.view_mode)
+
+        if self.view_mode == "original":
+            return 1.0
+
+        return max(float(self.zoom_factor or self.current_display_scale or 1.0), 0.1)
+
     def update_image_display(self):
         if self.current_pixmap is None:
             return
@@ -756,7 +799,7 @@ class ResultViewer(QWidget):
 
             if self.view_mode == "height":
                 target_height = max(viewport_height - 12, 100)
-                scale = target_height / max(self.current_pixmap.height(), 1)
+                scale = self.calculate_view_scale("height")
                 target_width = max(int(self.current_pixmap.width() * scale), 1)
                 scaled = self.current_pixmap.scaled(
                     target_width,
@@ -767,12 +810,16 @@ class ResultViewer(QWidget):
             else:
                 target_width = max(viewport_width - 12, 100)
                 target_height = max(viewport_height - 12, 100)
+                scale = self.calculate_view_scale("fit")
                 scaled = self.current_pixmap.scaled(
                     target_width,
                     target_height,
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation,
                 )
+
+            self.zoom_factor = scale
+            self.current_display_scale = scale
 
             # QLabel 大小固定为当前画布大小，pixmap 由 QLabel 居中绘制。
             # 这样窗口从全屏变小后，不会保留旧滚动偏移，图片仍然居中。
@@ -788,11 +835,15 @@ class ResultViewer(QWidget):
         self.image_label.setAlignment(Qt.AlignCenter)
 
         if self.view_mode == "original":
+            self.zoom_factor = 1.0
             width = self.current_pixmap.width()
             height = self.current_pixmap.height()
         else:
+            self.zoom_factor = max(float(self.zoom_factor or 1.0), 0.1)
             width = int(self.current_pixmap.width() * self.zoom_factor)
             height = int(self.current_pixmap.height() * self.zoom_factor)
+
+        self.current_display_scale = self.zoom_factor
 
         scaled = self.current_pixmap.scaled(
             max(width, 1),
@@ -830,21 +881,27 @@ class ResultViewer(QWidget):
         self.update_image_display()
 
     def zoom_in(self):
-        if self.view_mode in {"height", "fit", "original"}:
-            self.zoom_factor = 1.0
+        if self.current_pixmap is None:
+            return
+
+        # 从当前实际显示比例继续放大。
+        # 例如当前是“适应窗口”0.62 倍，点击放大后应为 0.62 × 1.25，
+        # 而不是直接跳到 1.25 倍。
+        self.zoom_factor = self.get_current_zoom_base() * 1.25
         self.view_mode = "zoom"
-        self.zoom_factor *= 1.25
         self.update_image_display()
 
     def zoom_out(self):
-        if self.view_mode in {"height", "fit", "original"}:
-            self.zoom_factor = 1.0
-        self.view_mode = "zoom"
-        self.zoom_factor /= 1.25
+        if self.current_pixmap is None:
+            return
+
+        # 从当前实际显示比例继续缩小，避免从 1:1 重新计算造成跳变。
+        self.zoom_factor = self.get_current_zoom_base() / 1.25
 
         if self.zoom_factor < 0.1:
             self.zoom_factor = 0.1
 
+        self.view_mode = "zoom"
         self.update_image_display()
 
     def show_prev_image(self):
