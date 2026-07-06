@@ -292,12 +292,14 @@ class SettingsWindow(QWidget):
         button_layout = QHBoxLayout()
         self.btn_save_pipeline_params = QPushButton("保存参数")
         self.btn_generate_pipelines = QPushButton("生成管道")
+        self.btn_restore_pipeline_backup = QPushButton("恢复最近备份")
         self.btn_reset_pipeline_params = QPushButton("恢复默认参数")
         self.btn_open_pipeline_dir = QPushButton("打开管道目录")
         self.btn_open_pipeline_param_file = QPushButton("打开参数文件")
 
         button_layout.addWidget(self.btn_save_pipeline_params)
         button_layout.addWidget(self.btn_generate_pipelines)
+        button_layout.addWidget(self.btn_restore_pipeline_backup)
         button_layout.addWidget(self.btn_reset_pipeline_params)
         button_layout.addWidget(self.btn_open_pipeline_dir)
         button_layout.addWidget(self.btn_open_pipeline_param_file)
@@ -306,6 +308,7 @@ class SettingsWindow(QWidget):
 
         self.btn_save_pipeline_params.clicked.connect(self.save_pipeline_params)
         self.btn_generate_pipelines.clicked.connect(self.generate_pipeline_files)
+        self.btn_restore_pipeline_backup.clicked.connect(self.restore_latest_pipeline_backup)
         self.btn_reset_pipeline_params.clicked.connect(self.reset_pipeline_params)
         self.btn_open_pipeline_dir.clicked.connect(self.open_pipeline_dir)
         self.btn_open_pipeline_param_file.clicked.connect(self.open_pipeline_param_file)
@@ -505,6 +508,47 @@ class SettingsWindow(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"生成管道失败：\n{e}")
+
+
+    def restore_latest_pipeline_backup(self):
+        latest_backup = self.pipeline_param_manager.get_latest_backup_dir()
+
+        if not latest_backup:
+            QMessageBox.information(
+                self,
+                "提示",
+                "当前没有可恢复的管道备份。\n\n"
+                "点击“生成管道”后，系统会自动在 pipelines\\backups 中备份旧管道。",
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认恢复最近备份",
+            "将恢复最近一次管道备份，并覆盖当前实际运行管道：\n\n"
+            f"{latest_backup}\n\n"
+            "恢复前系统会先自动备份当前管道，便于回退。\n\n"
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            messages = self.pipeline_param_manager.restore_latest_backup()
+            for message in messages:
+                self.append_log(message)
+
+            QMessageBox.information(
+                self,
+                "恢复完成",
+                "已恢复最近一次管道备份。\n\n"
+                "后续蛋白分析、批量分析和质控测试会直接读取恢复后的 pipelines 目录下 .cppipe。",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"恢复管道备份失败：\n{e}")
+
 
     def open_pipeline_dir(self):
         path = self.pipeline_param_manager.get_pipelines_dir()
