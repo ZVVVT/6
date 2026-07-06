@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from app.long_message_dialog import show_long_message_dialog
 from core.config_manager import ConfigManager
 from core.image_channel_matcher import ImageChannelMatcher
 from core.mvimageid_runner import MvImageIDRunner
@@ -1877,45 +1876,10 @@ class BatchAnalysisDialog(QDialog):
         self.batch_finished.emit()
 
         if errors:
-            detail_text = self.build_finished_detail(errors)
-            summary_text = (
-                f"批量分析完成。\n\n"
-                f"成功：{saved_count} 个\n"
-                f"失败/跳过：{len(errors)} 个\n\n"
-                "详细信息请在下方日志中查看，可滚动浏览，也可以复制。"
-            )
-            show_long_message_dialog(
-                self,
-                title="批量分析完成",
-                summary=summary_text,
-                detail=detail_text,
-                level="warning",
-            )
+            error_text = "\n".join([f"{e.get('protein_name', '')}：{e.get('message', '')}" for e in errors])
+            show_batch_warning(self, "批量分析完成", f"成功 {saved_count} 个，失败/跳过 {len(errors)} 个。\n\n{error_text}")
         else:
             show_batch_information(self, "批量分析完成", f"已完成 {saved_count} 个蛋白分析。")
-
-    @staticmethod
-    def build_finished_detail(errors: list) -> str:
-        """生成批量完成弹窗的详细日志。
-
-        注意：详细内容放在可滚动文本框中，不再直接塞进 QMessageBox 主文本，
-        避免长日志把弹窗撑到超过屏幕。
-        """
-        lines: List[str] = []
-        for index, error in enumerate(errors, start=1):
-            protein_name = str(error.get("protein_name", "") or "")
-            protein_key = str(error.get("protein_key", "") or "")
-            message = str(error.get("message", "") or "")
-
-            title = protein_name
-            if protein_key and protein_key not in protein_name:
-                title = f"{protein_name}（{protein_key}）" if protein_name else protein_key
-
-            lines.append(f"[{index}] {title}")
-            lines.append(message or "未知错误。")
-            lines.append("-" * 72)
-
-        return "\n".join(lines).strip()
 
     def save_result_to_database(self, result: dict) -> Tuple[bool, str]:
         case_id = result.get("case_id")

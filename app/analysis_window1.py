@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QSplitter,
 )
 
-from app.long_message_dialog import show_long_message_dialog
 from app.result_viewer import ResultViewer
 from core.config_manager import ConfigManager
 from core.image_channel_matcher import ImageChannelMatcher
@@ -1411,12 +1410,10 @@ class AnalysisWindow(QWidget):
         else:
             message = str(error_message or "分析失败，请查看日志。")
             self.append_log(f"分析失败：{message}")
-            show_long_message_dialog(
+            QMessageBox.critical(
                 self,
-                title="分析失败",
-                summary="分析失败。\n\n详细错误信息请在下方日志中查看，可滚动浏览，也可以复制。",
-                detail=message,
-                level="error",
+                "分析失败",
+                f"分析失败。\n\n{message}"
             )
 
     # -------------------------
