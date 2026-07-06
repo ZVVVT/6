@@ -7,7 +7,7 @@
 2. 统一 raw_images / cp_input / cp_output 的目录清理与准备。
 3. 统一使用 ImageChannelMatcher 识别 R/G/DIC/Merge 与视野编号。
 4. raw_images 保留原始文件名。
-5. cp_input 使用标准命名，复制 G/R/DIC/Merge 图；其中 G/R 参与分析，DIC/Merge 用于备份和报告取图。
+5. cp_input 使用标准命名，只复制参与分析的 G/R 图，避免用户后缀规则与管道识别规则不一致。
 6. 统一调用 MvImageIDRunner。
 7. 统一解析 Image.csv / colocalized CSV。
 
@@ -326,45 +326,36 @@ class ProteinAnalysisService:
         protein_name: str,
         log_callback: LogCallback = None,
     ) -> int:
-        """清空 cp_input/proteinX，并复制本次分析相关图像。
+        """清空 cp_input/proteinX，并复制本次分析实际需要的 R/G 图。
 
         设计原则：
-        - raw_images 保留用户原始文件名，用于原始数据追溯。
-        - cp_input 是给 MvImageID 管道运行和后续核查使用的标准输入目录。
-        - G/R 是分析必需通道，统一命名为：视野号_G / 视野号_R。
-        - DIC/Merge 是可选通道；如果原始导入中存在，也复制到 cp_input，统一命名为：
-          视野号_DIC / 视野号_Merge。
-        - 管道仍固定识别标准后缀 _G / _R，不需要跟随系统图片规则变化。
+        - raw_images 保留用户原始文件名，用于原始数据追溯、图片核查和报告代表性图片。
+        - cp_input 是给 MvImageID 管道运行的临时输入目录，使用固定标准命名。
+        - 软件可以通过“图片规则”识别用户原始后缀，例如 _FITC / _PI。
+        - 管道仍固定识别标准后缀 _G / _R，避免每次修改图片规则都要同步修改 .cppipe。
 
         示例：
-        - 原始图：001_FITC.tif、001_PI.tif、001_明场.tif、001_合并.tif
-        - cp_input：001_G.tif、001_R.tif、001_DIC.tif、001_Merge.tif
+        - 原始图：001_FITC.tif、001_PI.tif
+        - cp_input：001_G.tif、001_R.tif
         """
         if cp_input_dir.exists():
             shutil.rmtree(cp_input_dir)
         cp_input_dir.mkdir(parents=True, exist_ok=True)
 
         copied_count = 0
-        required_count = 0
-        optional_count = 0
         used_target_names = set()
 
         for item in complete_items:
             field_no = str(item.get("field_no", "") or "").strip()
 
-            # G/R 必须存在，因为 complete_items 已经保证当前视野可分析。
-            # DIC/Merge 可选，存在则一并复制到 cp_input 作为标准化备份。
-            for channel in ["G", "R", "DIC", "Merge"]:
+            for channel in ["G", "R"]:
                 source_path = item.get(channel, "")
                 if not source_path:
                     continue
 
                 source = Path(str(source_path)).resolve()
                 if not source.exists():
-                    if channel in {"G", "R"}:
-                        raise FileNotFoundError(f"输入图像不存在：{source}")
-                    self._log(log_callback, f"{protein_name} 可选通道 {channel} 图像不存在，已跳过：{source}")
-                    continue
+                    raise FileNotFoundError(f"输入图像不存在：{source}")
 
                 target_name = self._standard_input_name(
                     field_no=field_no,
@@ -373,7 +364,7 @@ class ProteinAnalysisService:
                 )
 
                 # 如果标准化后发生重名，说明视野编号或文件命名存在冲突。
-                # 这里不自动加序号，避免管道结果、备份图片和报告图片对应关系变得不清晰。
+                # 这里不自动加序号，避免管道结果和原始图片对应关系变得不清晰。
                 if target_name in used_target_names or (cp_input_dir / target_name).exists():
                     raise RuntimeError(
                         f"分析输入标准文件名重复，无法安全复制：{target_name}。"
@@ -385,28 +376,18 @@ class ProteinAnalysisService:
                 used_target_names.add(target_name)
                 copied_count += 1
 
-                if channel in {"G", "R"}:
-                    required_count += 1
-                else:
-                    optional_count += 1
-
-        if required_count <= 0:
-            raise RuntimeError("没有复制任何 G/R 图像到分析输入目录。")
-
         self._log(
             log_callback,
-            f"{protein_name} 已准备分析输入图像：共 {copied_count} 张；"
-            f"G/R {required_count} 张，DIC/Merge {optional_count} 张。"
-            "cp_input 已统一转换为 _G / _R / _DIC / _Merge 标准命名。",
+            f"{protein_name} 已准备分析输入图像：{copied_count} 张，cp_input 已统一转换为 _G / _R 标准命名。",
         )
         return copied_count
 
     @classmethod
     def _standard_input_name(cls, field_no: str, channel: str, source: Path) -> str:
-        """生成 MvImageID 管道和报告取图使用的标准输入文件名。
+        """生成 MvImageID 管道使用的标准输入文件名。
 
         field_no 来自 ImageChannelMatcher 识别出的视野编号；
-        channel 固定为 G/R/DIC/Merge；
+        channel 固定为 G/R；
         扩展名沿用原始图片扩展名，兼容 tif/png/jpg 等格式。
         """
         stem = cls._safe_filename_stem(field_no)
@@ -426,7 +407,6 @@ class ProteinAnalysisService:
         text = re.sub(r"\s+", "_", text)
         text = text.strip("._- ")
         return text
-
 
     def prepare_output_folder(self, cp_output_dir: Path, protein_name: str, log_callback: LogCallback = None) -> None:
         """清空 cp_output/proteinX，避免旧输出混入本次结果。"""
