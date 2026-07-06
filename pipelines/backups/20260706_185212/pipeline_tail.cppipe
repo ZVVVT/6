@@ -5,7 +5,7 @@ GitHash:
 ModuleCount:31
 HasImagePlaneDetails:False
 
-Images:[module_num:1|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['步骤：', '1、将【E:Input】文件夹中的图像拖入 ', '2、点击左侧【ExportToPDF(导出PDF_支撑剂)】设置参数']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+Images:[module_num:1|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     :
     过滤图像?:Images only
     选择规则条件:and (extension does isimage) (directory doesnot containregexp "[\\\\/]\\.")
@@ -111,7 +111,7 @@ ColorToGray(颜色转灰度):[module_num:6|svn_version:'Unknown'|variable_revisi
 
 RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the input image:G_Gray
-    Expected object diameter:10
+    Expected object diameter:50
     Model:bact_fluor_omni
     Name the output object:G_objects_Run
     Use GPU:Yes
@@ -122,8 +122,8 @@ RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_
     Name the probability image:Probabilities
     Location of the pre-trained model file:Elsewhere...|
     Pre-trained model file name:cyto_0
-    Flow threshold:2
-    Distance field threshold:-2
+    Flow threshold:0.4
+    Distance field threshold:0
     GPU memory share for each worker:0.8
     Stitch Threshold:0.0
     Use 3D:No
@@ -187,7 +187,7 @@ RunCellpose:[module_num:11|svn_version:'Unknown'|variable_revision_number:6|show
     概率图像名称:Probabilities
     预训练模型文件位置:Elsewhere...|
     预训练模型文件名:cyto_0
-    流阈值:0.5
+    流阈值:0.4
     细胞概率阈值:0
     每个工作线程的 GPU 内存占用比例:0.8
     拼接阈值:0.0
@@ -212,7 +212,7 @@ FilterObjects(过滤对象):[module_num:13|svn_version:'Unknown'|variable_revisi
     选择规则或分类器文件的位置:Elsewhere...|
     规则或分类器文件名:rules.txt
     类别编号:1
-    Measurement count:1
+    Measurement count:2
     Additional object count:0
     将重叠的子对象分配给:Both parents
     将被移除的对象保留为独立集合？:No
@@ -222,6 +222,11 @@ FilterObjects(过滤对象):[module_num:13|svn_version:'Unknown'|variable_revisi
     最小值:0.2
     是否使用最大测量值进行筛选？:No
     最大值:1.0
+    选择用于筛选的测量值:AreaShape_EquivalentDiameter
+    是否使用最小测量值进行筛选？:No
+    最小值:0.0
+    是否使用最大测量值进行筛选？:Yes
+    最大值:70
     允许模糊特征匹配？:No
 
 OverlayOutlines(叠加轮廓线):[module_num:14|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]

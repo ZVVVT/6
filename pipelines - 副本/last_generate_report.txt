@@ -1,35 +1,33 @@
 管道参数生成报告
 ========================================================================
-生成时间：2026-07-06 19:04:32
+生成时间：2026-07-06 15:37:36
 项目目录：F:\sperm_protein_analyzer
 参数文件：F:\sperm_protein_analyzer\pipeline_params.ini
 模板目录：F:\sperm_protein_analyzer\pipelines\templates
-备份目录：F:\sperm_protein_analyzer\pipelines\backups\20260706_190432
+备份目录：F:\sperm_protein_analyzer\pipelines\backups\20260706_153736
 
 头部蛋白管道
 ------------------------------------------------------------------------
-module_num:7 | 预期物体直径 | red_diameter | 66 -> 35
-module_num:7 | 流阈值 | red_flow_threshold | 0.4 -> 0.4
+module_num:7 | 预期物体直径 | red_diameter | 65 -> 66
+module_num:7 | 流阈值 | red_flow_threshold | 0.5 -> 0.4
 module_num:7 | 细胞概率阈值 | red_cellprob_threshold | 0 -> 0
-module_num:7 | 最小尺寸 | red_min_size | 10 -> 30
-module_num:9 | AreaShape_FormFactor | 最小值 | red_formfactor_min | 0.2 -> 0.2
-module_num:9 | AreaShape_EquivalentDiameter | 最大值 | red_equivalent_diameter_max | 70 -> 75
+module_num:7 | 最小尺寸 | red_min_size | 10 -> 10
+module_num:9 | 最小值 | red_formfactor_min | 0.2 -> 0.2
 module_num:11 | 扩张或收缩的像素数 | green_expand_pixels | 1 -> 1
 module_num:14 | 最小值 | green_intensity_min | 5 -> 5
 
 尾部蛋白管道
 ------------------------------------------------------------------------
-module_num:7 | Expected object diameter | green_diameter | 50 -> 50
-module_num:7 | Flow threshold | green_flow_threshold | 0.4 -> 0.4
-module_num:7 | Distance field threshold | green_distance_threshold | 0 -> 0
+module_num:7 | Expected object diameter | green_diameter | 10 -> 50
+module_num:7 | Flow threshold | green_flow_threshold | 2 -> 0.4
+module_num:7 | Distance field threshold | green_distance_threshold | -2 -> 0
 module_num:7 | Minimum size | green_min_size | 10 -> 10
-module_num:9 | AreaShape_Eccentricity | 最小值 | green_eccentricity_min | 0.8 -> 0.8
-module_num:11 | 预期物体直径 | red_diameter | 65 -> 35
-module_num:11 | 流阈值 | red_flow_threshold | 0.4 -> 0.4
+module_num:9 | 最小值 | green_eccentricity_min | 0.8 -> 0.8
+module_num:11 | 预期物体直径 | red_diameter | 65 -> 65
+module_num:11 | 流阈值 | red_flow_threshold | 0.5 -> 0.4
 module_num:11 | 细胞概率阈值 | red_cellprob_threshold | 0 -> 0
-module_num:11 | 最小尺寸 | red_min_size | 10 -> 30
-module_num:13 | AreaShape_FormFactor | 最小值 | red_formfactor_min | 0.2 -> 0.2
-module_num:13 | AreaShape_EquivalentDiameter | 最大值 | red_equivalent_diameter_max | 70 -> 75
+module_num:11 | 最小尺寸 | red_min_size | 10 -> 10
+module_num:13 | 最小值 | red_formfactor_min | 0.2 -> 0.2
 module_num:15 | 扩张或收缩的像素数 | red_search_radius | 50 -> 50
 module_num:17 | 最小值 | colocalized_child_count_min | 1 -> 1
 
@@ -39,4 +37,4 @@ module_num:6 | 预期物体直径 | bead_diameter | 65 -> 65
 module_num:6 | 流阈值 | bead_flow_threshold | 0.5 -> 0.4
 module_num:6 | 细胞概率阈值 | bead_cellprob_threshold | 0 -> 0
 module_num:6 | 最小尺寸 | bead_min_size | 10 -> 10
-module_num:8 | AreaShape_FormFactor | 最小值 | bead_formfactor_min | 0.7 -> 0.7
+module_num:8 | 最小值 | bead_formfactor_min | 0.7 -> 0.7

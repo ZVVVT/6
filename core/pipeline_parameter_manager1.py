@@ -32,6 +32,16 @@ class PipelineTarget:
     output_name: str
 
 
+@dataclass(frozen=True)
+class ParameterMeta:
+    label: str
+    minimum: float
+    maximum: float
+    step: float
+    decimals: int
+    help_text: str = ""
+
+
 @dataclass
 class ReplacementRecord:
     section: str
@@ -40,7 +50,6 @@ class ReplacementRecord:
     param_key: str
     old_value: str
     new_value: str
-    measurement_name: str = ""
 
 
 class PipelineParameterManager:
@@ -76,7 +85,6 @@ class PipelineParameterManager:
             "red_cellprob_threshold": "0",
             "red_min_size": "10",
             "red_formfactor_min": "0.2",
-            "red_equivalent_diameter_max": "70",
             "green_expand_pixels": "1",
             "green_intensity_min": "5",
         },
@@ -91,7 +99,6 @@ class PipelineParameterManager:
             "red_cellprob_threshold": "0",
             "red_min_size": "10",
             "red_formfactor_min": "0.2",
-            "red_equivalent_diameter_max": "70",
             "red_search_radius": "50",
             "colocalized_child_count_min": "1",
         },
@@ -104,42 +111,77 @@ class PipelineParameterManager:
         },
     }
 
-    # 每个参数精确定位：section -> [(module_num, setting_name, param_key, measurement_name), ...]
-    # measurement_name 可选，用于 FilterObjects 中同一个模块存在多组“最小值/最大值”的情况。
-    # 例如红色对象过滤模块同时包含 AreaShape_FormFactor 和 AreaShape_EquivalentDiameter，
-    # 如果只按“最大值”替换，可能会误改 FormFactor 的最大值。
-    PARAM_RULES: Dict[str, List[Tuple[int, str, str, str]]] = {
+
+    # 管道参数范围说明。
+    # 这些范围同时用于：
+    # 1. 系统设置界面的输入控件限制；
+    # 2. 保存 pipeline_params.ini 前的二次校验；
+    # 3. 防止手动编辑参数文件后写入非法值。
+    PARAM_META: Dict[str, Dict[str, ParameterMeta]] = {
+        "Head": {
+            "red_diameter": ParameterMeta("红色识别直径", 1, 500, 1, 0, "Cellpose 预期对象直径，单位 px。"),
+            "red_flow_threshold": ParameterMeta("红色流阈值", 0, 10, 0.1, 2, "Flow threshold 是流场质量控制阈值，不建议为负数。"),
+            "red_cellprob_threshold": ParameterMeta("红色细胞概率阈值", -6, 6, 0.1, 2, "Cellpose cellprob_threshold，通常范围约 -6 到 6。"),
+            "red_min_size": ParameterMeta("红色最小尺寸", 0, 100000, 1, 0, "小于该像素面积的对象会被过滤。"),
+            "red_formfactor_min": ParameterMeta("红色圆度下限", 0, 1, 0.01, 2, "FormFactor 范围 0 到 1，越接近 1 越圆。"),
+            "green_expand_pixels": ParameterMeta("绿色匹配扩张像素", 0, 500, 1, 0, "用于共定位匹配的扩张像素数。"),
+            "green_intensity_min": ParameterMeta("共定位绿色强度阈值", 0, 100000000, 1, 2, "用于过滤绿色弱信号的强度下限。"),
+        },
+        "Tail": {
+            "green_diameter": ParameterMeta("绿色尾部识别直径", 1, 500, 1, 0, "Omnipose 预期对象直径，单位 px。"),
+            "green_flow_threshold": ParameterMeta("绿色尾部流阈值", 0, 10, 0.1, 2, "Flow threshold 是流场质量控制阈值，不建议为负数。"),
+            "green_distance_threshold": ParameterMeta("绿色尾部距离场阈值", -10, 10, 0.1, 2, "Omnipose 距离场阈值，当前默认 -2。"),
+            "green_min_size": ParameterMeta("绿色尾部最小尺寸", 0, 100000, 1, 0, "小于该像素面积的绿色尾部对象会被过滤。"),
+            "green_eccentricity_min": ParameterMeta("绿色尾部细长度下限", 0, 1, 0.01, 2, "Eccentricity 范围 0 到 1，越接近 1 越细长。"),
+            "red_diameter": ParameterMeta("红色头部识别直径", 1, 500, 1, 0, "Cellpose 预期对象直径，单位 px。"),
+            "red_flow_threshold": ParameterMeta("红色头部流阈值", 0, 10, 0.1, 2, "Flow threshold 是流场质量控制阈值，不建议为负数。"),
+            "red_cellprob_threshold": ParameterMeta("红色头部细胞概率阈值", -6, 6, 0.1, 2, "Cellpose cellprob_threshold，通常范围约 -6 到 6。"),
+            "red_min_size": ParameterMeta("红色头部最小尺寸", 0, 100000, 1, 0, "小于该像素面积的红色头部对象会被过滤。"),
+            "red_formfactor_min": ParameterMeta("红色头部圆度下限", 0, 1, 0.01, 2, "FormFactor 范围 0 到 1，越接近 1 越圆。"),
+            "red_search_radius": ParameterMeta("红色头部搜索半径", 0, 1000, 1, 0, "尾部蛋白共定位时，红色头部向外搜索绿色尾部的半径。"),
+            "colocalized_child_count_min": ParameterMeta("共定位最小绿色对象数", 0, 1000, 1, 0, "红色对象邻域内至少匹配到多少个绿色对象才认为共定位。"),
+        },
+        "QC": {
+            "bead_diameter": ParameterMeta("微球识别直径", 1, 500, 1, 0, "Cellpose 预期对象直径，单位 px。"),
+            "bead_flow_threshold": ParameterMeta("微球流阈值", 0, 10, 0.1, 2, "Flow threshold 是流场质量控制阈值，不建议为负数。"),
+            "bead_cellprob_threshold": ParameterMeta("微球细胞概率阈值", -6, 6, 0.1, 2, "Cellpose cellprob_threshold，通常范围约 -6 到 6。"),
+            "bead_min_size": ParameterMeta("微球最小尺寸", 0, 100000, 1, 0, "小于该像素面积的微球对象会被过滤。"),
+            "bead_formfactor_min": ParameterMeta("微球圆度下限", 0, 1, 0.01, 2, "FormFactor 范围 0 到 1，越接近 1 越圆。"),
+        },
+    }
+
+    # 每个参数精确定位：section -> [(module_num, setting_name, param_key), ...]
+    # 注意：同一个管道里可能有多个“最小值”，所以必须通过 module_num + 参数名精确定位。
+    PARAM_RULES: Dict[str, List[Tuple[int, str, str]]] = {
         "Head": [
-            (7, "预期物体直径", "red_diameter", ""),
-            (7, "流阈值", "red_flow_threshold", ""),
-            (7, "细胞概率阈值", "red_cellprob_threshold", ""),
-            (7, "最小尺寸", "red_min_size", ""),
-            (9, "最小值", "red_formfactor_min", "AreaShape_FormFactor"),
-            (9, "最大值", "red_equivalent_diameter_max", "AreaShape_EquivalentDiameter"),
-            (11, "扩张或收缩的像素数", "green_expand_pixels", ""),
-            (14, "最小值", "green_intensity_min", ""),
+            (7, "预期物体直径", "red_diameter"),
+            (7, "流阈值", "red_flow_threshold"),
+            (7, "细胞概率阈值", "red_cellprob_threshold"),
+            (7, "最小尺寸", "red_min_size"),
+            (9, "最小值", "red_formfactor_min"),
+            (11, "扩张或收缩的像素数", "green_expand_pixels"),
+            (14, "最小值", "green_intensity_min"),
         ],
         "Tail": [
-            (7, "Expected object diameter", "green_diameter", ""),
-            (7, "Flow threshold", "green_flow_threshold", ""),
-            (7, "Distance field threshold", "green_distance_threshold", ""),
-            (7, "Minimum size", "green_min_size", ""),
-            (9, "最小值", "green_eccentricity_min", "AreaShape_Eccentricity"),
-            (11, "预期物体直径", "red_diameter", ""),
-            (11, "流阈值", "red_flow_threshold", ""),
-            (11, "细胞概率阈值", "red_cellprob_threshold", ""),
-            (11, "最小尺寸", "red_min_size", ""),
-            (13, "最小值", "red_formfactor_min", "AreaShape_FormFactor"),
-            (13, "最大值", "red_equivalent_diameter_max", "AreaShape_EquivalentDiameter"),
-            (15, "扩张或收缩的像素数", "red_search_radius", ""),
-            (17, "最小值", "colocalized_child_count_min", ""),
+            (7, "Expected object diameter", "green_diameter"),
+            (7, "Flow threshold", "green_flow_threshold"),
+            (7, "Distance field threshold", "green_distance_threshold"),
+            (7, "Minimum size", "green_min_size"),
+            (9, "最小值", "green_eccentricity_min"),
+            (11, "预期物体直径", "red_diameter"),
+            (11, "流阈值", "red_flow_threshold"),
+            (11, "细胞概率阈值", "red_cellprob_threshold"),
+            (11, "最小尺寸", "red_min_size"),
+            (13, "最小值", "red_formfactor_min"),
+            (15, "扩张或收缩的像素数", "red_search_radius"),
+            (17, "最小值", "colocalized_child_count_min"),
         ],
         "QC": [
-            (6, "预期物体直径", "bead_diameter", ""),
-            (6, "流阈值", "bead_flow_threshold", ""),
-            (6, "细胞概率阈值", "bead_cellprob_threshold", ""),
-            (6, "最小尺寸", "bead_min_size", ""),
-            (8, "最小值", "bead_formfactor_min", "AreaShape_FormFactor"),
+            (6, "预期物体直径", "bead_diameter"),
+            (6, "流阈值", "bead_flow_threshold"),
+            (6, "细胞概率阈值", "bead_cellprob_threshold"),
+            (6, "最小尺寸", "bead_min_size"),
+            (8, "最小值", "bead_formfactor_min"),
         ],
     }
 
@@ -194,7 +236,73 @@ class PipelineParameterManager:
                 values[key] = self.config.get(section, key)
         return values
 
+
+    def get_param_meta(self, section: str, key: str) -> ParameterMeta:
+        meta = self.PARAM_META.get(section, {}).get(key)
+        if meta is None:
+            raise KeyError(f"未知管道参数：{section}.{key}")
+        return meta
+
+    def get_param_meta_map(self, section: str) -> Dict[str, ParameterMeta]:
+        return dict(self.PARAM_META.get(section, {}))
+
+    def get_param_range_lines(self) -> List[str]:
+        lines: List[str] = []
+        for section in ["Head", "Tail", "QC"]:
+            lines.append(f"[{section}]")
+            for key, meta in self.PARAM_META.get(section, {}).items():
+                lines.append(
+                    f"{key}: {meta.label}，范围 {self.format_value(meta.minimum)} ~ "
+                    f"{self.format_value(meta.maximum)}，步长 {self.format_value(meta.step)}"
+                )
+            lines.append("")
+        return lines
+
+    def validate_param_value(self, section: str, key: str, value: object) -> float:
+        meta = self.get_param_meta(section, key)
+        try:
+            number = float(value)
+        except Exception:
+            raise ValueError(f"{meta.label} 必须是数字，当前值：{value}")
+
+        if number < meta.minimum or number > meta.maximum:
+            raise ValueError(
+                f"{meta.label} 超出允许范围：{self.format_value(meta.minimum)} ~ "
+                f"{self.format_value(meta.maximum)}，当前值：{self.format_value(number)}"
+            )
+
+        return number
+
+    def validate_params(self, section: str, values: Dict[str, object]) -> None:
+        for key in self.DEFAULT_PARAMS.get(section, {}).keys():
+            if key in values:
+                self.validate_param_value(section, key, values[key])
+
+    def validate_current_params(self, raise_error: bool = True) -> List[str]:
+        messages: List[str] = []
+        all_ok = True
+
+        for section in ["Head", "Tail", "QC"]:
+            params = self.get_params(section)
+            for key in self.DEFAULT_PARAMS.get(section, {}).keys():
+                try:
+                    value = params.get(key, self.DEFAULT_PARAMS[section][key])
+                    self.validate_param_value(section, key, value)
+                    meta = self.get_param_meta(section, key)
+                    messages.append(f"√ {section}.{key} {meta.label}：{self.format_value(value)}")
+                except Exception as e:
+                    all_ok = False
+                    messages.append(f"× {section}.{key}：{e}")
+
+        if not all_ok and raise_error:
+            raise ValueError("管道参数范围校验失败：\n" + "\n".join(m for m in messages if m.startswith("×")))
+
+        return messages
+
+
     def set_params(self, section: str, values: Dict[str, object]) -> None:
+        self.validate_params(section, values)
+
         if not self.config.has_section(section):
             self.config.add_section(section)
 
@@ -254,6 +362,7 @@ class PipelineParameterManager:
 
         messages.extend(self.ensure_templates())
         self.ensure_default_params()
+        self.validate_current_params(raise_error=True)
 
         rendered: Dict[str, str] = {}
 
@@ -283,6 +392,7 @@ class PipelineParameterManager:
         """生成单条管道。保留这个方法，兼容后续可能单独生成的调用。"""
         messages = self.ensure_templates()
         self.ensure_default_params()
+        self.validate_current_params(raise_error=True)
 
         text, records = self.render_pipeline(section)
 
@@ -312,7 +422,7 @@ class PipelineParameterManager:
         params = self.get_params(section)
         records: List[ReplacementRecord] = []
 
-        for module_num, setting_name, param_key, measurement_name in self.PARAM_RULES.get(section, []):
+        for module_num, setting_name, param_key in self.PARAM_RULES.get(section, []):
             if param_key not in params:
                 continue
 
@@ -321,7 +431,6 @@ class PipelineParameterManager:
                 module_num=module_num,
                 setting_name=setting_name,
                 value=params[param_key],
-                measurement_name=measurement_name,
             )
             text = new_text
 
@@ -333,7 +442,6 @@ class PipelineParameterManager:
                     param_key=param_key,
                     old_value=old_value,
                     new_value=self.format_value(params[param_key]),
-                    measurement_name=measurement_name,
                 )
             )
 
@@ -397,9 +505,8 @@ class PipelineParameterManager:
                 lines.append("无参数写入记录。")
             else:
                 for r in section_records:
-                    measurement_text = f" | {r.measurement_name}" if r.measurement_name else ""
                     lines.append(
-                        f"module_num:{r.module_num}{measurement_text} | {r.setting_name} | "
+                        f"module_num:{r.module_num} | {r.setting_name} | "
                         f"{r.param_key} | {r.old_value} -> {r.new_value}"
                     )
             lines.append("")
@@ -414,32 +521,19 @@ class PipelineParameterManager:
         module_num: int,
         setting_name: str,
         value: object,
-        measurement_name: str = "",
     ) -> Tuple[str, str]:
         start, end = cls.find_module_block(text, module_num)
         if start < 0:
             raise ValueError(f"未找到 module_num:{module_num}")
 
         block = text[start:end]
-        if measurement_name:
-            new_block, count, old_value = cls.replace_setting_line_after_measurement(
-                block=block,
-                measurement_name=measurement_name,
-                setting_name=setting_name,
-                value=cls.format_value(value),
-            )
-        else:
-            new_block, count, old_value = cls.replace_setting_line(
-                block=block,
-                setting_name=setting_name,
-                value=cls.format_value(value),
-            )
+        new_block, count, old_value = cls.replace_setting_line(
+            block=block,
+            setting_name=setting_name,
+            value=cls.format_value(value),
+        )
 
         if count <= 0:
-            if measurement_name:
-                raise ValueError(
-                    f"module_num:{module_num} 中未找到测量值 {measurement_name} 的参数：{setting_name}"
-                )
             raise ValueError(f"module_num:{module_num} 中未找到参数：{setting_name}")
 
         return text[:start] + new_block + text[end:], old_value
@@ -471,63 +565,6 @@ class PipelineParameterManager:
 
         new_block, count = pattern.subn(repl, block, count=1)
         return new_block, count, old_value_holder["value"]
-
-    @classmethod
-    def replace_setting_line_after_measurement(
-        cls,
-        block: str,
-        measurement_name: str,
-        setting_name: str,
-        value: str,
-    ) -> Tuple[str, int, str]:
-        """替换指定测量值下面的参数行。
-
-        FilterObjects 模块中常见结构：
-            选择用于筛选的测量值:AreaShape_FormFactor
-            最小值:0.2
-            最大值:1.0
-            选择用于筛选的测量值:AreaShape_EquivalentDiameter
-            最小值:0.0
-            最大值:70
-
-        因此红色等效直径上限必须定位到 AreaShape_EquivalentDiameter 后面的“最大值”，
-        不能直接替换模块中的第一个“最大值”。
-        """
-        lines = block.splitlines(keepends=True)
-        measurement_index = -1
-        for index, line in enumerate(lines):
-            if measurement_name and measurement_name in line:
-                measurement_index = index
-                break
-
-        if measurement_index < 0:
-            return block, 0, ""
-
-        end_index = len(lines)
-        for index in range(measurement_index + 1, len(lines)):
-            if cls.is_measurement_selector_line(lines[index]):
-                end_index = index
-                break
-
-        pattern = re.compile(r"^(\s*%s\s*:)\s*(.*?)(\r?\n?)$" % re.escape(setting_name))
-        for index in range(measurement_index + 1, end_index):
-            match = pattern.match(lines[index])
-            if not match:
-                continue
-            old_value = str(match.group(2) or "").strip()
-            lines[index] = f"{match.group(1)}{value}{match.group(3)}"
-            return "".join(lines), 1, old_value
-
-        return block, 0, ""
-
-    @staticmethod
-    def is_measurement_selector_line(line: str) -> bool:
-        text = str(line or "").strip()
-        return (
-            text.startswith("选择用于筛选的测量值:")
-            or text.startswith("Measurement:")
-            or text.startswith("Select the measurement")
-        )
 
 
 
@@ -564,23 +601,20 @@ class PipelineParameterManager:
             text = template_path.read_text(encoding="utf-8", errors="replace")
             params = self.get_params(section)
 
-            for module_num, setting_name, param_key, measurement_name in self.PARAM_RULES.get(section, []):
+            for module_num, setting_name, param_key in self.PARAM_RULES.get(section, []):
                 try:
                     start, end = self.find_module_block(text, module_num)
                     if start < 0:
                         raise ValueError(f"未找到 module_num:{module_num}")
 
                     block = text[start:end]
-                    old_value = self.find_setting_value(block, setting_name, measurement_name)
+                    old_value = self.find_setting_value(block, setting_name)
                     if old_value is None:
-                        if measurement_name:
-                            raise ValueError(f"module_num:{module_num} 中未找到测量值 {measurement_name} 的参数：{setting_name}")
                         raise ValueError(f"module_num:{module_num} 中未找到参数：{setting_name}")
 
                     current_param = self.format_value(params.get(param_key, ""))
-                    measurement_text = f" | {measurement_name}" if measurement_name else ""
                     messages.append(
-                        f"√ module_num:{module_num}{measurement_text} | {setting_name} | "
+                        f"√ module_num:{module_num} | {setting_name} | "
                         f"当前模板值:{old_value} | 参数文件值:{current_param}"
                     )
                 except Exception as e:
@@ -590,46 +624,13 @@ class PipelineParameterManager:
         messages.insert(0, "√ 管道模板参数检查通过。" if all_ok else "× 管道模板参数检查未通过。")
         return messages
 
-    @classmethod
-    def find_setting_value(cls, block: str, setting_name: str, measurement_name: str = "") -> Optional[str]:
-        if measurement_name:
-            return cls.find_setting_value_after_measurement(block, measurement_name, setting_name)
-
+    @staticmethod
+    def find_setting_value(block: str, setting_name: str) -> Optional[str]:
         pattern = re.compile(r"^\s*%s\s*:\s*(.*?)\s*$" % re.escape(setting_name), re.M)
         match = pattern.search(block)
         if not match:
             return None
         return str(match.group(1) or "").strip()
-
-    @classmethod
-    def find_setting_value_after_measurement(
-        cls,
-        block: str,
-        measurement_name: str,
-        setting_name: str,
-    ) -> Optional[str]:
-        lines = block.splitlines(keepends=False)
-        measurement_index = -1
-        for index, line in enumerate(lines):
-            if measurement_name and measurement_name in line:
-                measurement_index = index
-                break
-
-        if measurement_index < 0:
-            return None
-
-        end_index = len(lines)
-        for index in range(measurement_index + 1, len(lines)):
-            if cls.is_measurement_selector_line(lines[index]):
-                end_index = index
-                break
-
-        pattern = re.compile(r"^\s*%s\s*:\s*(.*?)\s*$" % re.escape(setting_name))
-        for index in range(measurement_index + 1, end_index):
-            match = pattern.match(lines[index])
-            if match:
-                return str(match.group(1) or "").strip()
-        return None
 
 
 
@@ -666,7 +667,7 @@ class PipelineParameterManager:
             text = output_path.read_text(encoding="utf-8", errors="replace")
             params = self.get_params(section)
 
-            for module_num, setting_name, param_key, measurement_name in self.PARAM_RULES.get(section, []):
+            for module_num, setting_name, param_key in self.PARAM_RULES.get(section, []):
                 expected_value = self.format_value(params.get(param_key, ""))
                 try:
                     start, end = self.find_module_block(text, module_num)
@@ -674,22 +675,19 @@ class PipelineParameterManager:
                         raise ValueError(f"未找到 module_num:{module_num}")
 
                     block = text[start:end]
-                    actual_value = self.find_setting_value(block, setting_name, measurement_name)
+                    actual_value = self.find_setting_value(block, setting_name)
                     if actual_value is None:
-                        if measurement_name:
-                            raise ValueError(f"module_num:{module_num} 中未找到测量值 {measurement_name} 的参数：{setting_name}")
                         raise ValueError(f"module_num:{module_num} 中未找到参数：{setting_name}")
 
-                    measurement_text = f" | {measurement_name}" if measurement_name else ""
                     if self.values_equal(actual_value, expected_value):
                         messages.append(
-                            f"√ module_num:{module_num}{measurement_text} | {setting_name} | "
+                            f"√ module_num:{module_num} | {setting_name} | "
                             f"{param_key} | 已生效:{actual_value}"
                         )
                     else:
                         all_ok = False
                         messages.append(
-                            f"× module_num:{module_num}{measurement_text} | {setting_name} | "
+                            f"× module_num:{module_num} | {setting_name} | "
                             f"{param_key} | 管道当前值:{actual_value} | 参数文件值:{expected_value}"
                         )
                 except Exception as e:

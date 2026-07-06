@@ -388,7 +388,6 @@ class SettingsWindow(QWidget):
                 "red_cellprob_threshold": "红色头部识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
                 "red_min_size": "过滤过小的红色对象，减少噪声和碎点。值过大可能漏掉真实的小头部信号。",
                 "red_formfactor_min": "对应 FormFactor，用于保留较圆的红色头部对象。越接近 1 越偏向圆形；值过高可能漏掉形态略不规则的头部。",
-                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色对象。默认 70；值越小过滤越严格，过小可能漏掉真实头部。",
                 "green_expand_pixels": "用于扩大红色头部匹配范围，帮助判断绿色信号与红色头部是否共定位。值过小可能漏配，值过大可能误配相邻对象。",
                 "green_intensity_min": "用于过滤共定位对象中的弱绿色信号。值越高越严格，过高可能漏掉弱阳性。"
             },
@@ -403,7 +402,6 @@ class SettingsWindow(QWidget):
                 "red_cellprob_threshold": "红色头部识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
                 "red_min_size": "过滤过小的红色头部对象，减少噪声和碎点。值过大可能漏掉真实的小头部信号。",
                 "red_formfactor_min": "对应 FormFactor，用于保留较圆的红色头部对象。越接近 1 越偏向圆形；值过高可能漏掉形态略不规则的头部。",
-                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色头部对象。默认 70；值越小过滤越严格，过小可能漏掉真实头部。",
                 "red_search_radius": "以红色头部为中心向外搜索绿色尾部的范围。值过小可能找不到尾部，值过大可能匹配到邻近精子的尾部。",
                 "colocalized_child_count_min": "判断共定位时要求匹配到的最少绿色对象数量。通常为 1，值提高会更严格。"
             },
@@ -461,7 +459,6 @@ class SettingsWindow(QWidget):
             "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "red_min_size": self._make_double_spin(0, 100000, 1, 0),
             "red_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
-            "red_equivalent_diameter_max": self._make_double_spin(1, 1000, 1, 0),
             "green_expand_pixels": self._make_double_spin(0, 500, 1, 0),
             "green_intensity_min": self._make_double_spin(0, 100000000, 1, 2),
         }
@@ -471,7 +468,6 @@ class SettingsWindow(QWidget):
         self.add_pipeline_param_row(form, "红色概率阈值(±6)：", self.pipeline_param_widgets["Head"]["red_cellprob_threshold"], self.pipeline_param_tooltips["Head"]["red_cellprob_threshold"])
         self.add_pipeline_param_row(form, "红色最小尺寸：", self.pipeline_param_widgets["Head"]["red_min_size"], self.pipeline_param_tooltips["Head"]["red_min_size"])
         self.add_pipeline_param_row(form, "红色过滤圆度下限(0-1)：", self.pipeline_param_widgets["Head"]["red_formfactor_min"], self.pipeline_param_tooltips["Head"]["red_formfactor_min"])
-        self.add_pipeline_param_row(form, "红色等效直径上限：", self.pipeline_param_widgets["Head"]["red_equivalent_diameter_max"], self.pipeline_param_tooltips["Head"]["red_equivalent_diameter_max"])
         self.add_pipeline_param_row(form, "绿色匹配扩张像素：", self.pipeline_param_widgets["Head"]["green_expand_pixels"], self.pipeline_param_tooltips["Head"]["green_expand_pixels"])
         self.add_pipeline_param_row(form, "绿色过滤共定位强度下限：", self.pipeline_param_widgets["Head"]["green_intensity_min"], self.pipeline_param_tooltips["Head"]["green_intensity_min"])
 
@@ -492,7 +488,6 @@ class SettingsWindow(QWidget):
             "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "red_min_size": self._make_double_spin(0, 100000, 1, 0),
             "red_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
-            "red_equivalent_diameter_max": self._make_double_spin(1, 1000, 1, 0),
             "red_search_radius": self._make_double_spin(0, 1000, 1, 0),
             "colocalized_child_count_min": self._make_double_spin(0, 1000, 1, 0),
         }
@@ -507,7 +502,6 @@ class SettingsWindow(QWidget):
         self.add_pipeline_param_row(form, "红色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["red_cellprob_threshold"], self.pipeline_param_tooltips["Tail"]["red_cellprob_threshold"])
         self.add_pipeline_param_row(form, "红色最小尺寸：", self.pipeline_param_widgets["Tail"]["red_min_size"], self.pipeline_param_tooltips["Tail"]["red_min_size"])
         self.add_pipeline_param_row(form, "红色过滤圆度下限(0-1)：", self.pipeline_param_widgets["Tail"]["red_formfactor_min"], self.pipeline_param_tooltips["Tail"]["red_formfactor_min"])
-        self.add_pipeline_param_row(form, "红色等效直径上限：", self.pipeline_param_widgets["Tail"]["red_equivalent_diameter_max"], self.pipeline_param_tooltips["Tail"]["red_equivalent_diameter_max"])
         self.add_pipeline_param_row(form, "红色头部搜索半径：", self.pipeline_param_widgets["Tail"]["red_search_radius"], self.pipeline_param_tooltips["Tail"]["red_search_radius"])
         self.add_pipeline_param_row(form, "共定位最小绿色对象数：", self.pipeline_param_widgets["Tail"]["colocalized_child_count_min"], self.pipeline_param_tooltips["Tail"]["colocalized_child_count_min"])
 
