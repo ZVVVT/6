@@ -4,13 +4,12 @@ pipeline_parameter_manager.py
 
 管道参数管理器。
 
-设计原则：
-1. pipeline_params.ini 只保存算法/管道参数；
-2. pipelines/templates/*.cppipe 保存母版管道；
-3. pipelines/*.cppipe 是软件实际运行的管道；
-4. 用户在系统设置中修改参数后，点击“生成管道”，才会根据模板生成实际运行管道；
-5. 蛋白分析、批量分析、质控测试运行时仍直接读取 config.ini 中配置的 .cppipe，不做动态生成；
-6. 每次覆盖实际管道前，自动备份当前 pipelines/*.cppipe，避免误操作不可恢复。
+定位：
+- pipeline_params.ini 只保存算法/管道参数；
+- pipelines/templates/*.cppipe 保存母版管道；
+- pipelines/*.cppipe 是软件实际运行的管道；
+- 用户在系统设置中修改参数后，点击“生成管道”，才会根据模板生成实际运行管道；
+- 蛋白分析、批量分析、质控测试运行时仍直接读取 config.ini 中配置的 .cppipe，不做动态生成。
 """
 
 from __future__ import annotations
@@ -19,9 +18,8 @@ import configparser
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -30,16 +28,6 @@ class PipelineTarget:
     title: str
     template_name: str
     output_name: str
-
-
-@dataclass
-class ReplacementRecord:
-    section: str
-    module_num: int
-    setting_name: str
-    param_key: str
-    old_value: str
-    new_value: str
 
 
 class PipelineParameterManager:
@@ -101,8 +89,7 @@ class PipelineParameterManager:
         },
     }
 
-    # 每个参数精确定位：section -> [(module_num, setting_name, param_key), ...]
-    # 注意：同一个管道里可能有多个“最小值”，所以必须通过 module_num + 参数名精确定位。
+    # 每个参数精确定位：section, module_num, setting_name, param_key
     PARAM_RULES: Dict[str, List[Tuple[int, str, str]]] = {
         "Head": [
             (7, "预期物体直径", "red_diameter"),
@@ -140,7 +127,6 @@ class PipelineParameterManager:
         self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
         self.pipelines_dir = self.project_root / "pipelines"
         self.templates_dir = self.pipelines_dir / "templates"
-        self.backups_dir = self.pipelines_dir / "backups"
         self.param_file = Path(param_file) if param_file else self.project_root / self.PARAM_FILE_NAME
         self.config = configparser.ConfigParser()
         self.load()
@@ -190,12 +176,10 @@ class PipelineParameterManager:
     def set_params(self, section: str, values: Dict[str, object]) -> None:
         if not self.config.has_section(section):
             self.config.add_section(section)
-
         defaults = self.DEFAULT_PARAMS.get(section, {})
         for key in defaults.keys():
             if key in values:
                 self.config.set(section, key, self.format_value(values[key]))
-
         self.save()
 
     @staticmethod
@@ -228,7 +212,7 @@ class PipelineParameterManager:
                 continue
 
             if not output_path.exists():
-                messages.append(f"× 缺少 {target.title}，无法创建模板：{output_path}")
+                messages.append(f"× 缺少 {target.title}：{output_path}")
                 continue
 
             shutil.copy2(output_path, template_path)
@@ -237,189 +221,57 @@ class PipelineParameterManager:
         return messages
 
     def generate_all_pipelines(self) -> List[str]:
-        """根据当前参数生成所有实际运行管道。
-
-        写入前会先完整渲染并校验三条管道；只要其中任何一个参数定位失败，
-        就不会覆盖现有 pipelines/*.cppipe。
-        """
-        messages: List[str] = []
-        records: List[ReplacementRecord] = []
-
+        messages = []
         messages.extend(self.ensure_templates())
-        self.ensure_default_params()
-
-        rendered: Dict[str, str] = {}
-
-        # 先全部渲染，确保无错误后再覆盖，避免部分成功、部分失败。
         for section in ["Head", "Tail", "QC"]:
-            text, section_records = self.render_pipeline(section)
-            rendered[section] = text
-            records.extend(section_records)
-
-        backup_dir = self.backup_existing_pipelines()
-        if backup_dir:
-            messages.append(f"√ 已备份当前管道：{backup_dir}")
-
-        for section in ["Head", "Tail", "QC"]:
-            target = self.TARGETS[section]
-            output_path = self.pipelines_dir / target.output_name
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(rendered[section], encoding="utf-8")
-            messages.append(f"√ 已生成{target.title}：{output_path}")
-
-        report_path = self.write_generate_report(records, backup_dir)
-        messages.append(f"√ 已生成参数写入报告：{report_path}")
-
+            messages.append(self.generate_pipeline(section))
         return messages
 
     def generate_pipeline(self, section: str) -> str:
-        """生成单条管道。保留这个方法，兼容后续可能单独生成的调用。"""
-        messages = self.ensure_templates()
-        self.ensure_default_params()
-
-        text, records = self.render_pipeline(section)
-
-        target = self.TARGETS[section]
-        output_path = self.pipelines_dir / target.output_name
-
-        backup_dir = self.backup_existing_pipelines([section])
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(text, encoding="utf-8")
-
-        self.write_generate_report(records, backup_dir)
-
-        prefix = "；".join(messages) + "；" if messages else ""
-        return f"{prefix}√ 已生成{target.title}：{output_path}"
-
-    def render_pipeline(self, section: str) -> Tuple[str, List[ReplacementRecord]]:
         if section not in self.TARGETS:
             raise ValueError(f"未知管道类型：{section}")
 
+        self.ensure_default_params()
+        self.ensure_templates()
+
         target = self.TARGETS[section]
         template_path = self.templates_dir / target.template_name
+        output_path = self.pipelines_dir / target.output_name
 
         if not template_path.exists():
             raise FileNotFoundError(f"缺少模板管道：{template_path}")
 
         text = template_path.read_text(encoding="utf-8", errors="replace")
         params = self.get_params(section)
-        records: List[ReplacementRecord] = []
 
         for module_num, setting_name, param_key in self.PARAM_RULES.get(section, []):
             if param_key not in params:
                 continue
-
-            new_text, old_value = self.replace_module_setting(
+            text = self.replace_module_setting(
                 text=text,
                 module_num=module_num,
                 setting_name=setting_name,
                 value=params[param_key],
             )
-            text = new_text
 
-            records.append(
-                ReplacementRecord(
-                    section=section,
-                    module_num=module_num,
-                    setting_name=setting_name,
-                    param_key=param_key,
-                    old_value=old_value,
-                    new_value=self.format_value(params[param_key]),
-                )
-            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text, encoding="utf-8")
 
-        return text, records
-
-    def backup_existing_pipelines(self, sections: Optional[List[str]] = None) -> Optional[Path]:
-        sections = sections or ["Head", "Tail", "QC"]
-
-        existing = []
-        for section in sections:
-            target = self.TARGETS.get(section)
-            if not target:
-                continue
-            output_path = self.pipelines_dir / target.output_name
-            if output_path.exists():
-                existing.append(output_path)
-
-        if not existing:
-            return None
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = self.backups_dir / timestamp
-        backup_dir.mkdir(parents=True, exist_ok=True)
-
-        for path in existing:
-            shutil.copy2(path, backup_dir / path.name)
-
-        return backup_dir
-
-    def write_generate_report(
-        self,
-        records: List[ReplacementRecord],
-        backup_dir: Optional[Path],
-    ) -> Path:
-        report_path = self.pipelines_dir / "last_generate_report.txt"
-
-        lines: List[str] = []
-        lines.append("管道参数生成报告")
-        lines.append("=" * 72)
-        lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"项目目录：{self.project_root}")
-        lines.append(f"参数文件：{self.param_file}")
-        lines.append(f"模板目录：{self.templates_dir}")
-        if backup_dir:
-            lines.append(f"备份目录：{backup_dir}")
-        else:
-            lines.append("备份目录：无旧管道可备份")
-        lines.append("")
-
-        section_titles = {
-            "Head": "头部蛋白管道",
-            "Tail": "尾部蛋白管道",
-            "QC": "质控微球管道",
-        }
-
-        for section in ["Head", "Tail", "QC"]:
-            lines.append(section_titles.get(section, section))
-            lines.append("-" * 72)
-            section_records = [r for r in records if r.section == section]
-            if not section_records:
-                lines.append("无参数写入记录。")
-            else:
-                for r in section_records:
-                    lines.append(
-                        f"module_num:{r.module_num} | {r.setting_name} | "
-                        f"{r.param_key} | {r.old_value} -> {r.new_value}"
-                    )
-            lines.append("")
-
-        report_path.write_text("\n".join(lines), encoding="utf-8")
-        return report_path
+        return f"√ 已生成{target.title}：{output_path}"
 
     @classmethod
-    def replace_module_setting(
-        cls,
-        text: str,
-        module_num: int,
-        setting_name: str,
-        value: object,
-    ) -> Tuple[str, str]:
+    def replace_module_setting(cls, text: str, module_num: int, setting_name: str, value: object) -> str:
         start, end = cls.find_module_block(text, module_num)
         if start < 0:
             raise ValueError(f"未找到 module_num:{module_num}")
 
         block = text[start:end]
-        new_block, count, old_value = cls.replace_setting_line(
-            block=block,
-            setting_name=setting_name,
-            value=cls.format_value(value),
-        )
+        new_block, count = cls.replace_setting_line(block, setting_name, cls.format_value(value))
 
         if count <= 0:
             raise ValueError(f"module_num:{module_num} 中未找到参数：{setting_name}")
 
-        return text[:start] + new_block + text[end:], old_value
+        return text[:start] + new_block + text[end:]
 
     @staticmethod
     def find_module_block(text: str, module_num: int) -> Tuple[int, int]:
@@ -435,19 +287,12 @@ class PipelineParameterManager:
         return start, end
 
     @staticmethod
-    def replace_setting_line(block: str, setting_name: str, value: str) -> Tuple[str, int, str]:
+    def replace_setting_line(block: str, setting_name: str, value: str) -> Tuple[str, int]:
         # .cppipe 参数行通常是：四个空格 + 参数名:值
         # 这里保留原缩进，只替换冒号后的内容。
-        pattern = re.compile(r"^(\s*%s\s*:)\s*(.*?)\s*$" % re.escape(setting_name), re.M)
-
-        old_value_holder = {"value": ""}
-
-        def repl(match):
-            old_value_holder["value"] = str(match.group(2) or "").strip()
-            return f"{match.group(1)}{value}"
-
-        new_block, count = pattern.subn(repl, block, count=1)
-        return new_block, count, old_value_holder["value"]
+        pattern = re.compile(r"^(\s*%s\s*:)\s*.*$" % re.escape(setting_name), re.M)
+        new_block, count = pattern.subn(lambda m: f"{m.group(1)}{value}", block, count=1)
+        return new_block, count
 
     # ------------------------------------------------------------------
     # 便捷路径
@@ -461,6 +306,3 @@ class PipelineParameterManager:
 
     def get_pipelines_dir(self) -> Path:
         return self.pipelines_dir
-
-    def get_backups_dir(self) -> Path:
-        return self.backups_dir
