@@ -265,7 +265,7 @@ class SettingsWindow(QWidget):
         """管道参数设置页。
 
         参数保存到 pipeline_params.ini。
-        用户低频修改参数后，点击“保存并应用参数”，同时保存参数并生成实际运行管道。
+        用户低频修改参数后，点击“生成管道”，再覆盖 pipelines 目录下实际运行的 .cppipe。
         蛋白分析、批量分析和质控测试运行时仍直接读取生成后的 .cppipe。
         """
         tab = QWidget()
@@ -290,15 +290,17 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.pipeline_param_tabs, 1)
 
         button_layout = QHBoxLayout()
-        self.btn_apply_pipeline_params = QPushButton("保存并应用参数")
+        self.btn_save_pipeline_params = QPushButton("保存参数")
+        self.btn_generate_pipelines = QPushButton("生成管道")
         self.btn_check_pipeline_effective = QPushButton("检查生效状态")
         self.btn_validate_pipeline_templates = QPushButton("检查模板")
         self.btn_restore_pipeline_backup = QPushButton("恢复最近备份")
-        self.btn_reset_pipeline_params = QPushButton("恢复默认并应用")
+        self.btn_reset_pipeline_params = QPushButton("恢复默认参数")
         self.btn_open_pipeline_dir = QPushButton("打开管道目录")
         self.btn_open_pipeline_param_file = QPushButton("打开参数文件")
 
-        button_layout.addWidget(self.btn_apply_pipeline_params)
+        button_layout.addWidget(self.btn_save_pipeline_params)
+        button_layout.addWidget(self.btn_generate_pipelines)
         button_layout.addWidget(self.btn_check_pipeline_effective)
         button_layout.addWidget(self.btn_validate_pipeline_templates)
         button_layout.addWidget(self.btn_restore_pipeline_backup)
@@ -308,7 +310,8 @@ class SettingsWindow(QWidget):
         button_layout.addStretch()
         layout.addLayout(button_layout)
 
-        self.btn_apply_pipeline_params.clicked.connect(self.save_and_apply_pipeline_params)
+        self.btn_save_pipeline_params.clicked.connect(self.save_pipeline_params)
+        self.btn_generate_pipelines.clicked.connect(self.generate_pipeline_files)
         self.btn_check_pipeline_effective.clicked.connect(self.check_pipeline_effective_status)
         self.btn_validate_pipeline_templates.clicked.connect(self.validate_pipeline_templates)
         self.btn_restore_pipeline_backup.clicked.connect(self.restore_latest_pipeline_backup)
@@ -449,59 +452,21 @@ class SettingsWindow(QWidget):
                 data[section][key] = widget.value()
         return data
 
-    def save_pipeline_params_to_file(self):
-        """把界面上的管道参数保存到 pipeline_params.ini，不弹窗。"""
-        data = self.collect_pipeline_params_from_ui()
-        for section, values in data.items():
-            self.pipeline_param_manager.set_params(section, values)
-        return self.pipeline_param_manager.get_param_file()
-
-    def save_and_apply_pipeline_params(self):
-        reply = QMessageBox.question(
-            self,
-            "确认保存并应用参数",
-            "将保存当前管道参数，并生成/覆盖实际运行管道：\n\n"
-            "pipeline_params.ini\n"
-            "pipelines\\pipeline_head.cppipe\n"
-            "pipelines\\pipeline_tail.cppipe\n"
-            "pipelines\\pipeline_qc.cppipe\n\n"
-            "生成前会自动备份当前管道到 pipelines\\backups。\n\n"
-            "保存并应用后，后续蛋白分析、批量分析和质控测试会直接使用新管道。\n\n"
-            "是否继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
+    def save_pipeline_params(self):
         try:
-            param_file = self.save_pipeline_params_to_file()
-            self.append_log(f"管道参数已保存：{param_file}")
-
-            messages = self.pipeline_param_manager.generate_all_pipelines()
-            for message in messages:
-                self.append_log(message)
-
-            QMessageBox.information(
-                self,
-                "应用完成",
-                "管道参数已保存并应用。\n\n"
-                "后续蛋白分析、批量分析和质控测试会直接读取 pipelines 目录下新生成的 .cppipe。",
-            )
+            data = self.collect_pipeline_params_from_ui()
+            for section, values in data.items():
+                self.pipeline_param_manager.set_params(section, values)
+            self.append_log(f"管道参数已保存：{self.pipeline_param_manager.get_param_file()}")
+            QMessageBox.information(self, "成功", "管道参数已保存到 pipeline_params.ini。")
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存并应用管道参数失败：\n{e}")
+            QMessageBox.critical(self, "错误", f"保存管道参数失败：\n{e}")
 
     def reset_pipeline_params(self):
         reply = QMessageBox.question(
             self,
-            "确认恢复默认并应用",
-            "确定要恢复默认管道参数，并立即重新生成实际运行管道吗？\n\n"
-            "该操作会覆盖：\n"
-            "pipeline_params.ini\n"
-            "pipelines\\pipeline_head.cppipe\n"
-            "pipelines\\pipeline_tail.cppipe\n"
-            "pipelines\\pipeline_qc.cppipe\n\n"
-            "生成前会自动备份当前管道到 pipelines\\backups。",
+            "确认恢复默认",
+            "确定要恢复默认管道参数吗？\n\n这只会重置 pipeline_params.ini，不会立即覆盖现有 .cppipe。",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -512,6 +477,30 @@ class SettingsWindow(QWidget):
             self.pipeline_param_manager.reset_defaults()
             self.load_pipeline_params()
             self.append_log("管道参数已恢复默认。")
+            QMessageBox.information(self, "成功", "管道参数已恢复默认。")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"恢复默认参数失败：\n{e}")
+
+    def generate_pipeline_files(self):
+        reply = QMessageBox.question(
+            self,
+            "确认生成管道",
+            "将根据当前参数生成并覆盖：\n"
+            "pipelines\\pipeline_head.cppipe\n"
+            "pipelines\\pipeline_tail.cppipe\n"
+            "pipelines\\pipeline_qc.cppipe\n\n"
+            "模板位于 pipelines\\templates。首次生成时会自动从当前管道创建模板。\n\n"
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            data = self.collect_pipeline_params_from_ui()
+            for section, values in data.items():
+                self.pipeline_param_manager.set_params(section, values)
 
             messages = self.pipeline_param_manager.generate_all_pipelines()
             for message in messages:
@@ -519,12 +508,15 @@ class SettingsWindow(QWidget):
 
             QMessageBox.information(
                 self,
-                "恢复完成",
-                "默认管道参数已恢复并应用。\n\n"
-                "后续分析会使用默认参数重新生成的 .cppipe。",
+                "生成完成",
+                "管道已根据当前参数生成。\n\n"
+                "后续蛋白分析、批量分析和质控测试会直接读取 pipelines 目录下的 .cppipe。",
             )
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"恢复默认并应用失败：\n{e}")
+            QMessageBox.critical(self, "错误", f"生成管道失败：\n{e}")
+
+
+
 
     def check_pipeline_effective_status(self):
         try:
@@ -543,7 +535,7 @@ class SettingsWindow(QWidget):
                     self,
                     "检查完成",
                     "当前参数文件与实际运行管道不一致。\n\n"
-                    "如果你希望当前参数真正生效，请点击“保存并应用参数”。"
+                    "如果你希望当前参数真正生效，请点击“生成管道”。"
                 )
             else:
                 QMessageBox.information(
