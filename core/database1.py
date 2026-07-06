@@ -287,55 +287,21 @@ class Database:
 
     def get_cases(self, keyword: str = ""):
         keyword = (keyword or "").strip()
-
-        base_select = """
-            SELECT
-                cases.id,
-                cases.case_no,
-                cases.patient_name,
-                cases.age,
-                cases.sex,
-                cases.phone,
-                cases.sample_no,
-                cases.test_date,
-                cases.created_at,
-                cases.updated_at,
-                cases.report_path,
-                COALESCE(pa_stats.analysis_count, 0) AS analysis_count,
-                COALESCE(pa_stats.failed_count, 0) AS failed_count
-            FROM cases
-            LEFT JOIN (
-                SELECT
-                    case_id,
-                    COUNT(DISTINCT protein_name) AS analysis_count,
-                    SUM(
-                        CASE
-                            WHEN status LIKE '%失败%'
-                              OR status LIKE '%异常%'
-                              OR status LIKE '%错误%'
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS failed_count
-                FROM protein_analysis
-                GROUP BY case_id
-            ) AS pa_stats
-            ON pa_stats.case_id = cases.id
-        """
-
         with self.connect() as conn:
             cursor = conn.cursor()
             if keyword:
                 like_keyword = f"%{keyword}%"
                 cursor.execute(
-                    base_select
-                    + """
-                    WHERE cases.case_no LIKE ?
-                       OR cases.patient_name LIKE ?
-                       OR cases.sample_no LIKE ?
-                       OR cases.test_date LIKE ?
-                       OR cases.phone LIKE ?
-                    ORDER BY cases.id DESC
+                    """
+                    SELECT id, case_no, patient_name, age, sex, phone, sample_no,
+                           test_date, created_at, updated_at, report_path
+                    FROM cases
+                    WHERE case_no LIKE ?
+                       OR patient_name LIKE ?
+                       OR sample_no LIKE ?
+                       OR test_date LIKE ?
+                       OR phone LIKE ?
+                    ORDER BY id DESC
                     """,
                     (
                         like_keyword,
@@ -347,9 +313,11 @@ class Database:
                 )
             else:
                 cursor.execute(
-                    base_select
-                    + """
-                    ORDER BY cases.id DESC
+                    """
+                    SELECT id, case_no, patient_name, age, sex, phone, sample_no,
+                           test_date, created_at, updated_at, report_path
+                    FROM cases
+                    ORDER BY id DESC
                     """
                 )
             return [dict(row) for row in cursor.fetchall()]

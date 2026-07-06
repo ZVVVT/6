@@ -28,7 +28,6 @@ except Exception:  # pragma: no cover - QtSvg 缺失时回退 QIcon 直接加载
     QSvgRenderer = None
 
 from app.case_edit_dialog import CaseEditDialog
-from core.config_manager import ConfigManager
 from app.theme import DEFAULT_THEME_KEY, get_theme
 from app.ui_components import (
     CardFrame,
@@ -245,7 +244,7 @@ class CaseManagerWindow(QWidget):
 
     TABLE_HEADERS = [
         "ID",
-        "检测状态",
+        "状态",
         "病历号",
         "姓名",
         "年龄",
@@ -253,6 +252,7 @@ class CaseManagerWindow(QWidget):
         "联系方式",
         "样本号",
         "检测日期",
+        "报告状态",
         "创建时间",
     ]
 
@@ -265,9 +265,6 @@ class CaseManagerWindow(QWidget):
         self._table_row_height = 38
         self._min_page_size = 3
         self._resize_refresh_timer: Optional[QTimer] = None
-        self.config = ConfigManager(str(self._project_root() / "config.ini"))
-        self.config.ensure_default_config()
-        self.configured_protein_count = self._load_configured_protein_count()
         self.init_ui()
         self.load_cases()
 
@@ -550,7 +547,7 @@ class CaseManagerWindow(QWidget):
         self.card_total = CaseStatCard("病例总数", "0", "例", "stat_cases.svg", "primary", "＋")
         self.card_today = CaseStatCard("今日新增", "0", "例", "stat_today.svg", "success", "人")
         self.card_report = CaseStatCard("已生成报告", "0", "例", "stat_report.svg", "purple", "文")
-        self.card_waiting = CaseStatCard("待处理", "0", "例", "stat_pending.svg", "warning", "待")
+        self.card_waiting = CaseStatCard("待分析", "0", "例", "stat_pending.svg", "warning", "待")
 
         stats_layout.addWidget(self.card_total, 1)
         stats_layout.addWidget(self.card_today, 1)
@@ -641,7 +638,7 @@ class CaseManagerWindow(QWidget):
             header.setSectionResizeMode(column, QHeaderView.Interactive)
 
         self._column_min_widths = {
-            1: 128,  # 检测状态：保证“部分完成 2/5”等胶囊标签完整
+            1: 100,  # 状态：保证“待分析/已完成”胶囊标签完整
             2: 190,  # 病历号
             3: 60,   # 姓名
             4: 48,   # 年龄
@@ -649,10 +646,11 @@ class CaseManagerWindow(QWidget):
             6: 108,  # 联系方式
             7: 122,  # 样本号
             8: 92,   # 检测日期
-            9: 150,  # 创建时间
+            9: 92,   # 报告状态
+            10: 150, # 创建时间
         }
         self._column_stretch_weights = {
-            1: 1.0,
+            1: 0.6,
             2: 4.0,
             3: 0.7,
             4: 0.35,
@@ -660,7 +658,8 @@ class CaseManagerWindow(QWidget):
             6: 1.6,
             7: 1.8,
             8: 1.0,
-            9: 2.2,
+            9: 1.0,
+            10: 2.2,
         }
         QTimer.singleShot(0, self._apply_responsive_table_columns)
 
@@ -848,11 +847,14 @@ class CaseManagerWindow(QWidget):
 
         for row_index, case in enumerate(cases):
             case_id = case.get("id", "")
-            status_text, status_type, status_tip = self._case_detection_status(case)
+            report_path = self._safe_text(case.get("report_path", ""))
+            status_text = "已完成" if report_path else "待分析"
+            status_type = "success" if report_path else "warning"
+            report_status = "查看报告" if report_path else "待生成报告"
 
             values = [
                 case_id,
-                "",  # 检测状态列使用 cell widget
+                "",  # 状态列使用 cell widget
                 case.get("case_no", ""),
                 case.get("patient_name", ""),
                 case.get("age", ""),
@@ -860,6 +862,7 @@ class CaseManagerWindow(QWidget):
                 case.get("phone", ""),
                 case.get("sample_no", ""),
                 case.get("test_date", ""),
+                report_status,
                 case.get("created_at", ""),
             ]
 
@@ -868,86 +871,14 @@ class CaseManagerWindow(QWidget):
                 item.setTextAlignment(Qt.AlignCenter)
                 if col_index == 0:
                     item.setData(Qt.UserRole, case_id)
+                if col_index == 9 and report_path:
+                    item.setForeground(Qt.blue)
+                    item.setToolTip(report_path)
                 self.table.setItem(row_index, col_index, item)
 
             set_badge_to_table(self.table, row_index, 1, status_text, status_type)
 
-            status_cell = self.table.cellWidget(row_index, 1)
-            if status_cell is not None and status_tip:
-                status_cell.setToolTip(status_tip)
-
         self.table.clearSelection()
-
-
-    def _load_configured_protein_count(self) -> int:
-        """读取当前系统配置的蛋白数量。
-
-        病例管理页只显示综合检测状态，不统计质控微球。
-        如果配置读取失败，回退为 5 个蛋白，避免首页状态为空。
-        """
-        try:
-            self.config.load()
-            items = self.config.get_protein_items()
-            count = len(items)
-            return count if count > 0 else 5
-        except Exception:
-            return 5
-
-    def _case_detection_status(self, case: Dict) -> Tuple[str, str, str]:
-        """计算病历首页综合检测状态。
-
-        状态只做展示，不承担打开报告动作：
-        - 待分析：没有任何蛋白分析结果；
-        - 部分完成 x/n：已有部分蛋白结果，但未完成全部配置蛋白；
-        - 待生成报告：全部配置蛋白已完成，但尚未生成 PDF；
-        - 已生成报告：已有报告路径；
-        - 分析异常：数据库中存在失败/异常状态记录。
-        """
-        report_path = self._safe_text(case.get("report_path", ""))
-        analysis_count = self._safe_int(case.get("analysis_count", 0))
-        failed_count = self._safe_int(case.get("failed_count", 0))
-        total_count = max(1, int(getattr(self, "configured_protein_count", 5) or 5))
-
-        if failed_count > 0:
-            return (
-                "分析异常",
-                "danger",
-                f"该病例存在 {failed_count} 条失败或异常分析记录，请进入蛋白分析页检查。",
-            )
-
-        if report_path:
-            return (
-                "已生成报告",
-                "success",
-                f"报告已生成：{report_path}",
-            )
-
-        if analysis_count <= 0:
-            return (
-                "待分析",
-                "warning",
-                "该病例尚无蛋白分析结果。",
-            )
-
-        if analysis_count < total_count:
-            return (
-                f"部分完成 {analysis_count}/{total_count}",
-                "primary",
-                f"已完成 {analysis_count} / {total_count} 个蛋白，尚未完成全部检测。",
-            )
-
-        return (
-            "待生成报告",
-            "purple",
-            f"已完成 {min(analysis_count, total_count)} / {total_count} 个蛋白，尚未生成报告。",
-        )
-
-    @staticmethod
-    def _safe_int(value, default: int = 0) -> int:
-        try:
-            return int(value)
-        except Exception:
-            return default
 
     def _update_summary_cards(self, cases: List[Dict]) -> None:
         total_count = len(cases)
@@ -961,7 +892,6 @@ class CaseManagerWindow(QWidget):
             if report_path:
                 report_count += 1
             else:
-                # 待处理包含：待分析、部分完成、待生成报告、分析异常。
                 waiting_count += 1
 
             created_at = self._safe_text(case.get("created_at", ""))
