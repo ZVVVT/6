@@ -114,7 +114,7 @@ RunCellpose:[module_num:7|svn_version:'Unknown'|variable_revision_number:6|show_
     在运行之前重新缩放图像:Yes
     运行环境:Python
     选择 Cellpose docker 镜像:cellprofiler/runcellpose_with_pretrained:2.3.2
-    预期物体直径:66
+    预期物体直径:65
     检测方式:cyto2
     Name the output object:R_objects_Run
     启用 GPU:Yes

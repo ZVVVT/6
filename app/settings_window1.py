@@ -32,35 +32,6 @@ from core.qc_beads_service import QCBeadsService, QCBeadsWorker
 from core.pipeline_parameter_manager import PipelineParameterManager
 
 
-class ManualDoubleSpinBox(QDoubleSpinBox):
-    """只能手动输入的数值框。
-
-    保留 QDoubleSpinBox 的范围、小数位和数值格式校验，
-    但禁用右侧上下按钮、鼠标滚轮、键盘上下键/PageUp/PageDown 等步进修改，
-    避免参数被误触改变。
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setButtonSymbols(QDoubleSpinBox.NoButtons)
-        self.setKeyboardTracking(False)
-        self.setAccelerated(False)
-        self.setCorrectionMode(QDoubleSpinBox.CorrectToNearestValue)
-        self.setToolTip("请直接输入数值；鼠标滚轮和上下步进已禁用。")
-
-    def wheelEvent(self, event):
-        event.ignore()
-
-    def stepBy(self, steps):
-        return
-
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown):
-            event.ignore()
-            return
-        super().keyPressEvent(event)
-
-
 class SettingsWindow(QWidget):
     config_saved = Signal()
 
@@ -446,11 +417,12 @@ class SettingsWindow(QWidget):
 
     @staticmethod
     def _make_double_spin(min_value, max_value, step, decimals):
-        spin = ManualDoubleSpinBox()
+        spin = QDoubleSpinBox()
         spin.setRange(float(min_value), float(max_value))
         spin.setSingleStep(float(step))
         spin.setDecimals(int(decimals))
         spin.setMinimumHeight(30)
+        spin.setButtonSymbols(QDoubleSpinBox.UpDownArrows)
         return spin
 
     def load_pipeline_params(self):
