@@ -111,7 +111,7 @@ ColorToGray(颜色转灰度):[module_num:6|svn_version:'Unknown'|variable_revisi
 
 RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the input image:G_Gray
-    Expected object diameter:50
+    Expected object diameter:10
     Model:bact_fluor_omni
     Name the output object:G_objects_Run
     Use GPU:Yes
@@ -123,7 +123,7 @@ RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_
     Location of the pre-trained model file:Elsewhere...|
     Pre-trained model file name:cyto_0
     Flow threshold:0.4
-    Distance field threshold:0
+    Distance field threshold:-2
     GPU memory share for each worker:0.8
     Stitch Threshold:0.0
     Use 3D:No

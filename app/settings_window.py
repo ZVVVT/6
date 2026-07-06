@@ -274,7 +274,7 @@ class SettingsWindow(QWidget):
 
         hint = QLabel(
             "说明：管道参数保存在 pipeline_params.ini 中。"
-            "修改参数后请点击“生成管道”，软件会根据 pipelines\\templates 中的母版生成实际运行的 pipelines\\pipeline_*.cppipe。"
+            "修改参数后请点击“保存并应用参数”，软件会自动保存参数、备份旧管道，并根据 pipelines\\templates 中的母版生成实际运行的 pipelines\\pipeline_*.cppipe。"
             "运行分析时不会动态改管道，只会直接读取已生成的 .cppipe。"
         )
         hint.setWordWrap(True)
@@ -324,21 +324,21 @@ class SettingsWindow(QWidget):
 
         self.pipeline_param_widgets["Head"] = {
             "red_diameter": self._make_double_spin(1, 500, 1, 0),
-            "red_flow_threshold": self._make_double_spin(-10, 10, 0.1, 2),
-            "red_cellprob_threshold": self._make_double_spin(-10, 10, 0.1, 2),
+            "red_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
+            "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "red_min_size": self._make_double_spin(0, 100000, 1, 0),
             "red_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
             "green_expand_pixels": self._make_double_spin(0, 500, 1, 0),
             "green_intensity_min": self._make_double_spin(0, 100000000, 1, 2),
         }
 
-        form.addRow("红色识别直径：", self.pipeline_param_widgets["Head"]["red_diameter"])
-        form.addRow("红色流阈值：", self.pipeline_param_widgets["Head"]["red_flow_threshold"])
-        form.addRow("红色细胞概率阈值：", self.pipeline_param_widgets["Head"]["red_cellprob_threshold"])
+        form.addRow("红色预期直径：", self.pipeline_param_widgets["Head"]["red_diameter"])
+        form.addRow("红色流阈值(0.4)：", self.pipeline_param_widgets["Head"]["red_flow_threshold"])
+        form.addRow("红色概率阈值(±6)：", self.pipeline_param_widgets["Head"]["red_cellprob_threshold"])
         form.addRow("红色最小尺寸：", self.pipeline_param_widgets["Head"]["red_min_size"])
-        form.addRow("红色圆度下限：", self.pipeline_param_widgets["Head"]["red_formfactor_min"])
+        form.addRow("红色过滤圆度下限(0-1)：", self.pipeline_param_widgets["Head"]["red_formfactor_min"])
         form.addRow("绿色匹配扩张像素：", self.pipeline_param_widgets["Head"]["green_expand_pixels"])
-        form.addRow("共定位绿色强度阈值：", self.pipeline_param_widgets["Head"]["green_intensity_min"])
+        form.addRow("绿色过滤共定位强度下限：", self.pipeline_param_widgets["Head"]["green_intensity_min"])
 
         return self._wrap_pipeline_param_group(group)
 
@@ -348,29 +348,29 @@ class SettingsWindow(QWidget):
 
         self.pipeline_param_widgets["Tail"] = {
             "green_diameter": self._make_double_spin(1, 500, 1, 0),
-            "green_flow_threshold": self._make_double_spin(-10, 10, 0.1, 2),
-            "green_distance_threshold": self._make_double_spin(-10, 10, 0.1, 2),
+            "green_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
+            "green_distance_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "green_min_size": self._make_double_spin(0, 100000, 1, 0),
             "green_eccentricity_min": self._make_double_spin(0, 1, 0.01, 2),
             "red_diameter": self._make_double_spin(1, 500, 1, 0),
-            "red_flow_threshold": self._make_double_spin(-10, 10, 0.1, 2),
-            "red_cellprob_threshold": self._make_double_spin(-10, 10, 0.1, 2),
+            "red_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
+            "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "red_min_size": self._make_double_spin(0, 100000, 1, 0),
             "red_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
             "red_search_radius": self._make_double_spin(0, 1000, 1, 0),
             "colocalized_child_count_min": self._make_double_spin(0, 1000, 1, 0),
         }
 
-        form.addRow("绿色尾部识别直径：", self.pipeline_param_widgets["Tail"]["green_diameter"])
-        form.addRow("绿色尾部流阈值：", self.pipeline_param_widgets["Tail"]["green_flow_threshold"])
-        form.addRow("绿色尾部距离场阈值：", self.pipeline_param_widgets["Tail"]["green_distance_threshold"])
-        form.addRow("绿色尾部最小尺寸：", self.pipeline_param_widgets["Tail"]["green_min_size"])
-        form.addRow("绿色尾部细长度下限：", self.pipeline_param_widgets["Tail"]["green_eccentricity_min"])
-        form.addRow("红色头部识别直径：", self.pipeline_param_widgets["Tail"]["red_diameter"])
-        form.addRow("红色头部流阈值：", self.pipeline_param_widgets["Tail"]["red_flow_threshold"])
-        form.addRow("红色头部细胞概率阈值：", self.pipeline_param_widgets["Tail"]["red_cellprob_threshold"])
-        form.addRow("红色头部最小尺寸：", self.pipeline_param_widgets["Tail"]["red_min_size"])
-        form.addRow("红色头部圆度下限：", self.pipeline_param_widgets["Tail"]["red_formfactor_min"])
+        form.addRow("绿色预期直径：", self.pipeline_param_widgets["Tail"]["green_diameter"])
+        form.addRow("绿色流阈值(0.4)：", self.pipeline_param_widgets["Tail"]["green_flow_threshold"])
+        form.addRow("绿色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["green_distance_threshold"])
+        form.addRow("绿色最小尺寸：", self.pipeline_param_widgets["Tail"]["green_min_size"])
+        form.addRow("绿色过滤细长度下限(0-1)：", self.pipeline_param_widgets["Tail"]["green_eccentricity_min"])
+        form.addRow("红色预期直径：", self.pipeline_param_widgets["Tail"]["red_diameter"])
+        form.addRow("红色流阈值(0.4)：", self.pipeline_param_widgets["Tail"]["red_flow_threshold"])
+        form.addRow("红色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["red_cellprob_threshold"])
+        form.addRow("红色最小尺寸：", self.pipeline_param_widgets["Tail"]["red_min_size"])
+        form.addRow("红色过滤圆度下限(0-1)：", self.pipeline_param_widgets["Tail"]["red_formfactor_min"])
         form.addRow("红色头部搜索半径：", self.pipeline_param_widgets["Tail"]["red_search_radius"])
         form.addRow("共定位最小绿色对象数：", self.pipeline_param_widgets["Tail"]["colocalized_child_count_min"])
 
@@ -382,17 +382,17 @@ class SettingsWindow(QWidget):
 
         self.pipeline_param_widgets["QC"] = {
             "bead_diameter": self._make_double_spin(1, 500, 1, 0),
-            "bead_flow_threshold": self._make_double_spin(-10, 10, 0.1, 2),
-            "bead_cellprob_threshold": self._make_double_spin(-10, 10, 0.1, 2),
+            "bead_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
+            "bead_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "bead_min_size": self._make_double_spin(0, 100000, 1, 0),
             "bead_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
         }
 
-        form.addRow("微球识别直径：", self.pipeline_param_widgets["QC"]["bead_diameter"])
-        form.addRow("微球流阈值：", self.pipeline_param_widgets["QC"]["bead_flow_threshold"])
-        form.addRow("微球细胞概率阈值：", self.pipeline_param_widgets["QC"]["bead_cellprob_threshold"])
+        form.addRow("微球预期直径：", self.pipeline_param_widgets["QC"]["bead_diameter"])
+        form.addRow("微球流阈值(0.4)：", self.pipeline_param_widgets["QC"]["bead_flow_threshold"])
+        form.addRow("微球概率阈值(±6)：", self.pipeline_param_widgets["QC"]["bead_cellprob_threshold"])
         form.addRow("微球最小尺寸：", self.pipeline_param_widgets["QC"]["bead_min_size"])
-        form.addRow("微球圆度下限：", self.pipeline_param_widgets["QC"]["bead_formfactor_min"])
+        form.addRow("微球过滤圆度下限(0-1)：", self.pipeline_param_widgets["QC"]["bead_formfactor_min"])
 
         return self._wrap_pipeline_param_group(group)
 

@@ -2,7 +2,7 @@ isPipeline
 Version:5
 DateRevision:426
 GitHash:
-ModuleCount:31
+ModuleCount:28
 HasImagePlaneDetails:False
 
 Images:[module_num:1|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['步骤：', '1、将【E:Input】文件夹中的图像拖入 ', '2、点击左侧【ExportToPDF(导出PDF_支撑剂)】设置参数']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
@@ -64,9 +64,9 @@ ColorToGray(颜色转灰度):[module_num:5|svn_version:'Unknown'|variable_revisi
     转换方式:Combine
     图像类型:RGB
     为输出图像命名:G_Gray
-    红色通道的相对权重:1.0
+    红色通道的相对权重:0
     绿色通道的相对权重:1.0
-    蓝色通道的相对权重:1.0
+    蓝色通道的相对权重:0
     将红色通道转换为灰度图?:Yes
     命名输出图像:OrigRed
     将绿色通道转换为灰度图?:Yes
@@ -90,8 +90,8 @@ ColorToGray(颜色转灰度):[module_num:6|svn_version:'Unknown'|variable_revisi
     图像类型:RGB
     为输出图像命名:R_Gray
     红色通道的相对权重:1.0
-    绿色通道的相对权重:1.0
-    蓝色通道的相对权重:1.0
+    绿色通道的相对权重:0
+    蓝色通道的相对权重:0
     将红色通道转换为灰度图?:Yes
     命名输出图像:OrigRed
     将绿色通道转换为灰度图?:Yes
@@ -109,69 +109,7 @@ ColorToGray(颜色转灰度):[module_num:6|svn_version:'Unknown'|variable_revisi
     通道的相对权重:1.0
     图像名称:Channel1
 
-RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    Select the input image:G_Gray
-    Expected object diameter:50
-    Model:bact_fluor_omni
-    Name the output object:G_objects_Run
-    Use GPU:Yes
-    Use averaging:Yes
-    Supply nuclei image as well?:No
-    Select the nuclei image:None
-    Save probability image?:No
-    Name the probability image:Probabilities
-    Location of the pre-trained model file:Elsewhere...|
-    Pre-trained model file name:cyto_0
-    Flow threshold:0.4
-    Distance field threshold:0
-    GPU memory share for each worker:0.8
-    Stitch Threshold:0.0
-    Use 3D:No
-    Minimum size:10
-    Use Omnipose for mask reconstruction:Yes
-    ncolor:No
-    DBSCAN clustering:No
-    Invert images:No
-    verbose:Yes
-    tile:Yes
-
-MeasureObjectSizeShape(测量对象大小与形状):[module_num:8|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['测量-绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    选择要测量的对象集:G_objects_Run
-    是否计算 Zernike 特征?:Yes
-    是否计算高级特征?:No
-
-FilterObjects(过滤对象):[module_num:9|svn_version:'Unknown'|variable_revision_number:10|show_window:False|notes:['过滤-绿色荧光G_objects_Filter']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    选择要过滤的对象:G_objects_Run
-    为输出对象命名:G_objects
-    选择过滤模式:Measurements
-    选择过滤方法:Limits
-    选择包含被过滤对象的对象:None
-    选择规则或分类器文件的位置:Elsewhere...|
-    规则或分类器文件名:rules.txt
-    类别编号:1
-    Measurement count:1
-    Additional object count:0
-    将重叠的子对象分配给:Both parents
-    将被移除的对象保留为独立集合？:No
-    为被筛选移除的对象命名:RemovedObjects
-    选择用于筛选的测量值:AreaShape_Eccentricity
-    是否使用最小测量值进行筛选？:Yes
-    最小值:0.8
-    是否使用最大测量值进行筛选？:No
-    最大值:1.0
-    允许模糊特征匹配？:No
-
-OverlayOutlines(叠加轮廓线):[module_num:10|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    是否在空白图像上显示轮廓?:No
-    选择用于显示轮廓的图像:G
-    输出图像名称:G_objects_OrigOverlay
-    轮廓显示模式:Color
-    选择确定轮廓亮度的方法:Max of image
-    轮廓绘制方式:Thick
-    选择轮廓颜色:red
-    选择要显示的对象:G_objects
-
-RunCellpose:[module_num:11|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['识别-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+RunCellpose:[module_num:7|svn_version:'Unknown'|variable_revision_number:6|show_window:False|notes:['识别-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the input image:R_Gray
     在运行之前重新缩放图像:Yes
     运行环境:Python
@@ -187,7 +125,7 @@ RunCellpose:[module_num:11|svn_version:'Unknown'|variable_revision_number:6|show
     概率图像名称:Probabilities
     预训练模型文件位置:Elsewhere...|
     预训练模型文件名:cyto_0
-    流阈值:0.4
+    流阈值:0.5
     细胞概率阈值:0
     每个工作线程的 GPU 内存占用比例:0.8
     拼接阈值:0.0
@@ -198,12 +136,12 @@ RunCellpose:[module_num:11|svn_version:'Unknown'|variable_revision_number:6|show
     移除接触边缘的对象？:Yes
     重缩放概率图？:Yes
 
-MeasureObjectSizeShape(测量对象大小与形状):[module_num:12|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['测量-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+MeasureObjectSizeShape(测量对象大小与形状):[module_num:8|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['测量-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择要测量的对象集:R_objects_Run
     是否计算 Zernike 特征?:Yes
     是否计算高级特征?:No
 
-FilterObjects(过滤对象):[module_num:13|svn_version:'Unknown'|variable_revision_number:10|show_window:False|notes:['过滤-红色荧光R_objects_Filter']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+FilterObjects(过滤对象):[module_num:9|svn_version:'Unknown'|variable_revision_number:10|show_window:False|notes:['过滤-红色荧光R_objects']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择要过滤的对象:R_objects_Run
     为输出对象命名:R_objects
     选择过滤模式:Measurements
@@ -224,7 +162,7 @@ FilterObjects(过滤对象):[module_num:13|svn_version:'Unknown'|variable_revisi
     最大值:1.0
     允许模糊特征匹配？:No
 
-OverlayOutlines(叠加轮廓线):[module_num:14|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+OverlayOutlines(叠加轮廓线):[module_num:10|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-红色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     是否在空白图像上显示轮廓?:No
     选择用于显示轮廓的图像:R
     输出图像名称:R_objects_OrigOverlay
@@ -234,27 +172,31 @@ OverlayOutlines(叠加轮廓线):[module_num:14|svn_version:'Unknown'|variable_r
     选择轮廓颜色:cyan
     选择要显示的对象:R_objects
 
-ExpandOrShrinkObjects(扩展或收缩对象):[module_num:15|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['R_search 是红色头部周围的绿色搜索区']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+ExpandOrShrinkObjects(扩展或收缩对象):[module_num:11|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['对位-绿色荧光G_objects']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择输入对象:R_objects
-    命名输出对象:R_search
+    命名输出对象:G_objects
     选择要执行的操作:Expand objects by a specified number of pixels
-    扩张或收缩的像素数:50
+    扩张或收缩的像素数:1
     是否填补对象内的孔洞，以便对象收缩为单个点？:No
     用于扩张或收缩的测量值:None
 
-RelateObjects(关联对象关系):[module_num:16|svn_version:'Unknown'|variable_revision_number:5|show_window:False|notes:['关联-红色荧光和绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    父对象:R_search
-    子对象:G_objects
-    是否计算子对象到父对象的距离？:Minimum
-    是否计算每个父对象的所有子对象测量值的平均值？:No
-    是否计算与其他父对象的距离？:No
-    是否将有父对象的子对象保存为新的对象集？:No
-    新对象的命名:RelateObjects
-    父对象名称:None
+OverlayOutlines(叠加轮廓线):[module_num:12|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+    是否在空白图像上显示轮廓?:No
+    选择用于显示轮廓的图像:G
+    输出图像名称:G_objects_OrigOverlay
+    轮廓显示模式:Color
+    选择确定轮廓亮度的方法:Max of image
+    轮廓绘制方式:Thick
+    选择轮廓颜色:Red
+    选择要显示的对象:G_objects
 
-FilterObjects(过滤对象):[module_num:17|svn_version:'Unknown'|variable_revision_number:10|show_window:False|notes:['R_colocalized 就是：', '', '有绿色信号的红色精子']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    选择要过滤的对象:R_search
-    为输出对象命名:R_colocalized
+MeasureObjectIntensity(对象强度测量):[module_num:13|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+    选择要测量的图像:G_Gray
+    选择要测量的对象:G_objects
+
+FilterObjects(过滤对象):[module_num:14|svn_version:'Unknown'|variable_revision_number:10|show_window:False|notes:['筛选=共定位绿色荧光-G_colocalized']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+    选择要过滤的对象:G_objects
+    为输出对象命名:G_colocalized
     选择过滤模式:Measurements
     选择过滤方法:Limits
     选择包含被过滤对象的对象:None
@@ -266,45 +208,45 @@ FilterObjects(过滤对象):[module_num:17|svn_version:'Unknown'|variable_revisi
     将重叠的子对象分配给:Both parents
     将被移除的对象保留为独立集合？:No
     为被筛选移除的对象命名:RemovedObjects
-    选择用于筛选的测量值:Children_G_objects_Count
+    选择用于筛选的测量值:Intensity_IntegratedIntensity_G_Gray
     是否使用最小测量值进行筛选？:Yes
-    最小值:1
+    最小值:5
     是否使用最大测量值进行筛选？:No
     最大值:1.0
     允许模糊特征匹配？:No
 
-OverlayOutlines(叠加轮廓线):[module_num:18|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-共定位绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+OverlayOutlines(叠加轮廓线):[module_num:15|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-共定位绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     是否在空白图像上显示轮廓?:No
-    选择用于显示轮廓的图像:R
-    输出图像名称:R_colocalized_OrigOverlay
+    选择用于显示轮廓的图像:G
+    输出图像名称:G_colocalized_OrigOverlay
     轮廓显示模式:Color
     选择确定轮廓亮度的方法:Max of image
     轮廓绘制方式:Thick
-    选择轮廓颜色:cyan
-    选择要显示的对象:R_colocalized
+    选择轮廓颜色:Red
+    选择要显示的对象:G_colocalized
 
-MeasureObjectIntensity(对象强度测量):[module_num:19|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+MeasureObjectIntensity(对象强度测量):[module_num:16|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择要测量的图像:G_Gray
-    选择要测量的对象:R_colocalized
+    选择要测量的对象:G_colocalized
 
-MeasureImageIntensity(图像强度测量):[module_num:20|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+MeasureImageIntensity(图像强度测量):[module_num:17|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择要测量的图像:G_Gray
     仅测量对象所包围区域的强度?:Yes
-    选择输入对象集:R_colocalized
+    选择输入对象集:G_colocalized
     计算自定义百分位数:No
     指定要测量的百分位数:10,90
 
-MeasureObjectSizeShape(测量对象大小与形状):[module_num:21|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['测量-共定位绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    选择要测量的对象集:R_colocalized
+MeasureObjectSizeShape(测量对象大小与形状):[module_num:18|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['测量-共定位绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+    选择要测量的对象集:G_colocalized
     是否计算 Zernike 特征?:Yes
     是否计算高级特征?:No
 
-CalculateMath(计算数学表达式):[module_num:22|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['FluorescenceIntensity =', 'Intensity_TotalIntensity_G_Gray_R_colocalized / Count_R_objects']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+CalculateMath(计算数学表达式):[module_num:19|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['荧光强度计算FluorescenceIntensity=Intensity_TotalIntensity_G_Gray_G_colocalized/Count_R_objects']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     为输出测量命名:FluorescenceIntensity
     运算类型:Divide
     选择 分子 测量类型:Image
     选择 分子 对象:G_colocalized
-    选择 分子 测量值:Intensity_TotalIntensity_G_Gray_R_colocalized
+    选择 分子 测量值:Intensity_TotalIntensity_G_Gray_G_colocalized
     将上述操作数乘以:1.0
     将上述操作数乘方至:1.0
     选择 分母 测量类型:Image
@@ -323,12 +265,12 @@ CalculateMath(计算数学表达式):[module_num:22|svn_version:'Unknown'|variab
     是否限制结果的上界？:No
     请输入上界数值:1.0
 
-CalculateMath(计算数学表达式):[module_num:23|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['标定率-ColocalizationRate']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+CalculateMath(计算数学表达式):[module_num:20|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['标定率-ColocalizationRate']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     为输出测量命名:ColocalizationRate
     运算类型:Divide
     选择 分子 测量类型:Image
     选择 分子 对象:G_colocalized
-    选择 分子 测量值:Count_R_colocalized
+    选择 分子 测量值:Count_G_colocalized
     将上述操作数乘以:1.0
     将上述操作数乘方至:1.0
     选择 分母 测量类型:Image
@@ -347,7 +289,7 @@ CalculateMath(计算数学表达式):[module_num:23|svn_version:'Unknown'|variab
     是否限制结果的上界？:No
     请输入上界数值:1.0
 
-CalculateMath(计算数学表达式):[module_num:24|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['红色荧光数量-R_count']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+CalculateMath(计算数学表达式):[module_num:21|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['红色荧光数量-R_count']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     为输出测量命名:R_count
     运算类型:None
     选择 分子 测量类型:Image
@@ -371,12 +313,12 @@ CalculateMath(计算数学表达式):[module_num:24|svn_version:'Unknown'|variab
     是否限制结果的上界？:No
     请输入上界数值:1.0
 
-CalculateMath(计算数学表达式):[module_num:25|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['绿色荧光数量-G_count']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+CalculateMath(计算数学表达式):[module_num:22|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:['绿色荧光数量-G_count']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     为输出测量命名:G_count
     运算类型:None
     选择 分子 测量类型:Image
     选择 分子 对象:None
-    选择 分子 测量值:Count_R_colocalized
+    选择 分子 测量值:Count_G_objects
     将上述操作数乘以:1.0
     将上述操作数乘方至:1.0
     选择 第二个操作数 测量类型:Image
@@ -395,7 +337,7 @@ CalculateMath(计算数学表达式):[module_num:25|svn_version:'Unknown'|variab
     是否限制结果的上界？:No
     请输入上界数值:1.0
 
-ExportToSpreadsheet(导出到表格):[module_num:26|svn_version:'Unknown'|variable_revision_number:13|show_window:False|notes:['导出标定率0.84674', '导出荧光强度63.96526', '导出数量-共定位绿色数量-绿色荧光数量-红色荧光数量-图片序号-标定率', 'Count_G_colocalizedtCount_G_objectstCount_G_objects_RuntCount_R_objectstCount_R_objects_RuntImageNumbertIntensity_TotalIntensity_G_Gray_G_colocalizedtMath_ColocalizationRatetMath_FluorescenceIntensity', '']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+ExportToSpreadsheet(导出到表格):[module_num:23|svn_version:'Unknown'|variable_revision_number:13|show_window:False|notes:['导出标定率0.84674', '导出荧光强度63.96526', '导出数量-共定位绿色数量-绿色荧光数量-红色荧光数量-图片序号-标定率', 'Count_G_colocalizedtCount_G_objectstCount_G_objects_RuntCount_R_objectstCount_R_objects_RuntImageNumbertIntensity_TotalIntensity_G_Gray_G_colocalizedtMath_ColocalizationRatetMath_FluorescenceIntensity', '']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择列分隔符:Comma (",")
     将图像元数据列添加到对象数据文件?:No
     将图像文件和文件夹名称添加到对象数据文件?:No
@@ -409,7 +351,7 @@ ExportToSpreadsheet(导出到表格):[module_num:26|svn_version:'Unknown'|variab
     选择用作标识符的图像:None
     选择要用作标识符的元数据:None
     导出所有测量类型?:No
-    按下按钮选择测量值:Image|Math_ColocalizationRate,Image|Math_FluorescenceIntensity,Image|Intensity_TotalArea_G_Gray_R_colocalized,Image|Count_R_colocalized,Image|Count_R_search,Image|Count_R_objects,Image|Count_R_objects_Run,Image|Count_G_objects,Image|Count_G_objects_Run
+    按下按钮选择测量值:Image|Math_FluorescenceIntensity,Image|Math_ColocalizationRate,Image|Intensity_TotalArea_G_Gray_G_colocalized,Image|Count_G_objects,Image|Count_G_colocalized,Image|Count_R_objects,Image|Count_R_objects_Run
     Nan/Inf 的表示:NaN
     为文件名添加前缀?:No
     文件名前缀:MyExpt_
@@ -419,7 +361,7 @@ ExportToSpreadsheet(导出到表格):[module_num:26|svn_version:'Unknown'|variab
     文件名:DATA.csv
     使用对象名称作为文件名?:Yes
 
-ExportToSpreadsheet(导出到表格):[module_num:27|svn_version:'Unknown'|variable_revision_number:13|show_window:False|notes:['导出荧光强度-强度ImageNumbert  ObjectNumbertAreaShape_AreatIntensity_IntegratedIntensity_G_GraytIntensity_MeanIntensity_G_GraytLocation_Center_XtLocation_Center_Y', '', '单个视野荧光强度计算：该视野该视野有绿色荧光+红色荧光信号（共定位）的精子的绿色荧光信号强度总和/有红色荧光信号的精子数']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+ExportToSpreadsheet(导出到表格):[module_num:24|svn_version:'Unknown'|variable_revision_number:13|show_window:False|notes:['导出荧光强度-强度ImageNumbert  ObjectNumbertAreaShape_AreatIntensity_IntegratedIntensity_G_GraytIntensity_MeanIntensity_G_GraytLocation_Center_XtLocation_Center_Y', '', '单个视野荧光强度计算：该视野该视野有绿色荧光+红色荧光信号（共定位）的精子的绿色荧光信号强度总和/有红色荧光信号的精子数']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     选择列分隔符:Comma (",")
     将图像元数据列添加到对象数据文件?:No
     将图像文件和文件夹名称添加到对象数据文件?:No
@@ -433,17 +375,17 @@ ExportToSpreadsheet(导出到表格):[module_num:27|svn_version:'Unknown'|variab
     选择用作标识符的图像:None
     选择要用作标识符的元数据:None
     导出所有测量类型?:No
-    按下按钮选择测量值:R_colocalized|AreaShape_Area,R_colocalized|Location_Center_Y,R_colocalized|Location_Center_X,R_colocalized|Intensity_MeanIntensity_G_Gray,R_colocalized|Intensity_IntegratedIntensity_G_Gray
+    按下按钮选择测量值:G_colocalized|Location_Center_X,G_colocalized|Location_Center_Y,G_colocalized|AreaShape_Area,G_colocalized|Intensity_IntegratedIntensity_G_Gray,G_colocalized|Intensity_MeanIntensity_G_Gray
     Nan/Inf 的表示:NaN
     为文件名添加前缀?:No
     文件名前缀:MyExpt_
     不发出警告覆盖现有文件?:Yes
-    要导出的数据:R_colocalized
+    要导出的数据:G_colocalized
     将这些物体的测量值与前一个物体的测量值结合起来?:No
     文件名:DATA.csv
     使用对象名称作为文件名?:Yes
 
-SaveImages(保存图像):[module_num:28|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['保存-绿色荧光过滤叠加图G_objects_OrigOverlay']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:25|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['保存-绿色荧光过滤叠加图G_objects_OrigOverlay']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):G_objects_OrigOverlay
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -463,7 +405,7 @@ SaveImages(保存图像):[module_num:28|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:29|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['保存-红色荧光过滤叠加图R_objects_OrigOverlay']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:26|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['保存-红色荧光过滤叠加图R_objects_OrigOverlay']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
     Select the image to save(选择要保存的图像):R_objects_OrigOverlay
     Select method for constructing file names(选择构建文件名的方法):From image filename
@@ -483,9 +425,9 @@ SaveImages(保存图像):[module_num:29|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-SaveImages(保存图像):[module_num:30|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['保存-共定位绿色荧光过滤叠加图G_colocalized_OrigOverlay']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+SaveImages(保存图像):[module_num:27|svn_version:'Unknown'|variable_revision_number:16|show_window:False|notes:['保存-共定位绿色荧光过滤叠加图G_colocalized_OrigOverlay']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the type of image to save(选择要保存的图像类型):Image
-    Select the image to save(选择要保存的图像):R_colocalized_OrigOverlay
+    Select the image to save(选择要保存的图像):G_colocalized_OrigOverlay
     Select method for constructing file names(选择构建文件名的方法):From image filename
     Select image name for file prefix(选择图像名称作为文件前缀):G
     Enter single file name(输入单个文件名):OrigBlue
@@ -503,7 +445,7 @@ SaveImages(保存图像):[module_num:30|svn_version:'Unknown'|variable_revision_
     How to save the series(如何保存序列):T (Time)
     Save with lossless compression(使用无损压缩保存)?:Yes
 
-ExportToPDF(导出PDF_蛋白):[module_num:31|svn_version:'Unknown'|variable_revision_number:1|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+ExportToPDF(导出PDF_蛋白):[module_num:28|svn_version:'Unknown'|variable_revision_number:1|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     .CSV所在目录:Default Output Folder|
     .默认元数据保存/读取目录:Default Output Folder|
     将本次元数据保存为默认？:否
@@ -515,8 +457,8 @@ ExportToPDF(导出PDF_蛋白):[module_num:31|svn_version:'Unknown'|variable_revi
     性别:男
     节欲天数:
     取样方式:
-    取样时间:2026-01-01
-    检测时间:2026-01-01
+    取样时间:2026-06-16
+    检测时间:2026-06-16
     一键填充日期:None
     外观:
     气味:

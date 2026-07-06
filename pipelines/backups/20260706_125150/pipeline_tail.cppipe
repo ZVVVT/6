@@ -111,7 +111,7 @@ ColorToGray(颜色转灰度):[module_num:6|svn_version:'Unknown'|variable_revisi
 
 RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_window:False|notes:[]|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     Select the input image:G_Gray
-    Expected object diameter:50
+    Expected object diameter:10
     Model:bact_fluor_omni
     Name the output object:G_objects_Run
     Use GPU:Yes
@@ -122,8 +122,8 @@ RunOmnipose:[module_num:7|svn_version:'Unknown'|variable_revision_number:3|show_
     Name the probability image:Probabilities
     Location of the pre-trained model file:Elsewhere...|
     Pre-trained model file name:cyto_0
-    Flow threshold:0.4
-    Distance field threshold:0
+    Flow threshold:2
+    Distance field threshold:-2
     GPU memory share for each worker:0.8
     Stitch Threshold:0.0
     Use 3D:No
@@ -187,7 +187,7 @@ RunCellpose:[module_num:11|svn_version:'Unknown'|variable_revision_number:6|show
     概率图像名称:Probabilities
     预训练模型文件位置:Elsewhere...|
     预训练模型文件名:cyto_0
-    流阈值:0.4
+    流阈值:0.5
     细胞概率阈值:0
     每个工作线程的 GPU 内存占用比例:0.8
     拼接阈值:0.0
