@@ -292,7 +292,6 @@ class SettingsWindow(QWidget):
         button_layout = QHBoxLayout()
         self.btn_save_pipeline_params = QPushButton("保存参数")
         self.btn_generate_pipelines = QPushButton("生成管道")
-        self.btn_validate_pipeline_templates = QPushButton("检查模板")
         self.btn_restore_pipeline_backup = QPushButton("恢复最近备份")
         self.btn_reset_pipeline_params = QPushButton("恢复默认参数")
         self.btn_open_pipeline_dir = QPushButton("打开管道目录")
@@ -300,7 +299,6 @@ class SettingsWindow(QWidget):
 
         button_layout.addWidget(self.btn_save_pipeline_params)
         button_layout.addWidget(self.btn_generate_pipelines)
-        button_layout.addWidget(self.btn_validate_pipeline_templates)
         button_layout.addWidget(self.btn_restore_pipeline_backup)
         button_layout.addWidget(self.btn_reset_pipeline_params)
         button_layout.addWidget(self.btn_open_pipeline_dir)
@@ -310,7 +308,6 @@ class SettingsWindow(QWidget):
 
         self.btn_save_pipeline_params.clicked.connect(self.save_pipeline_params)
         self.btn_generate_pipelines.clicked.connect(self.generate_pipeline_files)
-        self.btn_validate_pipeline_templates.clicked.connect(self.validate_pipeline_templates)
         self.btn_restore_pipeline_backup.clicked.connect(self.restore_latest_pipeline_backup)
         self.btn_reset_pipeline_params.clicked.connect(self.reset_pipeline_params)
         self.btn_open_pipeline_dir.clicked.connect(self.open_pipeline_dir)
@@ -511,32 +508,6 @@ class SettingsWindow(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"生成管道失败：\n{e}")
-
-
-
-    def validate_pipeline_templates(self):
-        try:
-            messages = self.pipeline_param_manager.validate_template_rules()
-            for message in messages:
-                self.append_log(message)
-
-            failed = any(str(message).startswith("×") for message in messages)
-            if failed:
-                QMessageBox.warning(
-                    self,
-                    "检查完成",
-                    "管道模板检查未通过。\n\n"
-                    "可能原因：模板管道被更换、模块编号变化、参数名称变化。\n"
-                    "请查看下方检查结果。"
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "检查完成",
-                    "管道模板检查通过，可以正常生成管道。"
-                )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"检查管道模板失败：\n{e}")
 
 
     def restore_latest_pipeline_backup(self):

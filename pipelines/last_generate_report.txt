@@ -1,14 +1,14 @@
 管道参数生成报告
 ========================================================================
-生成时间：2026-07-06 11:20:47
+生成时间：2026-07-06 11:37:23
 项目目录：F:\sperm_protein_analyzer
 参数文件：F:\sperm_protein_analyzer\pipeline_params.ini
 模板目录：F:\sperm_protein_analyzer\pipelines\templates
-备份目录：F:\sperm_protein_analyzer\pipelines\backups\20260706_112047
+备份目录：F:\sperm_protein_analyzer\pipelines\backups\20260706_113723
 
 头部蛋白管道
 ------------------------------------------------------------------------
-module_num:7 | 预期物体直径 | red_diameter | 65 -> 66
+module_num:7 | 预期物体直径 | red_diameter | 65 -> 65
 module_num:7 | 流阈值 | red_flow_threshold | 0.5 -> 0.5
 module_num:7 | 细胞概率阈值 | red_cellprob_threshold | 0 -> 0
 module_num:7 | 最小尺寸 | red_min_size | 10 -> 10
