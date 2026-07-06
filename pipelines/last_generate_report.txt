@@ -1,10 +1,10 @@
 管道参数生成报告
 ========================================================================
-生成时间：2026-07-06 14:35:04
+生成时间：2026-07-06 15:37:36
 项目目录：F:\sperm_protein_analyzer
 参数文件：F:\sperm_protein_analyzer\pipeline_params.ini
 模板目录：F:\sperm_protein_analyzer\pipelines\templates
-备份目录：F:\sperm_protein_analyzer\pipelines\backups\20260706_143504
+备份目录：F:\sperm_protein_analyzer\pipelines\backups\20260706_153736
 
 头部蛋白管道
 ------------------------------------------------------------------------

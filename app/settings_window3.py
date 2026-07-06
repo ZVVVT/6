@@ -157,20 +157,16 @@ class SettingsWindow(QWidget):
         self.init_image_rule_tab()
         self.init_protein_tab()
 
-        self.global_button_bar = QWidget()
-        self.global_button_layout = QHBoxLayout(self.global_button_bar)
-        self.global_button_layout.setContentsMargins(0, 0, 0, 0)
-        self.global_button_layout.setSpacing(8)
-
+        btn_layout = QHBoxLayout()
         self.btn_reload = QPushButton("重新加载")
         self.btn_test = QPushButton("检查路径")
         self.btn_save = QPushButton("保存设置")
 
-        self.global_button_layout.addWidget(self.btn_reload)
-        self.global_button_layout.addWidget(self.btn_test)
-        self.global_button_layout.addStretch()
-        self.global_button_layout.addWidget(self.btn_save)
-        main_layout.addWidget(self.global_button_bar)
+        btn_layout.addWidget(self.btn_reload)
+        btn_layout.addWidget(self.btn_test)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        main_layout.addLayout(btn_layout)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
@@ -181,31 +177,8 @@ class SettingsWindow(QWidget):
         self.btn_reload.clicked.connect(self.load_config)
         self.btn_test.clicked.connect(self.check_paths)
         self.btn_save.clicked.connect(self.save_config)
-        self.tabs.currentChanged.connect(self.update_global_button_bar_visibility)
-        self.update_global_button_bar_visibility()
 
         self.apply_settings_style()
-
-    def update_global_button_bar_visibility(self, index: int = None):
-        """根据当前设置页类型显示或隐藏底部全局按钮栏。
-
-        设置类页面使用底部全局按钮：
-        - 重新加载
-        - 检查路径
-        - 保存设置
-
-        工具类页面使用页面内部按钮：
-        - 质控微球测试
-        - 管道参数
-
-        这样可以避免用户误以为“保存设置”会保存并应用管道参数。
-        """
-        current_text = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
-        tool_tabs = {"质控微球测试", "管道参数"}
-
-        is_tool_tab = current_text in tool_tabs
-        self.global_button_bar.setVisible(not is_tool_tab)
-
 
     # ------------------------------------------------------------------
     # Tab 初始化

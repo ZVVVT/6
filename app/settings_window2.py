@@ -32,75 +32,33 @@ from core.qc_beads_service import QCBeadsService, QCBeadsWorker
 from core.pipeline_parameter_manager import PipelineParameterManager
 
 
-class PipelineParamLineEdit(QLineEdit):
-    """管道参数输入框。
+class ManualDoubleSpinBox(QDoubleSpinBox):
+    """只能手动输入的数值框。
 
-    用 QLineEdit 代替 QDoubleSpinBox：
-    1. 没有右侧上下箭头；
-    2. 鼠标滚轮不会误改数值；
-    3. 只允许用户手动输入；
-    4. 保存/应用时做数字和范围校验。
+    保留 QDoubleSpinBox 的范围、小数位和数值格式校验，
+    但禁用右侧上下按钮、鼠标滚轮、键盘上下键/PageUp/PageDown 等步进修改，
+    避免参数被误触改变。
     """
 
-    def __init__(self, min_value, max_value, decimals, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.min_value = float(min_value)
-        self.max_value = float(max_value)
-        self.decimals = int(decimals)
-        self.setMinimumHeight(30)
-        self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.setPlaceholderText(self._range_text())
-        self.setToolTip(f"请输入数字，允许范围：{self._range_text()}")
+        self.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.setKeyboardTracking(False)
+        self.setAccelerated(False)
+        self.setCorrectionMode(QDoubleSpinBox.CorrectToNearestValue)
+        self.setToolTip("请直接输入数值；鼠标滚轮和上下步进已禁用。")
 
-    def _range_text(self) -> str:
-        return f"{self._format_number(self.min_value)} ~ {self._format_number(self.max_value)}"
+    def wheelEvent(self, event):
+        event.ignore()
 
-    def _format_number(self, value) -> str:
-        try:
-            number = float(value)
-        except Exception:
-            return str(value)
+    def stepBy(self, steps):
+        return
 
-        if self.decimals <= 0:
-            return str(int(round(number)))
-
-        text = f"{number:.{self.decimals}f}".rstrip("0").rstrip(".")
-        if text == "-0":
-            text = "0"
-        return text or "0"
-
-    def setValue(self, value):
-        self.setText(self._format_number(value))
-
-    def value(self) -> float:
-        text = self.text().strip()
-        if not text:
-            raise ValueError(f"参数不能为空，允许范围：{self._range_text()}")
-
-        try:
-            value = float(text)
-        except Exception:
-            raise ValueError(f"参数必须是数字：{text}")
-
-        if value < self.min_value or value > self.max_value:
-            raise ValueError(
-                f"参数超出范围：{text}，允许范围：{self._range_text()}"
-            )
-
-        if self.decimals <= 0:
-            return float(int(round(value)))
-        return value
-
-    def focusOutEvent(self, event):
-        # 失去焦点时，如果是合法数字则自动规范显示；非法内容不强制改写，
-        # 这样用户保存时能看到明确错误提示。
-        try:
-            value = self.value()
-            self.setText(self._format_number(value))
-        except Exception:
-            pass
-        super().focusOutEvent(event)
-
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown):
+            event.ignore()
+            return
+        super().keyPressEvent(event)
 
 
 class SettingsWindow(QWidget):
@@ -157,20 +115,16 @@ class SettingsWindow(QWidget):
         self.init_image_rule_tab()
         self.init_protein_tab()
 
-        self.global_button_bar = QWidget()
-        self.global_button_layout = QHBoxLayout(self.global_button_bar)
-        self.global_button_layout.setContentsMargins(0, 0, 0, 0)
-        self.global_button_layout.setSpacing(8)
-
+        btn_layout = QHBoxLayout()
         self.btn_reload = QPushButton("重新加载")
         self.btn_test = QPushButton("检查路径")
         self.btn_save = QPushButton("保存设置")
 
-        self.global_button_layout.addWidget(self.btn_reload)
-        self.global_button_layout.addWidget(self.btn_test)
-        self.global_button_layout.addStretch()
-        self.global_button_layout.addWidget(self.btn_save)
-        main_layout.addWidget(self.global_button_bar)
+        btn_layout.addWidget(self.btn_reload)
+        btn_layout.addWidget(self.btn_test)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        main_layout.addLayout(btn_layout)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
@@ -181,31 +135,8 @@ class SettingsWindow(QWidget):
         self.btn_reload.clicked.connect(self.load_config)
         self.btn_test.clicked.connect(self.check_paths)
         self.btn_save.clicked.connect(self.save_config)
-        self.tabs.currentChanged.connect(self.update_global_button_bar_visibility)
-        self.update_global_button_bar_visibility()
 
         self.apply_settings_style()
-
-    def update_global_button_bar_visibility(self, index: int = None):
-        """根据当前设置页类型显示或隐藏底部全局按钮栏。
-
-        设置类页面使用底部全局按钮：
-        - 重新加载
-        - 检查路径
-        - 保存设置
-
-        工具类页面使用页面内部按钮：
-        - 质控微球测试
-        - 管道参数
-
-        这样可以避免用户误以为“保存设置”会保存并应用管道参数。
-        """
-        current_text = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
-        tool_tabs = {"质控微球测试", "管道参数"}
-
-        is_tool_tab = current_text in tool_tabs
-        self.global_button_bar.setVisible(not is_tool_tab)
-
 
     # ------------------------------------------------------------------
     # Tab 初始化
@@ -515,9 +446,12 @@ class SettingsWindow(QWidget):
 
     @staticmethod
     def _make_double_spin(min_value, max_value, step, decimals):
-        # 保留方法名，减少其他代码改动；实际控件改为纯文本数字输入框。
-        # step 参数不再使用，避免上下箭头和鼠标滚轮误触修改。
-        return PipelineParamLineEdit(min_value, max_value, decimals)
+        spin = ManualDoubleSpinBox()
+        spin.setRange(float(min_value), float(max_value))
+        spin.setSingleStep(float(step))
+        spin.setDecimals(int(decimals))
+        spin.setMinimumHeight(30)
+        return spin
 
     def load_pipeline_params(self):
         try:
@@ -995,7 +929,7 @@ class SettingsWindow(QWidget):
                 background-color: #FFFFFF;
             }
 
-            QLineEdit, QTextEdit, QSpinBox {
+            QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox {
                 background-color: #FFFFFF;
                 border: 1px solid #DDE6F2;
                 border-radius: 5px;
@@ -1012,7 +946,7 @@ class SettingsWindow(QWidget):
                 padding: 6px 8px;
             }
 
-            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {
+            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
                 border-color: #1769E0;
             }
 
