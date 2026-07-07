@@ -14,6 +14,53 @@ from core.config_manager import ConfigManager, get_application_root
 DEFAULT_FONT_SIZE = 10
 
 
+_SINGLE_INSTANCE_MUTEX_HANDLE = None
+
+
+def acquire_single_instance_lock() -> bool:
+    """限制 Windows 下同一用户会话内只启动一个软件实例。
+
+    说明：
+    - 打包后的 exe 被重复双击时，第二个进程会提示并立即退出；
+    - 第一个进程退出后，系统会自动释放互斥锁；
+    - 如果创建互斥锁失败，不阻止软件启动，避免异常环境下影响正常使用。
+    """
+    if not sys.platform.startswith("win"):
+        return True
+
+    try:
+        import ctypes
+
+        global _SINGLE_INSTANCE_MUTEX_HANDLE
+
+        error_already_exists = 183
+        mutex_name = r"Local\SpermProteinAnalyzer_SingleInstance_Mutex"
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        handle = kernel32.CreateMutexW(None, False, mutex_name)
+        if not handle:
+            return True
+
+        last_error = ctypes.get_last_error()
+        if last_error == error_already_exists:
+            user32.MessageBoxW(
+                None,
+                "软件已在运行，请勿重复打开。",
+                "提示",
+                0x00000040,
+            )
+            kernel32.CloseHandle(handle)
+            return False
+
+        _SINGLE_INSTANCE_MUTEX_HANDLE = handle
+        return True
+    except Exception:
+        return True
+
+
+
 def project_root() -> Path:
     """返回软件运行根目录。源码运行时为项目根目录；打包后为 exe 所在目录。"""
     return get_application_root()
@@ -134,6 +181,9 @@ def apply_app_branding(app: QApplication, root: Path, config_manager: ConfigMana
 
 
 def main():
+    if not acquire_single_instance_lock():
+        sys.exit(0)
+
     app = QApplication(sys.argv)
     root = project_root()
 
