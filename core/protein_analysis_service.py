@@ -136,7 +136,9 @@ class ProteinAnalysisService:
             cancel_callback=cancel_callback,
         )
 
-        parsed_result = self.parse_result(cp_output_dir)
+        parsed_result = self.parse_result(cp_output_dir, protein_part=protein_part)
+        for warning in parsed_result.get("warnings", []):
+            self._log(log_callback, f"{protein_name} 结果解析提示：{warning}")
         total = parsed_result.get("total", {})
         rows = parsed_result.get("rows", [])
         image_csv = parsed_result.get("image_csv", "")
@@ -475,9 +477,9 @@ class ProteinAnalysisService:
         self._log(log_callback, f"{protein_name} MvImageID 运行完成，用时：{result.elapsed_seconds:.2f} 秒。")
         return result
 
-    def parse_result(self, cp_output_dir: Path) -> dict:
-        parser = ResultParser(str(cp_output_dir))
-        summary_result = parser.parse_image_summary()
+    def parse_result(self, cp_output_dir: Path, protein_part: str = "") -> dict:
+        parser = ResultParser(str(cp_output_dir), protein_part=protein_part)
+        summary_result = parser.parse_image_summary(protein_part=protein_part)
         if not summary_result.get("success"):
             raise RuntimeError(summary_result.get("message", "解析分析结果失败。"))
         return summary_result

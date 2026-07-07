@@ -1439,8 +1439,8 @@ class AnalysisWindow(QWidget):
         protein_name = self.get_current_protein_name()
         protein_part = self.config.get_protein_part(protein_key)
 
-        parser = ResultParser(str(self.current_output_dir))
-        summary_result = parser.parse_image_summary()
+        parser = ResultParser(str(self.current_output_dir), protein_part=protein_part)
+        summary_result = parser.parse_image_summary(protein_part=protein_part)
 
         if not summary_result.get("success"):
             return False, summary_result.get("message", "解析结果失败。")

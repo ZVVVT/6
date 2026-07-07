@@ -636,16 +636,6 @@ class ResultViewer(QWidget):
         return 9
 
     def extract_field_no(self, file_name: str):
-        """从 CellProfiler 输出图片名中提取视野号。
-
-        多视野输出常见格式：
-        - ZBFY022-A-1_RGB_G_G_objects_OrigOverlay.png
-        - ZBFY022-A-2_RGB_R_R_objects_OrigOverlay.png
-        - protein1_1024_G_G_colocalized_OrigOverlay.png
-
-        旧逻辑会把 ZBFY022-A-1_RGB 解析成 RGB，导致多个视野全部归到同一组，
-        上一视野/下一视野点击后看起来没有任何变化。
-        """
         stem = Path(file_name).stem
 
         markers = [
@@ -666,62 +656,10 @@ class ResultViewer(QWidget):
                 left = stem.split(marker)[0]
                 break
 
-        # 去掉原图通道尾缀，例如：ZBFY022-A-1_RGB -> ZBFY022-A-1
-        left = self.strip_raw_channel_suffix(left)
+        if "_" in left:
+            return left.split("_", 1)[1].strip() or left
 
-        return self.normalize_field_key(left) or left.strip() or stem
-
-    @staticmethod
-    def strip_raw_channel_suffix(value: str):
-        text = str(value or "").strip()
-        channel_suffixes = [
-            "_RGB",
-            "_FITC",
-            "_TRITC",
-            "_DIC",
-            "_MERGE",
-            "_BF",
-            "_BRIGHTFIELD",
-        ]
-
-        changed = True
-        while changed and text:
-            changed = False
-            upper_text = text.upper()
-            for suffix in channel_suffixes:
-                if upper_text.endswith(suffix):
-                    text = text[:-len(suffix)].strip()
-                    changed = True
-                    break
-
-        return text
-
-    @staticmethod
-    def normalize_field_key(value):
-        """把视野标识统一成可比较的 key。
-
-        优先取末尾数字：
-        - ZBFY022-A-1 -> 1
-        - protein1_1024 -> 1024
-        - field_001 -> 1
-
-        没有末尾数字时，保留清理后的文本。
-        """
-        text = str(value or "").strip()
-        if not text:
-            return ""
-
-        text = ResultViewer.strip_raw_channel_suffix(text)
-
-        match = re.search(r"(\d+)(?!.*\d)", text)
-        if match:
-            number_text = match.group(1)
-            try:
-                return str(int(number_text))
-            except Exception:
-                return number_text
-
-        return text
+        return left.strip() or stem
 
     @staticmethod
     def natural_sort_key(value):
@@ -739,31 +677,12 @@ class ResultViewer(QWidget):
         if not field_text:
             return
 
-        target_field = None
-
-        if field_text in self.image_groups:
-            target_field = field_text
-        else:
-            normalized = self.normalize_field_key(field_text)
-
-            if normalized in self.image_groups:
-                target_field = normalized
-            else:
-                for candidate in self.image_groups.keys():
-                    if self.normalize_field_key(candidate) == normalized:
-                        target_field = candidate
-                        break
-
-            # 兜底：Image.csv 是 1/2/3，图片视野名是其他格式时，按排序后的第 N 个视野切换。
-            if target_field is None and normalized.isdigit():
-                index = int(normalized) - 1
-                if 0 <= index < len(self.field_order):
-                    target_field = self.field_order[index]
-
-        if target_field is None:
+        if field_text not in self.image_groups:
+            # 兼容 Image.csv 用 1.0/2.0，而文件名用 1024/2048 的情况。
+            # 这里不强制切换，避免点到无对应图片的行时报错。
             return
 
-        self.current_field_no = target_field
+        self.current_field_no = field_text
         self.show_current_image()
 
     def show_current_image(self):
