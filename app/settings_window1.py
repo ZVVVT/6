@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from core.config_manager import ConfigManager, get_application_root
+from core.config_manager import ConfigManager
 from core.qc_beads_service import QCBeadsService, QCBeadsWorker
 from core.pipeline_parameter_manager import PipelineParameterManager
 
@@ -108,7 +108,7 @@ class SettingsWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.project_root = get_application_root()
+        self.project_root = Path(__file__).resolve().parents[1]
         self.config = ConfigManager(str(self.project_root / "config.ini"))
         self.config.ensure_default_config()
         self.pipeline_param_manager = PipelineParameterManager(self.project_root)
@@ -277,7 +277,7 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group = QGroupBox("运行环境")
+        group = QGroupBox("MvImageID 源码环境")
         form = QFormLayout(group)
 
         self.source_project_dir_edit = QLineEdit()
@@ -287,8 +287,8 @@ class SettingsWindow(QWidget):
         self.tail_pipeline_edit = QLineEdit()
         self.plugins_directory_edit = QLineEdit()
 
-        form.addRow("目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
-        form.addRow("解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
+        form.addRow("源码目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
+        form.addRow("Python解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
         form.addRow("模块名称：", self.module_name_edit)
         form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
         form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
@@ -777,14 +777,12 @@ class SettingsWindow(QWidget):
         self.workspace_root_edit = QLineEdit()
         self.database_edit = QLineEdit()
         self.report_dir_edit = QLineEdit()
-        # 报告 LOGO 暂不对用户开放配置。
-        # 仍保留 logo_path_edit，兼容 load_config / save_config / 旧配置读取，避免改动报告逻辑。
         self.logo_path_edit = QLineEdit()
-        self.logo_path_edit.setVisible(False)
 
         form.addRow("病例工作目录：", self._with_button(self.workspace_root_edit, "选择", self.select_workspace_root))
         form.addRow("数据库文件：", self._with_button(self.database_edit, "选择", self.select_database_file))
         form.addRow("报告目录：", self._with_button(self.report_dir_edit, "选择", self.select_report_dir))
+        form.addRow("报告 LOGO 图片：", self._with_button(self.logo_path_edit, "选择", self.select_logo_path))
 
         layout.addWidget(group)
         layout.addStretch()
@@ -802,22 +800,12 @@ class SettingsWindow(QWidget):
         self.dic_suffix_edit = QLineEdit()
         self.merge_suffix_edit = QLineEdit()
         self.image_ext_edit = QLineEdit()
-        self.image_ext_edit.setPlaceholderText(".png / .tif / .tiff / .jpg / .jpeg / .bmp")
-
-        ext_tip = QLabel(
-            "说明：系统默认支持 .tif、.tiff、.png、.jpg、.jpeg、.bmp；"
-            "此项用于补充或记录默认扩展名，通常保持 .png 即可。"
-            "图片能否分到 R/G/DIC/Merge，主要由上方通道后缀决定。"
-        )
-        ext_tip.setWordWrap(True)
-        ext_tip.setStyleSheet("color: #6b7280; font-size: 12px; padding: 4px 0 0 0;")
 
         form.addRow("R 通道后缀：", self.r_suffix_edit)
         form.addRow("G 通道后缀：", self.g_suffix_edit)
         form.addRow("DIC 通道后缀：", self.dic_suffix_edit)
         form.addRow("Merge 通道后缀：", self.merge_suffix_edit)
         form.addRow("默认图片扩展名：", self.image_ext_edit)
-        form.addRow("", ext_tip)
 
         layout.addWidget(group)
         layout.addStretch()
@@ -1559,8 +1547,8 @@ class SettingsWindow(QWidget):
         checks = [
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
             ("界面字体", self.app_font_path_edit.text().strip(), "font_optional"),
-            ("运行目录", self.source_project_dir_edit.text().strip(), "dir"),
-            ("解释器", self.python_exe_edit.text().strip(), "file"),
+            ("源码目录", self.source_project_dir_edit.text().strip(), "dir"),
+            ("Python解释器", self.python_exe_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),
             ("质控 Pipeline", self.qc_pipeline_edit.text().strip(), "file"),
@@ -1568,6 +1556,7 @@ class SettingsWindow(QWidget):
             ("病例工作目录", self.workspace_root_edit.text().strip(), "dir_create"),
             ("数据库文件", self.database_edit.text().strip(), "parent_create"),
             ("报告目录", self.report_dir_edit.text().strip(), "dir_create"),
+            ("报告 LOGO 图片", self.logo_path_edit.text().strip(), "file_optional"),
         ]
 
         for row in range(self.protein_table.rowCount()):
@@ -1773,15 +1762,15 @@ class SettingsWindow(QWidget):
     def select_python_exe(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择 MvImageID 解释器",
+            "选择 MvImageID Python解释器",
             "",
-            "解释器 (python.exe);;Executable (*.exe);;所有文件 (*.*)",
+            "Python解释器 (python.exe);;Executable (*.exe);;所有文件 (*.*)",
         )
         if path:
             self.python_exe_edit.setText(path)
 
     def select_source_project_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择 MvImageID 目录")
+        path = QFileDialog.getExistingDirectory(self, "选择 MvImageID 源码目录")
         if path:
             self.source_project_dir_edit.setText(path)
 

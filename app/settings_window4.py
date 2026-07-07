@@ -277,7 +277,7 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group = QGroupBox("运行环境")
+        group = QGroupBox("MvImageID 运行环境")
         form = QFormLayout(group)
 
         self.source_project_dir_edit = QLineEdit()
@@ -1559,7 +1559,7 @@ class SettingsWindow(QWidget):
         checks = [
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
             ("界面字体", self.app_font_path_edit.text().strip(), "font_optional"),
-            ("运行目录", self.source_project_dir_edit.text().strip(), "dir"),
+            ("MvImageID 目录", self.source_project_dir_edit.text().strip(), "dir"),
             ("解释器", self.python_exe_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),
@@ -1781,7 +1781,7 @@ class SettingsWindow(QWidget):
             self.python_exe_edit.setText(path)
 
     def select_source_project_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择 MvImageID 目录")
+        path = QFileDialog.getExistingDirectory(self, "选择 MvImageID MvImageID 目录")
         if path:
             self.source_project_dir_edit.setText(path)
 

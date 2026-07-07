@@ -277,7 +277,7 @@ class SettingsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group = QGroupBox("运行环境")
+        group = QGroupBox("MvImageID 源码环境")
         form = QFormLayout(group)
 
         self.source_project_dir_edit = QLineEdit()
@@ -287,8 +287,8 @@ class SettingsWindow(QWidget):
         self.tail_pipeline_edit = QLineEdit()
         self.plugins_directory_edit = QLineEdit()
 
-        form.addRow("目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
-        form.addRow("解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
+        form.addRow("源码目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
+        form.addRow("Python解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
         form.addRow("模块名称：", self.module_name_edit)
         form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
         form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
@@ -1559,8 +1559,8 @@ class SettingsWindow(QWidget):
         checks = [
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
             ("界面字体", self.app_font_path_edit.text().strip(), "font_optional"),
-            ("运行目录", self.source_project_dir_edit.text().strip(), "dir"),
-            ("解释器", self.python_exe_edit.text().strip(), "file"),
+            ("源码目录", self.source_project_dir_edit.text().strip(), "dir"),
+            ("Python解释器", self.python_exe_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),
             ("质控 Pipeline", self.qc_pipeline_edit.text().strip(), "file"),
@@ -1773,15 +1773,15 @@ class SettingsWindow(QWidget):
     def select_python_exe(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择 MvImageID 解释器",
+            "选择 MvImageID Python解释器",
             "",
-            "解释器 (python.exe);;Executable (*.exe);;所有文件 (*.*)",
+            "Python解释器 (python.exe);;Executable (*.exe);;所有文件 (*.*)",
         )
         if path:
             self.python_exe_edit.setText(path)
 
     def select_source_project_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "选择 MvImageID 目录")
+        path = QFileDialog.getExistingDirectory(self, "选择 MvImageID 源码目录")
         if path:
             self.source_project_dir_edit.setText(path)
 

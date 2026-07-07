@@ -1,29 +1,10 @@
 import configparser
-import sys
 from pathlib import Path
 
 
-def get_application_root() -> Path:
-    """返回软件运行根目录。
-
-    源码运行时：项目根目录。
-    PyInstaller 打包后：exe 所在目录。
-
-    这样可以避免打包后把 config.ini 保存到 _internal，导致界面提示已保存但实际不生效。
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
-
-
 class ConfigManager:
-    def __init__(self, config_path: str = None):
-        self.app_root = get_application_root()
-        if config_path is None:
-            self.config_path = self.app_root / "config.ini"
-        else:
-            path = Path(config_path)
-            self.config_path = path if path.is_absolute() else self.app_root / path
+    def __init__(self, config_path: str = "config.ini"):
+        self.config_path = Path(config_path)
         self.config = configparser.ConfigParser()
         self.load()
 

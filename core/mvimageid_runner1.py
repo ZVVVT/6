@@ -150,28 +150,6 @@ class MvImageIDRunner:
         command_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return command_file
 
-    def _get_subprocess_window_options(self) -> dict:
-        """
-        Windows 下隐藏外部 MvImageID Python 子进程窗口。
-
-        打包成 GUI 程序后，如果直接 Popen python.exe，Windows 会弹出一个黑色控制台窗口。
-        这里通过 CREATE_NO_WINDOW + STARTUPINFO 双保险隐藏该窗口，同时仍然保留 stdout/stderr 管道，
-        让软件界面里的运行日志继续正常显示。
-        """
-        options = {}
-        if os.name != "nt":
-            return options
-
-        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if create_no_window:
-            options["creationflags"] = create_no_window
-
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0
-        options["startupinfo"] = startupinfo
-        return options
-
     # ------------------------------------------------------------------
     # 执行
     # ------------------------------------------------------------------
@@ -237,7 +215,6 @@ class MvImageIDRunner:
                     errors="replace",
                     cwd=str(self.source_project_dir),
                     env=env,
-                    **self._get_subprocess_window_options(),
                 )
 
                 assert process.stdout is not None

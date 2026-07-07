@@ -20,7 +20,7 @@ from app.case_detail_window import CaseDetailWindow
 from app.case_manager_window import CaseManagerWindow
 from app.report_window import ReportWindow
 from app.settings_window import SettingsWindow
-from core.config_manager import ConfigManager, get_application_root
+from core.config_manager import ConfigManager
 from core.database import Database
 
 
@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # 项目根目录：F:\sperm_protein_analyzer
-        self.project_root = get_application_root()
+        self.project_root = Path(__file__).resolve().parents[1]
 
         # 统一使用项目根目录下的 config.ini，避免从不同目录启动时读错配置。
         self.config_manager = ConfigManager(str(self.project_root / "config.ini"))

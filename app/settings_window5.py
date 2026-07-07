@@ -1559,7 +1559,7 @@ class SettingsWindow(QWidget):
         checks = [
             ("软件 LOGO", self.app_logo_path_edit.text().strip(), "file_optional"),
             ("界面字体", self.app_font_path_edit.text().strip(), "font_optional"),
-            ("运行目录", self.source_project_dir_edit.text().strip(), "dir"),
+            ("MvImageID 目录", self.source_project_dir_edit.text().strip(), "dir"),
             ("解释器", self.python_exe_edit.text().strip(), "file"),
             ("头部 Pipeline", self.head_pipeline_edit.text().strip(), "file"),
             ("尾部 Pipeline", self.tail_pipeline_edit.text().strip(), "file"),

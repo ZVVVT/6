@@ -8,15 +8,15 @@ from PySide6.QtWidgets import QApplication
 
 from app.main_window import MainWindow
 from app.ui_style import get_app_stylesheet
-from core.config_manager import ConfigManager
+from core.config_manager import ConfigManager, get_application_root
 
 
 DEFAULT_FONT_SIZE = 10
 
 
 def project_root() -> Path:
-    """返回项目根目录：F:\\sperm_protein_analyzer。"""
-    return Path(__file__).resolve().parent
+    """返回软件运行根目录。源码运行时为项目根目录；打包后为 exe 所在目录。"""
+    return get_application_root()
 
 
 def resolve_project_path(root: Path, path_value) -> Path:
