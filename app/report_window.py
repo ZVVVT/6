@@ -684,8 +684,8 @@ class ReportWindow(QWidget):
                     row.get("total_fields", 0),
                     row.get("total_sperm_count", 0),
                     row.get("positive_count", 0),
-                    self._fmt(row.get("expression_rate", 0)),
-                    self._fmt(row.get("mean_intensity", 0)),
+                    self._fmt_rate(row.get("expression_rate", 0)),
+                    self._fmt_int(row.get("mean_intensity", 0)),
                     "已完成",
                     row.get("created_at", ""),
                 ]
@@ -924,8 +924,15 @@ class ReportWindow(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     @staticmethod
-    def _fmt(value):
+    def _fmt_int(value):
         try:
-            return f"{float(value):.2f}"
+            return str(int(round(float(value))))
         except Exception:
             return str(value)
+
+    @staticmethod
+    def _fmt_rate(value):
+        try:
+            return f"{float(value):.2f}%"
+        except Exception:
+            return f"{value}%" if value not in [None, ""] else "0.00%"

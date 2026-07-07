@@ -288,7 +288,7 @@ class ResultParser:
                 "sperm_count": int(round(r_count or 0)),
                 "positive_count": int(round(colocalized_count or 0)),
                 "expression_rate": round(expression_rate or 0, 2),
-                "mean_intensity": round(mean_intensity or 0, 2),
+                "mean_intensity": int(round(mean_intensity or 0)),
                 # 以下字段用于核查/总计，不直接影响旧 UI。
                 "rate_fraction": round(rate_fraction or 0, 6),
                 "mean255_sum": round(stats["mean255_sum"], 2),
@@ -538,7 +538,7 @@ class ResultParser:
             "sperm_count": int(total_sperm_count),
             "positive_count": int(total_positive_count),
             "expression_rate": round(total_rate_fraction * 100, 2),
-            "mean_intensity": round(total_mean_intensity or 0, 2),
+            "mean_intensity": int(round(total_mean_intensity or 0)),
             "rate_fraction": round(total_rate_fraction, 6),
             "mean255_sum": round(total_mean255_sum, 2),
             "integrated255_sum": round(total_integrated255_sum, 2),

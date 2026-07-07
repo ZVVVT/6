@@ -469,8 +469,8 @@ class ResultViewer(QWidget):
                 item.get("image_number", ""),
                 item.get("sperm_count", 0),
                 item.get("positive_count", 0),
-                item.get("expression_rate", 0),
-                item.get("mean_intensity", 0),
+                self.format_rate_for_display(item.get("expression_rate", 0)),
+                self.format_int_for_display(item.get("mean_intensity", 0)),
             ]
 
             for col_index, value in enumerate(values):
@@ -483,8 +483,8 @@ class ResultViewer(QWidget):
             "合计",
             total.get("sperm_count", 0),
             total.get("positive_count", 0),
-            total.get("expression_rate", 0),
-            total.get("mean_intensity", 0),
+            self.format_rate_for_display(total.get("expression_rate", 0)),
+            self.format_int_for_display(total.get("mean_intensity", 0)),
         ]
 
         for col_index, value in enumerate(total_values):
@@ -1025,6 +1025,20 @@ class ResultViewer(QWidget):
 
         return None
 
+    @staticmethod
+    def format_int_for_display(value):
+        try:
+            return str(int(round(float(value))))
+        except Exception:
+            return str(value)
+
+    @staticmethod
+    def format_rate_for_display(value):
+        try:
+            return f"{float(value):.2f}%"
+        except Exception:
+            return f"{value}%" if value not in [None, ""] else "0.00%"
+
     def update_summary_label(self):
         total = self.summary_total or {}
         current_row = self.get_current_summary_row()
@@ -1034,8 +1048,8 @@ class ResultViewer(QWidget):
                 f"当前视野：{self.current_field_no}\n"
                 f"精子数：{current_row.get('sperm_count', 0)}\n"
                 f"共定位数：{current_row.get('positive_count', 0)}\n"
-                f"标定率：{current_row.get('expression_rate', 0)}%\n"
-                f"荧光强度：{current_row.get('mean_intensity', 0)}"
+                f"标定率：{self.format_rate_for_display(current_row.get('expression_rate', 0))}\n"
+                f"荧光强度：{self.format_int_for_display(current_row.get('mean_intensity', 0))}"
             )
         else:
             current_text = f"当前视野：{self.current_field_no or '-'}\n暂无当前视野统计。"
@@ -1046,8 +1060,8 @@ class ResultViewer(QWidget):
                 f"视野数：{total.get('field_count', 0)}\n"
                 f"精子总数：{total.get('sperm_count', 0)}\n"
                 f"共定位数：{total.get('positive_count', 0)}\n"
-                f"标定率：{total.get('expression_rate', 0)}%\n"
-                f"荧光强度：{total.get('mean_intensity', 0)}"
+                f"标定率：{self.format_rate_for_display(total.get('expression_rate', 0))}\n"
+                f"荧光强度：{self.format_int_for_display(total.get('mean_intensity', 0))}"
             )
         else:
             total_text = ""

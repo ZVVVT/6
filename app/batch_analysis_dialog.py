@@ -1917,6 +1917,20 @@ class BatchAnalysisDialog(QDialog):
 
         return "\n".join(lines).strip()
 
+    @staticmethod
+    def format_int_for_display(value):
+        try:
+            return str(int(round(float(value))))
+        except Exception:
+            return str(value)
+
+    @staticmethod
+    def format_rate_for_display(value):
+        try:
+            return f"{float(value):.2f}%"
+        except Exception:
+            return f"{value}%" if value not in [None, ""] else "0.00%"
+
     def save_result_to_database(self, result: dict) -> Tuple[bool, str]:
         case_id = result.get("case_id")
         if not case_id:
@@ -1960,8 +1974,8 @@ class BatchAnalysisDialog(QDialog):
             f"视野数 {total.get('field_count', 0)}，"
             f"精子总数 {total.get('sperm_count', 0)}，"
             f"共定位数 {total.get('positive_count', 0)}，"
-            f"标定率 {total.get('expression_rate', 0)}%，"
-            f"荧光强度 {total.get('mean_intensity', 0)}。"
+            f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
+            f"荧光强度 {self.format_int_for_display(total.get('mean_intensity', 0))}。"
         )
 
     def cancel_after_current(self):

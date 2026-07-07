@@ -772,8 +772,8 @@ class CaseDetailWindow(QWidget):
                     analysis.get("total_fields", 0),
                     analysis.get("total_sperm_count", 0),
                     analysis.get("positive_count", 0),
-                    self.fmt(analysis.get("expression_rate", 0)),
-                    self.fmt(analysis.get("mean_intensity", 0)),
+                    self.fmt_rate(analysis.get("expression_rate", 0)),
+                    self.fmt_int(analysis.get("mean_intensity", 0)),
                     analysis.get("created_at", ""),
                     analysis.get("output_folder", ""),
                 ]
@@ -944,8 +944,15 @@ class CaseDetailWindow(QWidget):
         return str(value)
 
     @staticmethod
-    def fmt(value):
+    def fmt_int(value):
         try:
-            return f"{float(value):.2f}"
+            return str(int(round(float(value))))
         except Exception:
             return str(value)
+
+    @staticmethod
+    def fmt_rate(value):
+        try:
+            return f"{float(value):.2f}%"
+        except Exception:
+            return f"{value}%" if value not in [None, ""] else "0.00%"

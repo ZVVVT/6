@@ -1326,7 +1326,7 @@ class AnalysisWindow(QWidget):
             total_fields = existing_result.get("total_fields", "")
             total_sperm_count = existing_result.get("total_sperm_count", "")
             positive_count = existing_result.get("positive_count", "")
-            expression_rate = existing_result.get("expression_rate", "")
+            expression_rate = self.format_rate_for_display(existing_result.get("expression_rate", 0))
 
             reply = QMessageBox.question(
                 self,
@@ -1336,7 +1336,7 @@ class AnalysisWindow(QWidget):
                 f"视野数：{total_fields}\n"
                 f"精子总数：{total_sperm_count}\n"
                 f"共定位数：{positive_count}\n"
-                f"标定率：{expression_rate}%\n\n"
+                f"标定率：{expression_rate}\n\n"
                 "继续运行会用新的分析结果替换该蛋白旧结果。\n"
                 "不会影响当前病例下其他蛋白的结果。\n\n"
                 "是否继续重新分析？",
@@ -1423,6 +1423,20 @@ class AnalysisWindow(QWidget):
     # 入库
     # -------------------------
 
+    @staticmethod
+    def format_int_for_display(value):
+        try:
+            return str(int(round(float(value))))
+        except Exception:
+            return str(value)
+
+    @staticmethod
+    def format_rate_for_display(value):
+        try:
+            return f"{float(value):.2f}%"
+        except Exception:
+            return f"{value}%" if value not in [None, ""] else "0.00%"
+
     def save_analysis_result_to_database(self):
         if not self.current_case:
             return False, "当前病例为空。"
@@ -1489,8 +1503,8 @@ class AnalysisWindow(QWidget):
             f"视野数 {total.get('field_count', 0)}，"
             f"精子总数 {total.get('sperm_count', 0)}，"
             f"共定位数 {total.get('positive_count', 0)}，"
-            f"标定率 {total.get('expression_rate', 0)}%，"
-            f"荧光强度 {total.get('mean_intensity', 0)}。"
+            f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
+            f"荧光强度 {self.format_int_for_display(total.get('mean_intensity', 0))}。"
         )
 
     # -------------------------
