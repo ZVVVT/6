@@ -71,6 +71,48 @@ class PipelineParameterManager:
 
     DEFAULT_PARAMS = {
         "Head": {
+            # 默认值来自本次上传的 pipeline_head.cppipe
+            "red_diameter": "35",
+            "red_flow_threshold": "0.4",
+            "red_cellprob_threshold": "0",
+            "red_min_size": "30",
+            "red_formfactor_min": "0.4",
+            "red_equivalent_diameter_max": "75",
+            "green_expand_pixels": "1",
+            "green_intensity_min": "10",
+        },
+        "Tail": {
+            # 默认值来自本次上传的 pipeline_tail.cppipe
+            "green_diameter": "50",
+            "green_flow_threshold": "0.4",
+            "green_distance_threshold": "0",
+            "green_min_size": "10",
+            "green_eccentricity_min": "0.8",
+            "green_intensity_min": "5",
+            "red_diameter": "35",
+            "red_flow_threshold": "0.4",
+            "red_cellprob_threshold": "0",
+            "red_min_size": "30",
+            "red_formfactor_min": "0.2",
+            "red_equivalent_diameter_max": "75",
+            "red_search_radius": "30",
+            "colocalized_child_count_min": "1",
+        },
+        "QC": {
+            "bead_diameter": "65",
+            "bead_flow_threshold": "0.5",
+            "bead_cellprob_threshold": "0",
+            "bead_min_size": "10",
+            "bead_formfactor_min": "0.7",
+        },
+    }
+
+    PARAM_VERSION = "20260707_uploaded_head_tail_cppipe_v1"
+
+    # 用于把旧 pipeline_params.ini 自动迁移到本次上传管道的默认值。
+    # 如果用户参数刚好还是旧默认值，则更新为新默认；如果用户已改成其他值，则保留。
+    PREVIOUS_DEFAULT_PARAMS = {
+        "Head": {
             "red_diameter": "65",
             "red_flow_threshold": "0.5",
             "red_cellprob_threshold": "0",
@@ -95,13 +137,6 @@ class PipelineParameterManager:
             "red_search_radius": "50",
             "colocalized_child_count_min": "1",
         },
-        "QC": {
-            "bead_diameter": "65",
-            "bead_flow_threshold": "0.5",
-            "bead_cellprob_threshold": "0",
-            "bead_min_size": "10",
-            "bead_formfactor_min": "0.7",
-        },
     }
 
     # 每个参数精确定位：section -> [(module_num, setting_name, param_key, measurement_name), ...]
@@ -110,29 +145,40 @@ class PipelineParameterManager:
     # 如果只按“最大值”替换，可能会误改 FormFactor 的最大值。
     PARAM_RULES: Dict[str, List[Tuple[int, str, str, str]]] = {
         "Head": [
+            # pipeline_head.cppipe：红色头部识别 RunCellpose，module_num:7
             (7, "预期物体直径", "red_diameter", ""),
             (7, "流阈值", "red_flow_threshold", ""),
             (7, "细胞概率阈值", "red_cellprob_threshold", ""),
             (7, "最小尺寸", "red_min_size", ""),
+            # pipeline_head.cppipe：红色头部过滤 FilterObjects，module_num:9
             (9, "最小值", "red_formfactor_min", "AreaShape_FormFactor"),
             (9, "最大值", "red_equivalent_diameter_max", "AreaShape_EquivalentDiameter"),
+            # pipeline_head.cppipe：绿色匹配区域 ExpandOrShrinkObjects，module_num:11
             (11, "扩张或收缩的像素数", "green_expand_pixels", ""),
-            (14, "最小值", "green_intensity_min", ""),
+            # pipeline_head.cppipe：共定位绿色强度过滤 FilterObjects，module_num:15
+            (15, "最小值", "green_intensity_min", "Math_G_objects_MeanIntensity"),
         ],
         "Tail": [
+            # pipeline_tail.cppipe：绿色尾部识别 RunOmnipose，module_num:7
             (7, "Expected object diameter", "green_diameter", ""),
             (7, "Flow threshold", "green_flow_threshold", ""),
             (7, "Distance field threshold", "green_distance_threshold", ""),
             (7, "Minimum size", "green_min_size", ""),
-            (9, "最小值", "green_eccentricity_min", "AreaShape_Eccentricity"),
-            (11, "预期物体直径", "red_diameter", ""),
-            (11, "流阈值", "red_flow_threshold", ""),
-            (11, "细胞概率阈值", "red_cellprob_threshold", ""),
-            (11, "最小尺寸", "red_min_size", ""),
-            (13, "最小值", "red_formfactor_min", "AreaShape_FormFactor"),
-            (13, "最大值", "red_equivalent_diameter_max", "AreaShape_EquivalentDiameter"),
-            (15, "扩张或收缩的像素数", "red_search_radius", ""),
-            (17, "最小值", "colocalized_child_count_min", ""),
+            # pipeline_tail.cppipe：绿色尾部过滤 FilterObjects，module_num:11
+            (11, "最小值", "green_eccentricity_min", "AreaShape_Eccentricity"),
+            (11, "最小值", "green_intensity_min", "Math_G_objects_Run_MeanIntensity"),
+            # pipeline_tail.cppipe：红色头部识别 RunCellpose，module_num:15
+            (15, "预期物体直径", "red_diameter", ""),
+            (15, "流阈值", "red_flow_threshold", ""),
+            (15, "细胞概率阈值", "red_cellprob_threshold", ""),
+            (15, "最小尺寸", "red_min_size", ""),
+            # pipeline_tail.cppipe：红色头部过滤 FilterObjects，module_num:17
+            (17, "最小值", "red_formfactor_min", "AreaShape_FormFactor"),
+            (17, "最大值", "red_equivalent_diameter_max", "AreaShape_EquivalentDiameter"),
+            # pipeline_tail.cppipe：红色头部搜索区 ExpandOrShrinkObjects，module_num:19
+            (19, "扩张或收缩的像素数", "red_search_radius", ""),
+            # pipeline_tail.cppipe：共定位红色精子过滤 FilterObjects，module_num:21
+            (21, "最小值", "colocalized_child_count_min", "Children_G_objects_Count"),
         ],
         "QC": [
             (6, "预期物体直径", "bead_diameter", ""),
@@ -142,6 +188,9 @@ class PipelineParameterManager:
             (8, "最小值", "bead_formfactor_min", "AreaShape_FormFactor"),
         ],
     }
+
+    REQUIRED_SECTIONS = ["Head", "Tail"]
+    OPTIONAL_SECTIONS = ["QC"]
 
     def __init__(self, project_root: Optional[Path] = None, param_file: Optional[Path] = None):
         self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
@@ -167,6 +216,14 @@ class PipelineParameterManager:
 
     def ensure_default_params(self) -> None:
         changed = False
+
+        if not self.config.has_section("Meta"):
+            self.config.add_section("Meta")
+            changed = True
+
+        current_version = self.config.get("Meta", "pipeline_param_version", fallback="")
+        need_migrate = current_version != self.PARAM_VERSION
+
         for section, values in self.DEFAULT_PARAMS.items():
             if not self.config.has_section(section):
                 self.config.add_section(section)
@@ -175,11 +232,29 @@ class PipelineParameterManager:
                 if not self.config.has_option(section, key):
                     self.config.set(section, key, str(value))
                     changed = True
+                    continue
+
+                # 首次升级到本次上传的新头部/尾部管道时，自动把旧默认值换成新默认值。
+                # 用户改过的非旧默认值会保留，避免覆盖现场调参结果。
+                if need_migrate:
+                    old_defaults = self.PREVIOUS_DEFAULT_PARAMS.get(section, {})
+                    old_default = old_defaults.get(key)
+                    current_value = self.config.get(section, key)
+                    if old_default is not None and self.values_equal(current_value, old_default):
+                        self.config.set(section, key, str(value))
+                        changed = True
+
+        if need_migrate:
+            self.config.set("Meta", "pipeline_param_version", self.PARAM_VERSION)
+            changed = True
+
         if changed:
             self.save()
 
     def reset_defaults(self) -> None:
         self.config = configparser.ConfigParser()
+        self.config.add_section("Meta")
+        self.config.set("Meta", "pipeline_param_version", self.PARAM_VERSION)
         for section, values in self.DEFAULT_PARAMS.items():
             self.config.add_section(section)
             for key, value in values.items():
@@ -220,22 +295,49 @@ class PipelineParameterManager:
     # 模板与生成
     # ------------------------------------------------------------------
 
+    def get_active_sections(self) -> List[str]:
+        """返回当前项目需要处理的管道类型。
+
+        头部/尾部是本软件蛋白分析的必需管道；质控管道是可选项。
+        这样项目里只有 pipeline_head.cppipe 和 pipeline_tail.cppipe 时，
+        管道参数保存、检查、生成不会被缺失的 pipeline_qc.cppipe 阻断。
+        """
+        sections = list(self.REQUIRED_SECTIONS)
+        for section in self.OPTIONAL_SECTIONS:
+            target = self.TARGETS.get(section)
+            if not target:
+                continue
+            template_path = self.templates_dir / target.template_name
+            output_path = self.pipelines_dir / target.output_name
+            if template_path.exists() or output_path.exists():
+                sections.append(section)
+        return sections
+
     def ensure_templates(self) -> List[str]:
-        """确保 templates 目录存在。首次使用时从当前 pipelines/*.cppipe 复制母版。"""
+        """确保 templates 目录存在。首次使用时从当前 pipelines/*.cppipe 复制母版。
+
+        头部和尾部管道必须存在；质控管道可选。
+        如果更换了新的头部/尾部管道，建议同时把新管道复制到
+        pipelines/templates 目录作为母版，否则“保存并应用参数”仍会基于旧母版生成。
+        """
         self.pipelines_dir.mkdir(parents=True, exist_ok=True)
         self.templates_dir.mkdir(parents=True, exist_ok=True)
 
         messages: List[str] = []
 
-        for target in self.TARGETS.values():
+        for section, target in self.TARGETS.items():
             template_path = self.templates_dir / target.template_name
             output_path = self.pipelines_dir / target.output_name
+            required = section in self.REQUIRED_SECTIONS
 
             if template_path.exists():
                 continue
 
             if not output_path.exists():
-                messages.append(f"× 缺少 {target.title}，无法创建模板：{output_path}")
+                if required:
+                    messages.append(f"× 缺少 {target.title}，无法创建模板：{output_path}")
+                else:
+                    messages.append(f"○ 未配置{target.title}，已跳过：{output_path}")
                 continue
 
             shutil.copy2(output_path, template_path)
@@ -258,7 +360,9 @@ class PipelineParameterManager:
         rendered: Dict[str, str] = {}
 
         # 先全部渲染，确保无错误后再覆盖，避免部分成功、部分失败。
-        for section in ["Head", "Tail", "QC"]:
+        active_sections = self.get_active_sections()
+
+        for section in active_sections:
             text, section_records = self.render_pipeline(section)
             rendered[section] = text
             records.extend(section_records)
@@ -267,7 +371,7 @@ class PipelineParameterManager:
         if backup_dir:
             messages.append(f"√ 已备份当前管道：{backup_dir}")
 
-        for section in ["Head", "Tail", "QC"]:
+        for section in active_sections:
             target = self.TARGETS[section]
             output_path = self.pipelines_dir / target.output_name
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,7 +444,7 @@ class PipelineParameterManager:
         return text, records
 
     def backup_existing_pipelines(self, sections: Optional[List[str]] = None) -> Optional[Path]:
-        sections = sections or ["Head", "Tail", "QC"]
+        sections = sections or self.get_active_sections()
 
         existing = []
         for section in sections:
@@ -389,7 +493,7 @@ class PipelineParameterManager:
             "QC": "质控微球管道",
         }
 
-        for section in ["Head", "Tail", "QC"]:
+        for section in self.get_active_sections():
             lines.append(section_titles.get(section, section))
             lines.append("-" * 72)
             section_records = [r for r in records if r.section == section]
@@ -549,7 +653,7 @@ class PipelineParameterManager:
 
         all_ok = True
 
-        for section in ["Head", "Tail", "QC"]:
+        for section in self.get_active_sections():
             target = self.TARGETS[section]
             template_path = self.templates_dir / target.template_name
 
@@ -651,7 +755,7 @@ class PipelineParameterManager:
 
         all_ok = True
 
-        for section in ["Head", "Tail", "QC"]:
+        for section in self.get_active_sections():
             target = self.TARGETS[section]
             output_path = self.pipelines_dir / target.output_name
 
@@ -760,7 +864,7 @@ class PipelineParameterManager:
 
         restored_count = 0
 
-        for section in ["Head", "Tail", "QC"]:
+        for section in self.get_active_sections():
             target = self.TARGETS[section]
             backup_file = backup_dir / target.output_name
             output_file = self.pipelines_dir / target.output_name

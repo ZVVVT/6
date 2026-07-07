@@ -388,7 +388,7 @@ class SettingsWindow(QWidget):
                 "red_cellprob_threshold": "红色头部识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
                 "red_min_size": "过滤过小的红色对象，减少噪声和碎点。值过大可能漏掉真实的小头部信号。",
                 "red_formfactor_min": "对应 FormFactor，用于保留较圆的红色头部对象。越接近 1 越偏向圆形；值过高可能漏掉形态略不规则的头部。",
-                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色对象。默认 70；值越小过滤越严格，过小可能漏掉真实头部。",
+                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色对象。默认 75；值越小过滤越严格，过小可能漏掉真实头部。",
                 "green_expand_pixels": "用于扩大红色头部匹配范围，帮助判断绿色信号与红色头部是否共定位。值过小可能漏配，值过大可能误配相邻对象。",
                 "green_intensity_min": "用于过滤共定位对象中的弱绿色信号。值越高越严格，过高可能漏掉弱阳性。"
             },
@@ -398,12 +398,13 @@ class SettingsWindow(QWidget):
                 "green_distance_threshold": "绿色尾部识别的概率/距离场阈值。范围建议 -6 到 6；数值越低越容易识别弱尾部，数值越高越严格。",
                 "green_min_size": "过滤过小的绿色尾部对象，减少碎点和噪声。值过大可能漏掉断续尾部。",
                 "green_eccentricity_min": "对应 Eccentricity，用于保留细长的绿色尾部对象。越接近 1 越偏向细长结构；值过高可能漏掉弯曲或断续尾部。",
+                "green_intensity_min": "对应 Math_G_objects_Run_MeanIntensity，用于过滤绿色尾部弱信号。当前默认值来自尾部管道，为 5。数值越高越严格，过高可能漏掉弱阳性尾部。",
                 "red_diameter": "用于控制红色头部识别的预期对象大小。尾部蛋白管道中仍需要红色头部作为定位和分母依据。",
                 "red_flow_threshold": "红色头部识别的分割严格程度。一般保持 0.4 左右；数值过高可能漏检，过低可能增加误检。",
                 "red_cellprob_threshold": "红色头部识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
                 "red_min_size": "过滤过小的红色头部对象，减少噪声和碎点。值过大可能漏掉真实的小头部信号。",
                 "red_formfactor_min": "对应 FormFactor，用于保留较圆的红色头部对象。越接近 1 越偏向圆形；值过高可能漏掉形态略不规则的头部。",
-                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色头部对象。默认 70；值越小过滤越严格，过小可能漏掉真实头部。",
+                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色头部对象。默认 75；值越小过滤越严格，过小可能漏掉真实头部。",
                 "red_search_radius": "以红色头部为中心向外搜索绿色尾部的范围。值过小可能找不到尾部，值过大可能匹配到邻近精子的尾部。",
                 "colocalized_child_count_min": "判断共定位时要求匹配到的最少绿色对象数量。通常为 1，值提高会更严格。"
             },
@@ -487,6 +488,7 @@ class SettingsWindow(QWidget):
             "green_distance_threshold": self._make_double_spin(-6, 6, 0.1, 2),
             "green_min_size": self._make_double_spin(0, 100000, 1, 0),
             "green_eccentricity_min": self._make_double_spin(0, 1, 0.01, 2),
+            "green_intensity_min": self._make_double_spin(0, 100000000, 1, 2),
             "red_diameter": self._make_double_spin(1, 500, 1, 0),
             "red_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
             "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
@@ -502,6 +504,7 @@ class SettingsWindow(QWidget):
         self.add_pipeline_param_row(form, "绿色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["green_distance_threshold"], self.pipeline_param_tooltips["Tail"]["green_distance_threshold"])
         self.add_pipeline_param_row(form, "绿色最小尺寸：", self.pipeline_param_widgets["Tail"]["green_min_size"], self.pipeline_param_tooltips["Tail"]["green_min_size"])
         self.add_pipeline_param_row(form, "绿色过滤细长度下限(0-1)：", self.pipeline_param_widgets["Tail"]["green_eccentricity_min"], self.pipeline_param_tooltips["Tail"]["green_eccentricity_min"])
+        self.add_pipeline_param_row(form, "绿色过滤强度下限：", self.pipeline_param_widgets["Tail"]["green_intensity_min"], self.pipeline_param_tooltips["Tail"]["green_intensity_min"])
         self.add_pipeline_param_row(form, "红色预期直径：", self.pipeline_param_widgets["Tail"]["red_diameter"], self.pipeline_param_tooltips["Tail"]["red_diameter"])
         self.add_pipeline_param_row(form, "红色流阈值(0.4)：", self.pipeline_param_widgets["Tail"]["red_flow_threshold"], self.pipeline_param_tooltips["Tail"]["red_flow_threshold"])
         self.add_pipeline_param_row(form, "红色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["red_cellprob_threshold"], self.pipeline_param_tooltips["Tail"]["red_cellprob_threshold"])
@@ -597,7 +600,7 @@ class SettingsWindow(QWidget):
             "pipeline_params.ini\n"
             "pipelines\\pipeline_head.cppipe\n"
             "pipelines\\pipeline_tail.cppipe\n"
-            "pipelines\\pipeline_qc.cppipe\n\n"
+            "如项目中存在 pipeline_qc.cppipe，也会一并处理。\n\n"
             "生成前会自动备份当前管道到 pipelines\\backups。\n\n"
             "保存并应用后，后续蛋白分析、批量分析和质控测试会直接使用新管道。\n\n"
             "是否继续？",
@@ -633,7 +636,7 @@ class SettingsWindow(QWidget):
             "pipeline_params.ini\n"
             "pipelines\\pipeline_head.cppipe\n"
             "pipelines\\pipeline_tail.cppipe\n"
-            "pipelines\\pipeline_qc.cppipe\n\n"
+            "如项目中存在 pipeline_qc.cppipe，也会一并处理。\n\n"
             "生成前会自动备份当前管道到 pipelines\\backups。",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,

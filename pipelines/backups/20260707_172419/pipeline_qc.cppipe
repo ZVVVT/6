@@ -100,7 +100,7 @@ RunCellpose:[module_num:6|svn_version:'Unknown'|variable_revision_number:6|show_
     概率图像名称:Probabilities
     预训练模型文件位置:Elsewhere...|
     预训练模型文件名:cyto_0
-    流阈值:0.5
+    流阈值:0.4
     细胞概率阈值:0
     每个工作线程的 GPU 内存占用比例:0.8
     拼接阈值:0.0

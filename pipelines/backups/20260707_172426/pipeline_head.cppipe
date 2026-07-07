@@ -239,7 +239,7 @@ FilterObjects(过滤对象):[module_num:15|svn_version:'Unknown'|variable_revisi
     为被筛选移除的对象命名:RemovedObjects
     选择用于筛选的测量值:Math_G_objects_MeanIntensity
     是否使用最小测量值进行筛选？:Yes
-    最小值:5
+    最小值:10
     是否使用最大测量值进行筛选？:No
     最大值:1.0
     允许模糊特征匹配？:No

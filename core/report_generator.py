@@ -281,7 +281,8 @@ class ReportGenerator:
 
         x = col1 + 20 * mm
         for txt, checked in options:
-            self._draw_checkbox(c, x, y + 2 * mm, checked)
+            # 与文字基线对齐绘制，避免勾选符号偏出方框。
+            self._draw_checkbox(c, x, y, checked)
             c.drawString(x + 6 * mm, y, txt)
             x += 30 * mm
 
@@ -447,7 +448,23 @@ class ReportGenerator:
         collect_time = time_only(case_data.get("collect_time", ""))
         receive_time = time_only(case_data.get("receive_time", ""))
 
-        return {
+        conclusion_fields = (
+            ("conclusion_normal", "结论_正常"),
+            ("conclusion_oligo", "结论_少精子症"),
+            ("conclusion_astheno", "结论_弱精子症"),
+            ("conclusion_oligoastheno", "结论_少弱精子症"),
+            ("conclusion_necro", "结论_坏死精子症"),
+        )
+        selected_conclusion_key = None
+        for field_name, meta_key in conclusion_fields:
+            if bool_value(field_name):
+                selected_conclusion_key = meta_key
+                break
+
+        # 历史数据可能存在多个结论同时为 1。报告层也强制单选，避免打印出多个勾选。
+        conclusion_meta = {meta_key: (meta_key == selected_conclusion_key) for _, meta_key in conclusion_fields}
+
+        meta = {
             "姓名": case_data.get("patient_name", ""),
             "样本号": case_data.get("sample_no", ""),
             "病历号": case_data.get("case_no", ""),
@@ -470,12 +487,9 @@ class ReportGenerator:
             "精子总数": case_data.get("sperm_total", ""),
             "前向运动": case_data.get("forward_motility", ""),
             "总活力": case_data.get("total_motility", ""),
-            "结论_正常": bool_value("conclusion_normal"),
-            "结论_少精子症": bool_value("conclusion_oligo"),
-            "结论_弱精子症": bool_value("conclusion_astheno"),
-            "结论_少弱精子症": bool_value("conclusion_oligoastheno"),
-            "结论_坏死精子症": bool_value("conclusion_necro"),
         }
+        meta.update(conclusion_meta)
+        return meta
 
     def _build_marker_slots(self, analysis_rows: list) -> list:
         """
@@ -793,24 +807,31 @@ class ReportGenerator:
         checked: bool,
         size=3.6 * mm,
         box_line_width: float = 0.6,
-        tick_line_width: float = 0.8,
+        tick_line_width: float = 1.0,
     ):
+        """绘制报告用方形勾选框。
+
+        参数 y 使用同一行文字的 baseline。方框和对号都基于 box_y 计算，
+        避免因为外部传入 y 偏移导致对号跑到方框外。
+        """
+        box_y = y - size * 0.15
+
         c.setLineWidth(box_line_width)
-        c.rect(x, y - size * 0.75, size, size, stroke=1, fill=0)
+        c.rect(x, box_y, size, size, stroke=1, fill=0)
 
         if checked:
             c.setLineWidth(tick_line_width)
             c.line(
                 x + size * 0.18,
-                y - size * 0.45,
-                x + size * 0.42,
-                y - size * 0.70,
+                box_y + size * 0.52,
+                x + size * 0.40,
+                box_y + size * 0.30,
             )
             c.line(
-                x + size * 0.42,
-                y - size * 0.70,
+                x + size * 0.40,
+                box_y + size * 0.30,
                 x + size * 0.82,
-                y - size * 0.20,
+                box_y + size * 0.76,
             )
 
         c.setLineWidth(1)

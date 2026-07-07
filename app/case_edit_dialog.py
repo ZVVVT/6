@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMessageBox,
     QComboBox,
-    QCheckBox,
+    QRadioButton,
+    QButtonGroup,
     QGroupBox,
     QLabel,
     QWidget,
@@ -196,17 +197,29 @@ class CaseEditDialog(QDialog):
         conclusion_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         conclusion_layout = QHBoxLayout(conclusion_group)
 
-        self.conclusion_normal_check = QCheckBox("正常")
-        self.conclusion_oligo_check = QCheckBox("少精子症")
-        self.conclusion_astheno_check = QCheckBox("弱精子症")
-        self.conclusion_oligoastheno_check = QCheckBox("少弱精子症")
-        self.conclusion_necro_check = QCheckBox("坏死精子症")
+        # 结论为单选。数据库仍沿用原来的 5 个布尔字段，保存时只允许其中一个为 1。
+        self.conclusion_normal_radio = QRadioButton("正常")
+        self.conclusion_oligo_radio = QRadioButton("少精子症")
+        self.conclusion_astheno_radio = QRadioButton("弱精子症")
+        self.conclusion_oligoastheno_radio = QRadioButton("少弱精子症")
+        self.conclusion_necro_radio = QRadioButton("坏死精子症")
 
-        conclusion_layout.addWidget(self.conclusion_normal_check)
-        conclusion_layout.addWidget(self.conclusion_oligo_check)
-        conclusion_layout.addWidget(self.conclusion_astheno_check)
-        conclusion_layout.addWidget(self.conclusion_oligoastheno_check)
-        conclusion_layout.addWidget(self.conclusion_necro_check)
+        self.conclusion_button_group = QButtonGroup(self)
+        self.conclusion_button_group.setExclusive(True)
+        for button in (
+            self.conclusion_normal_radio,
+            self.conclusion_oligo_radio,
+            self.conclusion_astheno_radio,
+            self.conclusion_oligoastheno_radio,
+            self.conclusion_necro_radio,
+        ):
+            # 只给“结论”这一组单选项加对象名，避免影响页面其他 QRadioButton。
+            button.setObjectName("ConclusionRadio")
+            button.setMinimumHeight(30)
+            button.setMinimumWidth(92)
+            self.conclusion_button_group.addButton(button)
+            conclusion_layout.addWidget(button)
+
         conclusion_layout.addStretch()
 
         main_layout.addWidget(conclusion_group)
@@ -416,24 +429,57 @@ class CaseEditDialog(QDialog):
             QTextEdit:focus {{
                 border: 1px solid #2f6fed;
             }}
-            QCheckBox {{
+            QRadioButton {{
                 color: #1f2937;
                 spacing: 6px;
                 background: transparent;
             }}
-            QCheckBox::indicator {{
+            QRadioButton::indicator {{
                 width: 14px;
                 height: 14px;
                 border: 1px solid #cfd8e3;
-                border-radius: 3px;
+                border-radius: 7px;
                 background-color: #ffffff;
             }}
-            QCheckBox::indicator:hover {{
+            QRadioButton::indicator:hover {{
                 border: 1px solid #2f6fed;
             }}
-            QCheckBox::indicator:checked {{
-                background-color: #2f6fed;
+            QRadioButton::indicator:checked {{
+                border: 4px solid #2f6fed;
+                background-color: #ffffff;
+            }}
+
+            /* 结论区域：仍然是 QRadioButton 单选逻辑，但显示成更清晰的胶囊按钮。
+               注意这里所有大括号都保持 f-string 兼容写法，避免启动时报错。 */
+            QRadioButton#ConclusionRadio {{
+                min-height: 28px;
+                min-width: 86px;
+                padding: 4px 14px;
+                border: 1px solid #cfd8e3;
+                border-radius: 14px;
+                background-color: #ffffff;
+                color: #344054;
+                font-weight: normal;
+                spacing: 0px;
+            }}
+            QRadioButton#ConclusionRadio:hover {{
+                border: 1px solid #9bbcf7;
+                background-color: #f5f9ff;
+                color: #1f4fd7;
+            }}
+            QRadioButton#ConclusionRadio:checked {{
                 border: 1px solid #2f6fed;
+                background-color: #eaf2ff;
+                color: #1f4fd7;
+                font-weight: bold;
+            }}
+            QRadioButton#ConclusionRadio::indicator {{
+                width: 0px;
+                height: 0px;
+                margin: 0px;
+                padding: 0px;
+                border: none;
+                image: none;
             }}
             QPushButton {{
                 min-width: 78px;
@@ -555,11 +601,7 @@ class CaseEditDialog(QDialog):
         self.forward_motility_edit.setText(str(self.case_data.get("forward_motility", "")))
         self.total_motility_edit.setText(str(self.case_data.get("total_motility", "")))
 
-        self.conclusion_normal_check.setChecked(self.to_bool(self.case_data.get("conclusion_normal", 0)))
-        self.conclusion_oligo_check.setChecked(self.to_bool(self.case_data.get("conclusion_oligo", 0)))
-        self.conclusion_astheno_check.setChecked(self.to_bool(self.case_data.get("conclusion_astheno", 0)))
-        self.conclusion_oligoastheno_check.setChecked(self.to_bool(self.case_data.get("conclusion_oligoastheno", 0)))
-        self.conclusion_necro_check.setChecked(self.to_bool(self.case_data.get("conclusion_necro", 0)))
+        self.load_conclusion_radio()
 
         self.set_combo_text(self.checker_combo, self.case_data.get("checker", ""))
         self.set_combo_text(self.reviewer_combo, self.case_data.get("reviewer", ""))
@@ -567,6 +609,31 @@ class CaseEditDialog(QDialog):
         self.set_combo_text(self.department_combo, self.case_data.get("department", ""))
 
         self.remark_edit.setPlainText(str(self.case_data.get("remark", "")))
+
+    def load_conclusion_radio(self):
+        """按数据库字段加载结论。
+
+        历史数据可能存在多个结论同时为 1 的情况。这里按固定优先级只勾选第一个，
+        后续保存时会自动纠正为单选状态。
+        """
+        conclusion_items = (
+            ("conclusion_normal", self.conclusion_normal_radio),
+            ("conclusion_oligo", self.conclusion_oligo_radio),
+            ("conclusion_astheno", self.conclusion_astheno_radio),
+            ("conclusion_oligoastheno", self.conclusion_oligoastheno_radio),
+            ("conclusion_necro", self.conclusion_necro_radio),
+        )
+
+        selected_button = None
+        for field_name, button in conclusion_items:
+            if self.to_bool(self.case_data.get(field_name, 0)):
+                selected_button = button
+                break
+
+        if selected_button is None:
+            selected_button = self.conclusion_normal_radio
+
+        selected_button.setChecked(True)
 
     def set_combo_text(self, combo: QComboBox, value):
         value = "" if value is None else str(value)
@@ -644,11 +711,11 @@ class CaseEditDialog(QDialog):
             "doctor": self.doctor_combo.currentText().strip(),
             "department": self.department_combo.currentText().strip(),
 
-            "conclusion_normal": 1 if self.conclusion_normal_check.isChecked() else 0,
-            "conclusion_oligo": 1 if self.conclusion_oligo_check.isChecked() else 0,
-            "conclusion_astheno": 1 if self.conclusion_astheno_check.isChecked() else 0,
-            "conclusion_oligoastheno": 1 if self.conclusion_oligoastheno_check.isChecked() else 0,
-            "conclusion_necro": 1 if self.conclusion_necro_check.isChecked() else 0,
+            "conclusion_normal": 1 if self.conclusion_normal_radio.isChecked() else 0,
+            "conclusion_oligo": 1 if self.conclusion_oligo_radio.isChecked() else 0,
+            "conclusion_astheno": 1 if self.conclusion_astheno_radio.isChecked() else 0,
+            "conclusion_oligoastheno": 1 if self.conclusion_oligoastheno_radio.isChecked() else 0,
+            "conclusion_necro": 1 if self.conclusion_necro_radio.isChecked() else 0,
 
             "remark": self.remark_edit.toPlainText().strip(),
         }
