@@ -287,30 +287,15 @@ class SettingsWindow(QWidget):
         self.tail_pipeline_edit = QLineEdit()
         self.plugins_directory_edit = QLineEdit()
 
-        # 交付版运行环境仅显示 config.ini 中的配置，不允许在界面直接修改，避免误操作。
-        runtime_locked_tip = "运行环境由 config.ini 管理，当前页面仅显示，不允许直接修改。"
-        self.runtime_locked_edits = [
-            self.source_project_dir_edit,
-            self.python_exe_edit,
-            self.module_name_edit,
-            self.head_pipeline_edit,
-            self.tail_pipeline_edit,
-            self.plugins_directory_edit,
-        ]
-        for edit in self.runtime_locked_edits:
-            edit.setReadOnly(True)
-            edit.setToolTip(runtime_locked_tip)
-
-        form.addRow("目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir, enabled=False))
-        form.addRow("解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe, enabled=False))
+        form.addRow("目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
+        form.addRow("解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
         form.addRow("模块名称：", self.module_name_edit)
-        form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline, enabled=False))
-        form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline, enabled=False))
-        form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory, enabled=False))
+        form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
+        form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
+        form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
 
         hint = QLabel(
-            "说明：运行环境参数仅从 config.ini 读取并显示，界面已锁定以避免误操作。"
-            "如需临时调整，请直接修改 config.ini 后点击“重新加载”。"
+            "说明："
             "每次分析日志会自动写入对应蛋白输出目录的 run_mvimageid.log。"
         )
         hint.setWordWrap(True)
@@ -921,7 +906,7 @@ class SettingsWindow(QWidget):
         form.addRow(label, widget)
 
 
-    def _with_button(self, line_edit: QLineEdit, button_text: str, callback, enabled: bool = True):
+    def _with_button(self, line_edit: QLineEdit, button_text: str, callback):
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -930,9 +915,7 @@ class SettingsWindow(QWidget):
         button = QPushButton(button_text)
         button.setObjectName("SettingsSmallButton")
         button.setFixedSize(64, 32)
-        button.setEnabled(enabled)
-        if enabled:
-            button.clicked.connect(callback)
+        button.clicked.connect(callback)
 
         layout.addWidget(line_edit, 1)
         layout.addWidget(button)
@@ -1085,11 +1068,6 @@ class SettingsWindow(QWidget):
             QLineEdit {
                 min-height: 30px;
                 padding: 0px 9px;
-            }
-
-            QLineEdit:read-only {
-                background-color: #F8FAFD;
-                color: #4B5563;
             }
 
             QTextEdit {
