@@ -1360,11 +1360,6 @@ class AnalysisWindow(QWidget):
         )
         self.analysis_worker.log_signal.connect(self.append_log)
         self.analysis_worker.finished_signal.connect(self.on_analysis_finished)
-        # 注意：finished_signal 是自定义业务信号，在线程 run() 返回前发出。
-        # 不能在 on_analysis_finished 里立刻把 self.analysis_worker 置空，
-        # 否则可能触发 “QThread: Destroyed while thread is still running”。
-        # 等 Qt 自带 finished 信号发出后，再统一释放线程对象。
-        self.analysis_worker.finished.connect(self.on_analysis_thread_finished)
         self.analysis_worker.start()
 
     def imported_images_match_current_protein(self, image_items, protein_key: str):
@@ -1377,6 +1372,7 @@ class AnalysisWindow(QWidget):
 
     def on_analysis_finished(self, success: bool, elapsed: float, result: object, error_message: str):
         self.set_running_state(False)
+        self.analysis_worker = None
 
         result = result or {}
 
@@ -1422,21 +1418,6 @@ class AnalysisWindow(QWidget):
                 detail=message,
                 level="error",
             )
-
-
-    def on_analysis_thread_finished(self):
-        """在线程真正结束后释放 QThread 对象。
-
-        不能在 SingleProteinAnalysisWorker.finished_signal 的槽函数中直接
-        self.analysis_worker = None，因为 finished_signal 是在 run() 末尾手动 emit 的，
-        此时 Qt 线程对象可能还没有完全退出。过早销毁会导致：
-        QThread: Destroyed while thread is still running。
-        """
-        worker = self.sender()
-        if worker is not None:
-            worker.deleteLater()
-        if self.analysis_worker is worker:
-            self.analysis_worker = None
 
     # -------------------------
     # 入库
@@ -1529,13 +1510,6 @@ class AnalysisWindow(QWidget):
     # -------------------------
     # 通用
     # -------------------------
-
-    def closeEvent(self, event):
-        if self.analysis_worker and self.analysis_worker.isRunning():
-            QMessageBox.information(self, "提示", "分析正在运行，暂时不能关闭窗口。")
-            event.ignore()
-            return
-        super().closeEvent(event)
 
     def set_running_state(self, running: bool):
         self.btn_select_folder.setEnabled(not running)
