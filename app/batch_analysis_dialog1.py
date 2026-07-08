@@ -172,9 +172,8 @@ class FolderAliasStore:
 
     def __init__(self, config_path: Optional[Path] = None):
         if config_path is None:
-            # 统一复用 ConfigManager 的配置路径解析逻辑：
-            # 源码运行读项目根目录 config.ini，打包后读 exe 同级 config.ini。
-            config_path = ConfigManager().config_path
+            # app/batch_analysis_dialog.py -> 项目根目录/config.ini
+            config_path = Path(__file__).resolve().parents[1] / "config.ini"
         self.config_path = Path(config_path)
 
     @staticmethod
@@ -697,13 +696,11 @@ class BatchAnalysisDialog(QDialog):
         super().__init__(parent)
         self.database = database
         self.case_data = case_data
-        # 批量分析必须和单蛋白分析读取同一个 config.ini。
-        # 不能用 __file__ 推导项目根目录，否则 PyInstaller 打包后可能读到 _internal/config.ini，
-        # 导致自定义工作目录在批量分析中不生效。
-        self.config = ConfigManager()
+        project_root = Path(__file__).resolve().parents[1]
+        self.config = ConfigManager(str(project_root / "config.ini"))
         self.config.ensure_default_config()
 
-        self.alias_store = FolderAliasStore(self.config.config_path)
+        self.alias_store = FolderAliasStore()
         self.parent_folder: Optional[Path] = None
         # 记录上一次真正完成预检查的总文件夹。
         # 用于判断用户是否换了一个总文件夹；一旦换文件夹，不能再沿用旧文件夹的手动匹配结果。
