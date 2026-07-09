@@ -1,0 +1,7 @@
+当前用户测试版：
+日期：2026-07-09
+源码提交：e16869a
+打包源码目录：F:\sperm_protein_analyzer_pack
+打包成品目录：F:\sperm_protein_analyzer_Test
+说明：该版本已通过 U 盘拷贝给用户测试，后续不再修改这两个目录。
+后续开发目录：F:\sperm_protein_analyzer
