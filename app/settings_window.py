@@ -180,7 +180,7 @@ class SettingsWindow(QWidget):
 
         self.btn_reload.clicked.connect(self.load_config)
         self.btn_test.clicked.connect(self.check_paths)
-        self.btn_save.clicked.connect(self.save_config)
+        self.btn_save.clicked.connect(self.save_current_settings)
         self.tabs.currentChanged.connect(self.update_global_button_bar_visibility)
         self.update_global_button_bar_visibility()
 
@@ -194,17 +194,22 @@ class SettingsWindow(QWidget):
         - 检查路径
         - 保存设置
 
-        工具类页面使用页面内部按钮：
-        - 质控微球测试
-        - 管道参数
-
-        这样可以避免用户误以为“保存设置”会保存并应用管道参数。
+        质控微球测试页只显示全局“保存设置”按钮，管道参数页隐藏全局按钮栏，
+        避免用户误以为“保存设置”会保存并应用管道参数。
         """
         current_text = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
-        tool_tabs = {"质控微球测试", "管道参数"}
+        is_pipeline_tab = current_text == "管道参数"
+        is_qc_tab = current_text == "质控微球测试"
+        self.global_button_bar.setVisible(not is_pipeline_tab)
+        self.btn_reload.setVisible(not is_qc_tab)
+        self.btn_test.setVisible(not is_qc_tab)
 
-        is_tool_tab = current_text in tool_tabs
-        self.global_button_bar.setVisible(not is_tool_tab)
+    def save_current_settings(self):
+        """根据当前设置页调用对应的保存逻辑。"""
+        if self.tabs.tabText(self.tabs.currentIndex()) == "质控微球测试":
+            self.save_qc_config()
+        else:
+            self.save_config()
 
 
     # ------------------------------------------------------------------
@@ -371,6 +376,7 @@ class SettingsWindow(QWidget):
 
         self.btn_run_qc.clicked.connect(self.run_qc_beads_test)
         self.btn_open_qc_output.clicked.connect(self.open_qc_output_dir)
+        self.qc_output_dir_edit.textEdited.connect(self.mark_qc_output_manual)
 
         self.tabs.addTab(tab, "质控微球测试")
 
@@ -1182,11 +1188,12 @@ class SettingsWindow(QWidget):
 
         self.qc_pipeline_edit.setText(self.config.get_mvimageid("qc_pipeline", r"pipelines\pipeline_qc.cppipe"))
         self.qc_source_folder_edit.setText("")
-        try:
-            qc_default_dir = QCBeadsService(self.config).get_next_run_dir()
-            self.qc_output_dir_edit.setText(self.to_project_relative_text(qc_default_dir))
-        except Exception:
-            self.qc_output_dir_edit.setText(r"workspace\qc")
+        saved_qc_output_dir = self.config.get("QC", "output_dir", "").strip()
+        if saved_qc_output_dir:
+            self.qc_output_dir_edit.setText(saved_qc_output_dir)
+            self._qc_output_auto_mode = False
+        else:
+            self.reset_qc_output_dir()
 
         self.workspace_root_edit.setText(self.config.get("Workspace", "root_dir", "workspace\\cases"))
         self.database_edit.setText(self.config.get("Workspace", "database", "data\\analysis.db"))
@@ -1259,6 +1266,23 @@ class SettingsWindow(QWidget):
         )
         self.append_log("系统设置已保存到 config.ini。")
         self.config_saved.emit()
+
+    def save_qc_config(self):
+        """只保存质控微球测试页的配置。"""
+        try:
+            self.config.set("MvImageID", "qc_pipeline", self.qc_pipeline_edit.text().strip())
+            output_dir = "" if self._qc_output_auto_mode else self.qc_output_dir_edit.text().strip()
+            self.config.set("QC", "output_dir", output_dir)
+            self.config.save()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存质控设置失败：\n{e}")
+            return
+
+        self.append_log("质控设置已保存。")
+        QMessageBox.information(self, "成功", "质控设置已保存。")
+
+    def mark_qc_output_manual(self):
+        self._qc_output_auto_mode = False
 
     # ------------------------------------------------------------------
     # 软件信息
@@ -1677,6 +1701,7 @@ class SettingsWindow(QWidget):
         path = QFileDialog.getExistingDirectory(self, "选择本次质控输出目录")
         if path:
             self.qc_output_dir_edit.setText(path)
+            self._qc_output_auto_mode = False
 
     def reset_qc_output_dir(self):
         try:
@@ -1684,6 +1709,7 @@ class SettingsWindow(QWidget):
             self.qc_output_dir_edit.setText(self.to_project_relative_text(qc_default_dir))
         except Exception:
             self.qc_output_dir_edit.setText(r"workspace\qc")
+        self._qc_output_auto_mode = True
 
     def select_qc_pipeline(self):
         path, _ = QFileDialog.getOpenFileName(

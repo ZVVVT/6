@@ -344,6 +344,7 @@ class ConfigManager:
             },
             "QC": {
                 "root_dir": r"workspace\qc",
+                "output_dir": "",
             },
             "ImageRule": {
                 "r_suffix": "_R",
