@@ -21,7 +21,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -741,8 +741,14 @@ class PipelineParameterManager:
     # 生效状态检查
     # ------------------------------------------------------------------
 
-    def check_generated_pipeline_status(self) -> List[str]:
-        """检查 pipeline_params.ini 中的参数是否已经写入实际运行管道。
+    def check_generated_pipeline_status(
+        self,
+        params_by_section: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> List[str]:
+        """检查参数是否已经写入实际运行管道。
+
+        传入 params_by_section 时只使用内存参数进行只读比较；未传入时保持
+        原有行为，使用 pipeline_params.ini 中的参数。
 
         这个检查针对 pipelines\\pipeline_*.cppipe，而不是 templates。
         用途：
@@ -751,7 +757,8 @@ class PipelineParameterManager:
         3. 交付前确认当前 .cppipe 与参数文件一致。
         """
         messages: List[str] = []
-        self.ensure_default_params()
+        if params_by_section is None:
+            self.ensure_default_params()
 
         all_ok = True
 
@@ -768,7 +775,10 @@ class PipelineParameterManager:
                 continue
 
             text = output_path.read_text(encoding="utf-8", errors="replace")
-            params = self.get_params(section)
+            if params_by_section is None:
+                params = self.get_params(section)
+            else:
+                params = params_by_section.get(section, {})
 
             for module_num, setting_name, param_key, measurement_name in self.PARAM_RULES.get(section, []):
                 expected_value = self.format_value(params.get(param_key, ""))
@@ -794,13 +804,20 @@ class PipelineParameterManager:
                         all_ok = False
                         messages.append(
                             f"× module_num:{module_num}{measurement_text} | {setting_name} | "
-                            f"{param_key} | 管道当前值:{actual_value} | 参数文件值:{expected_value}"
+                            f"{param_key} | 管道当前值:{actual_value} | "
+                            f"{'参数文件值' if params_by_section is None else '当前界面值'}:{expected_value}"
                         )
                 except Exception as e:
                     all_ok = False
                     messages.append(f"× {target.title} | {param_key} | {e}")
 
-        messages.insert(0, "√ 实际运行管道与 pipeline_params.ini 一致。" if all_ok else "× 实际运行管道与 pipeline_params.ini 不一致。")
+        comparison_source = "pipeline_params.ini" if params_by_section is None else "当前界面参数"
+        messages.insert(
+            0,
+            f"√ 实际运行管道与{comparison_source}一致。"
+            if all_ok
+            else f"× 实际运行管道与{comparison_source}不一致。",
+        )
         return messages
 
     @staticmethod

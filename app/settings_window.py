@@ -685,12 +685,11 @@ class SettingsWindow(QWidget):
 
     def check_pipeline_effective_status(self):
         try:
-            # 先保存当前界面参数到 pipeline_params.ini，再检查实际运行管道是否与之匹配。
-            data = self.collect_pipeline_params_from_ui()
-            for section, values in data.items():
-                self.pipeline_param_manager.set_params(section, values)
-
-            messages = self.pipeline_param_manager.check_generated_pipeline_status()
+            # 只读比较当前界面参数与实际运行管道，不保存或生成任何文件。
+            params_by_section = self.collect_pipeline_params_from_ui()
+            messages = self.pipeline_param_manager.check_generated_pipeline_status(
+                params_by_section=params_by_section
+            )
             for message in messages:
                 self.append_log(message)
 
@@ -699,14 +698,14 @@ class SettingsWindow(QWidget):
                 QMessageBox.warning(
                     self,
                     "检查完成",
-                    "当前参数文件与实际运行管道不一致。\n\n"
+                    "当前界面参数与实际运行管道不一致。\n\n"
                     "如果你希望当前参数真正生效，请点击“保存并应用参数”。"
                 )
             else:
                 QMessageBox.information(
                     self,
                     "检查完成",
-                    "当前参数已经写入实际运行管道，后续分析会使用这些参数。"
+                    "当前界面参数与实际运行管道一致，后续分析会使用实际运行管道中的这些参数。"
                 )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"检查参数生效状态失败：\n{e}")
