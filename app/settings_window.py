@@ -447,7 +447,7 @@ class SettingsWindow(QWidget):
         button_layout = QHBoxLayout()
         self.btn_apply_pipeline_params = QPushButton("保存并应用参数")
         self.btn_check_pipeline_effective = QPushButton("检查生效状态")
-        self.btn_validate_pipeline_templates = QPushButton("检查模板")
+        self.btn_validate_pipeline_templates = QPushButton("检查并补齐模板")
         self.btn_restore_pipeline_backup = QPushButton("恢复最近备份")
         self.btn_reset_pipeline_params = QPushButton("恢复默认并应用")
         self.btn_open_pipeline_dir = QPushButton("打开管道目录")
@@ -712,6 +712,20 @@ class SettingsWindow(QWidget):
 
 
     def validate_pipeline_templates(self):
+        reply = QMessageBox.question(
+            self,
+            "确认检查并补齐模板",
+            "该操作用于开发维护，将检查管道模板。\n\n"
+            "如果模板缺失，可能会从当前运行管道补齐模板文件，"
+            "并可能涉及 pipelines/templates 目录。\n\n"
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            self.append_log("已取消检查并补齐模板。")
+            return
+
         try:
             messages = self.pipeline_param_manager.validate_template_rules()
             for message in messages:
