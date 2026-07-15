@@ -156,6 +156,7 @@ class SettingsWindow(QWidget):
         self.init_workspace_tab()
         self.init_image_rule_tab()
         self.init_protein_tab()
+        self.init_about_tab()
 
         self.global_button_bar = QWidget()
         self.global_button_layout = QHBoxLayout(self.global_button_bar)
@@ -194,15 +195,17 @@ class SettingsWindow(QWidget):
         - 检查路径
         - 保存设置
 
-        质控微球测试页只显示全局“保存设置”按钮，管道参数页隐藏全局按钮栏，
-        避免用户误以为“保存设置”会保存并应用管道参数。
+        质控微球测试页只显示全局“保存设置”按钮；管道参数页和“关于”页
+        隐藏全局按钮栏，避免显示与当前页面无关的操作。
         """
         current_text = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
         is_pipeline_tab = current_text == "管道参数"
         is_qc_tab = current_text == "质控微球测试"
-        self.global_button_bar.setVisible(not is_pipeline_tab)
+        is_about_tab = current_text == "关于"
+        self.global_button_bar.setVisible(not is_pipeline_tab and not is_about_tab)
         self.btn_reload.setVisible(not is_qc_tab)
         self.btn_test.setVisible(not is_qc_tab)
+        self.log_edit.setVisible(not is_about_tab)
 
     def save_current_settings(self):
         """根据当前设置页调用对应的保存逻辑。"""
@@ -931,6 +934,39 @@ class SettingsWindow(QWidget):
         self.btn_remove_protein_row.clicked.connect(self.remove_selected_protein_row)
 
         self.tabs.addTab(tab, "蛋白配置")
+
+    def init_about_tab(self):
+        """初始化“关于”页，只读显示软件版本信息。"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        group = QGroupBox("版本信息")
+        form = QFormLayout(group)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(14)
+
+        software_name_label = QLabel("人类精子蛋白质量分析仪")
+        release_version_label = QLabel("V1.0")
+        full_version_label = QLabel("V1.0.0.20260709")
+
+        for label in (
+            software_name_label,
+            release_version_label,
+            full_version_label,
+        ):
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            label.setStyleSheet("font-weight: 500; color: #1F2D3D;")
+
+        form.addRow("软件名称：", software_name_label)
+        form.addRow("发布版本号：", release_version_label)
+        form.addRow("完整版本号：", full_version_label)
+
+        layout.addWidget(group)
+        layout.addStretch()
+
+        self.tabs.addTab(tab, "关于")
 
     def add_pipeline_param_row(self, form: QFormLayout, label_text: str, widget: QWidget, tooltip: str):
         """管道参数行：参数名和输入框都支持悬停说明。"""

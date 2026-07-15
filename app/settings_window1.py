@@ -180,7 +180,7 @@ class SettingsWindow(QWidget):
 
         self.btn_reload.clicked.connect(self.load_config)
         self.btn_test.clicked.connect(self.check_paths)
-        self.btn_save.clicked.connect(self.save_config)
+        self.btn_save.clicked.connect(self.save_current_settings)
         self.tabs.currentChanged.connect(self.update_global_button_bar_visibility)
         self.update_global_button_bar_visibility()
 
@@ -194,17 +194,22 @@ class SettingsWindow(QWidget):
         - 检查路径
         - 保存设置
 
-        工具类页面使用页面内部按钮：
-        - 质控微球测试
-        - 管道参数
-
-        这样可以避免用户误以为“保存设置”会保存并应用管道参数。
+        质控微球测试页只显示全局“保存设置”按钮，管道参数页隐藏全局按钮栏，
+        避免用户误以为“保存设置”会保存并应用管道参数。
         """
         current_text = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
-        tool_tabs = {"质控微球测试", "管道参数"}
+        is_pipeline_tab = current_text == "管道参数"
+        is_qc_tab = current_text == "质控微球测试"
+        self.global_button_bar.setVisible(not is_pipeline_tab)
+        self.btn_reload.setVisible(not is_qc_tab)
+        self.btn_test.setVisible(not is_qc_tab)
 
-        is_tool_tab = current_text in tool_tabs
-        self.global_button_bar.setVisible(not is_tool_tab)
+    def save_current_settings(self):
+        """根据当前设置页调用对应的保存逻辑。"""
+        if self.tabs.tabText(self.tabs.currentIndex()) == "质控微球测试":
+            self.save_qc_config()
+        else:
+            self.save_config()
 
 
     # ------------------------------------------------------------------
@@ -287,15 +292,30 @@ class SettingsWindow(QWidget):
         self.tail_pipeline_edit = QLineEdit()
         self.plugins_directory_edit = QLineEdit()
 
-        form.addRow("目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir))
-        form.addRow("解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe))
+        # 交付版运行环境仅显示 config.ini 中的配置，不允许在界面直接修改，避免误操作。
+        runtime_locked_tip = "运行环境由 config.ini 管理，当前页面仅显示，不允许直接修改。"
+        self.runtime_locked_edits = [
+            self.source_project_dir_edit,
+            self.python_exe_edit,
+            self.module_name_edit,
+            self.head_pipeline_edit,
+            self.tail_pipeline_edit,
+            self.plugins_directory_edit,
+        ]
+        for edit in self.runtime_locked_edits:
+            edit.setReadOnly(True)
+            edit.setToolTip(runtime_locked_tip)
+
+        form.addRow("目录：", self._with_button(self.source_project_dir_edit, "选择", self.select_source_project_dir, enabled=False))
+        form.addRow("解释器：", self._with_button(self.python_exe_edit, "选择", self.select_python_exe, enabled=False))
         form.addRow("模块名称：", self.module_name_edit)
-        form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline))
-        form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline))
-        form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory))
+        form.addRow("头部 Pipeline：", self._with_button(self.head_pipeline_edit, "选择", self.select_head_pipeline, enabled=False))
+        form.addRow("尾部 Pipeline：", self._with_button(self.tail_pipeline_edit, "选择", self.select_tail_pipeline, enabled=False))
+        form.addRow("插件目录：", self._with_button(self.plugins_directory_edit, "选择", self.select_plugins_directory, enabled=False))
 
         hint = QLabel(
-            "说明："
+            "说明：运行环境参数仅从 config.ini 读取并显示，界面已锁定以避免误操作。"
+            "如需临时调整，请直接修改 config.ini 后点击“重新加载”。"
             "每次分析日志会自动写入对应蛋白输出目录的 run_mvimageid.log。"
         )
         hint.setWordWrap(True)
@@ -356,6 +376,7 @@ class SettingsWindow(QWidget):
 
         self.btn_run_qc.clicked.connect(self.run_qc_beads_test)
         self.btn_open_qc_output.clicked.connect(self.open_qc_output_dir)
+        self.qc_output_dir_edit.textEdited.connect(self.mark_qc_output_manual)
 
         self.tabs.addTab(tab, "质控微球测试")
 
@@ -426,7 +447,7 @@ class SettingsWindow(QWidget):
         button_layout = QHBoxLayout()
         self.btn_apply_pipeline_params = QPushButton("保存并应用参数")
         self.btn_check_pipeline_effective = QPushButton("检查生效状态")
-        self.btn_validate_pipeline_templates = QPushButton("检查模板")
+        self.btn_validate_pipeline_templates = QPushButton("检查并补齐模板")
         self.btn_restore_pipeline_backup = QPushButton("恢复最近备份")
         self.btn_reset_pipeline_params = QPushButton("恢复默认并应用")
         self.btn_open_pipeline_dir = QPushButton("打开管道目录")
@@ -664,12 +685,11 @@ class SettingsWindow(QWidget):
 
     def check_pipeline_effective_status(self):
         try:
-            # 先保存当前界面参数到 pipeline_params.ini，再检查实际运行管道是否与之匹配。
-            data = self.collect_pipeline_params_from_ui()
-            for section, values in data.items():
-                self.pipeline_param_manager.set_params(section, values)
-
-            messages = self.pipeline_param_manager.check_generated_pipeline_status()
+            # 只读比较当前界面参数与实际运行管道，不保存或生成任何文件。
+            params_by_section = self.collect_pipeline_params_from_ui()
+            messages = self.pipeline_param_manager.check_generated_pipeline_status(
+                params_by_section=params_by_section
+            )
             for message in messages:
                 self.append_log(message)
 
@@ -678,20 +698,34 @@ class SettingsWindow(QWidget):
                 QMessageBox.warning(
                     self,
                     "检查完成",
-                    "当前参数文件与实际运行管道不一致。\n\n"
+                    "当前界面参数与实际运行管道不一致。\n\n"
                     "如果你希望当前参数真正生效，请点击“保存并应用参数”。"
                 )
             else:
                 QMessageBox.information(
                     self,
                     "检查完成",
-                    "当前参数已经写入实际运行管道，后续分析会使用这些参数。"
+                    "当前界面参数与实际运行管道一致，后续分析会使用实际运行管道中的这些参数。"
                 )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"检查参数生效状态失败：\n{e}")
 
 
     def validate_pipeline_templates(self):
+        reply = QMessageBox.question(
+            self,
+            "确认检查并补齐模板",
+            "该操作用于开发维护，将检查管道模板。\n\n"
+            "如果模板缺失，可能会从当前运行管道补齐模板文件，"
+            "并可能涉及 pipelines/templates 目录。\n\n"
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            self.append_log("已取消检查并补齐模板。")
+            return
+
         try:
             messages = self.pipeline_param_manager.validate_template_rules()
             for message in messages:
@@ -906,7 +940,7 @@ class SettingsWindow(QWidget):
         form.addRow(label, widget)
 
 
-    def _with_button(self, line_edit: QLineEdit, button_text: str, callback):
+    def _with_button(self, line_edit: QLineEdit, button_text: str, callback, enabled: bool = True):
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -915,7 +949,9 @@ class SettingsWindow(QWidget):
         button = QPushButton(button_text)
         button.setObjectName("SettingsSmallButton")
         button.setFixedSize(64, 32)
-        button.clicked.connect(callback)
+        button.setEnabled(enabled)
+        if enabled:
+            button.clicked.connect(callback)
 
         layout.addWidget(line_edit, 1)
         layout.addWidget(button)
@@ -1070,6 +1106,11 @@ class SettingsWindow(QWidget):
                 padding: 0px 9px;
             }
 
+            QLineEdit:read-only {
+                background-color: #F8FAFD;
+                color: #4B5563;
+            }
+
             QTextEdit {
                 padding: 6px 8px;
             }
@@ -1160,11 +1201,12 @@ class SettingsWindow(QWidget):
 
         self.qc_pipeline_edit.setText(self.config.get_mvimageid("qc_pipeline", r"pipelines\pipeline_qc.cppipe"))
         self.qc_source_folder_edit.setText("")
-        try:
-            qc_default_dir = QCBeadsService(self.config).get_next_run_dir()
-            self.qc_output_dir_edit.setText(self.to_project_relative_text(qc_default_dir))
-        except Exception:
-            self.qc_output_dir_edit.setText(r"workspace\qc")
+        saved_qc_output_dir = self.config.get("QC", "output_dir", "").strip()
+        if saved_qc_output_dir:
+            self.qc_output_dir_edit.setText(saved_qc_output_dir)
+            self._qc_output_auto_mode = False
+        else:
+            self.reset_qc_output_dir()
 
         self.workspace_root_edit.setText(self.config.get("Workspace", "root_dir", "workspace\\cases"))
         self.database_edit.setText(self.config.get("Workspace", "database", "data\\analysis.db"))
@@ -1237,6 +1279,23 @@ class SettingsWindow(QWidget):
         )
         self.append_log("系统设置已保存到 config.ini。")
         self.config_saved.emit()
+
+    def save_qc_config(self):
+        """只保存质控微球测试页的配置。"""
+        try:
+            self.config.set("MvImageID", "qc_pipeline", self.qc_pipeline_edit.text().strip())
+            output_dir = "" if self._qc_output_auto_mode else self.qc_output_dir_edit.text().strip()
+            self.config.set("QC", "output_dir", output_dir)
+            self.config.save()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存质控设置失败：\n{e}")
+            return
+
+        self.append_log("质控设置已保存。")
+        QMessageBox.information(self, "成功", "质控设置已保存。")
+
+    def mark_qc_output_manual(self):
+        self._qc_output_auto_mode = False
 
     # ------------------------------------------------------------------
     # 软件信息
@@ -1655,6 +1714,7 @@ class SettingsWindow(QWidget):
         path = QFileDialog.getExistingDirectory(self, "选择本次质控输出目录")
         if path:
             self.qc_output_dir_edit.setText(path)
+            self._qc_output_auto_mode = False
 
     def reset_qc_output_dir(self):
         try:
@@ -1662,6 +1722,7 @@ class SettingsWindow(QWidget):
             self.qc_output_dir_edit.setText(self.to_project_relative_text(qc_default_dir))
         except Exception:
             self.qc_output_dir_edit.setText(r"workspace\qc")
+        self._qc_output_auto_mode = True
 
     def select_qc_pipeline(self):
         path, _ = QFileDialog.getOpenFileName(
