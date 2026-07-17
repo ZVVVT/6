@@ -700,38 +700,18 @@ class ResultViewer(QWidget):
     def normalize_field_key(value):
         """把视野标识统一成可比较的 key。
 
-        优先识别显微镜导出的“视野号 + 时间点 + Z层”格式：
-        - 1-1T1_Z1 -> 1
-        - 1-2T1_Z1 -> 2
-        - 1-10T1_Z1 -> 10
-
-        再兼容原有的末尾数字格式：
+        优先取末尾数字：
         - ZBFY022-A-1 -> 1
         - protein1_1024 -> 1024
         - field_001 -> 1
 
-        没有可识别数字时，保留清理后的文本。
+        没有末尾数字时，保留清理后的文本。
         """
         text = str(value or "").strip()
         if not text:
             return ""
 
         text = ResultViewer.strip_raw_channel_suffix(text)
-
-        # 显微镜常见命名：1-2T1_Z1。
-        # 视野号是 T 前、最后一个 "-" 或 "_" 后面的数字；
-        # 不能取文件名最后的 Z 层编号，否则所有视野都会被错误归为 Z1。
-        microscope_match = re.search(
-            r"(?:^|[-_])(\d+)T\d+(?:[-_]Z\d+)?$",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if microscope_match:
-            number_text = microscope_match.group(1)
-            try:
-                return str(int(number_text))
-            except Exception:
-                return number_text
 
         match = re.search(r"(\d+)(?!.*\d)", text)
         if match:
