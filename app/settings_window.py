@@ -947,7 +947,7 @@ class SettingsWindow(QWidget):
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(14)
 
-        software_name_label = QLabel("人类精子蛋白质量分析仪")
+        software_name_label = QLabel("人类精子蛋白质量分析软件")
         release_version_label = QLabel("V1.0")
         full_version_label = QLabel("V1.0.0.20260709")
 

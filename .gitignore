@@ -44,3 +44,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+pipelines/backups/
+pipelines/last_generate_report.txt
+pipelines/last_restore_report.txt
