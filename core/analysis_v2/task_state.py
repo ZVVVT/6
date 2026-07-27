@@ -32,6 +32,8 @@ ALLOWED_STATUSES = {
     "head_segmented",
     "head_calibration_required",
     "head_calibrated",
+    "head_measuring",
+    "head_measured",
     "tail_segmenting",
     "tail_segmented",
     "tail_calibration_required",

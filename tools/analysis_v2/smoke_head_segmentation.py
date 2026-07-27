@@ -21,24 +21,16 @@ from core.analysis_v2 import (  # noqa: E402
 )
 
 
-DEFAULT_INPUT_DIR = (
-    PROJECT_ROOT
-    / "workspace"
-    / "cases"
-    / "CASE20260717112412"
-    / "raw_images"
-    / "protein1"
-)
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "workspace" / "analysis_v2_smoke"
 DEFAULT_MVIMAGEID_ROOT = Path(r"F:\MvImageID")
 DEFAULT_MVIMAGEID_PYTHON = DEFAULT_MVIMAGEID_ROOT / ".venv" / "Scripts" / "python.exe"
 DEFAULT_WORKER = PROJECT_ROOT / "tools" / "analysis_v2" / "direct_cellpose_worker.py"
-FIELD_IDS = ["ZBFY022-A-1", "ZBFY022-A-2", "ZBFY022-A-3"]
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
+    parser.add_argument("--input-dir", type=Path, required=True)
+    parser.add_argument("--case-no", required=True)
+    parser.add_argument("--protein-key", required=True)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--mvimageid-root", type=Path, default=DEFAULT_MVIMAGEID_ROOT)
     parser.add_argument("--mvimageid-python", type=Path, default=DEFAULT_MVIMAGEID_PYTHON)
@@ -48,19 +40,97 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_fields(input_dir: Path) -> List[Dict[str, str]]:
-    fields = []
-    for field_id in FIELD_IDS:
-        item = {"field_id": field_id}
-        for channel, filename_channel in (
-            ("tritc", "TRITC"),
-            ("fitc", "FITC"),
-            ("merge", "Merge"),
-        ):
-            path = (input_dir / "{}_RGB_{}.tif".format(field_id, filename_channel)).resolve()
-            if not path.is_file():
-                raise FileNotFoundError("指定真实输入不存在：{}".format(path))
-            item["{}_path".format(channel)] = str(path)
-        fields.append(item)
+    """????????????? G/R/Merge ??????"""
+
+    input_dir = input_dir.resolve()
+    if not input_dir.is_dir():
+        raise FileNotFoundError("????????{}".format(input_dir))
+
+    # ???????????????? _RGB_Merge ?????? _Merge?
+    suffix_rules = (
+        ("_RGB_TRITC", "tritc"),
+        ("_RGB_FITC", "fitc"),
+        ("_RGB_Merge", "merge"),
+        ("_TRITC", "tritc"),
+        ("_FITC", "fitc"),
+        ("_Merge", "merge"),
+        ("_G", "fitc"),
+        ("_R", "tritc"),
+    )
+
+    grouped: Dict[str, Dict[str, Path]] = {}
+
+    for path in sorted(input_dir.iterdir(), key=lambda item: item.name.lower()):
+        if not path.is_file() or path.suffix.lower() not in {".tif", ".tiff"}:
+            continue
+
+        stem = path.stem
+        stem_lower = stem.lower()
+        matched = False
+
+        for suffix, channel in suffix_rules:
+            if not stem_lower.endswith(suffix.lower()):
+                continue
+
+            field_id = stem[:-len(suffix)]
+            if not field_id:
+                raise ValueError("?????????????{}".format(path.name))
+
+            channel_files = grouped.setdefault(field_id, {})
+            if channel in channel_files:
+                raise ValueError(
+                    "?? {} ? {} ?????????{}?{}".format(
+                        field_id,
+                        channel,
+                        channel_files[channel].name,
+                        path.name,
+                    )
+                )
+
+            channel_files[channel] = path.resolve()
+            matched = True
+            break
+
+        if not matched:
+            print("??????? TIFF ???{}".format(path.name))
+
+    if not grouped:
+        raise FileNotFoundError(
+            "?????????? G/R/Merge ? FITC/TRITC/Merge ???{}".format(
+                input_dir
+            )
+        )
+
+    fields: List[Dict[str, str]] = []
+
+    for field_id in sorted(grouped):
+        channel_files = grouped[field_id]
+        missing = [
+            channel
+            for channel in ("fitc", "tritc", "merge")
+            if channel not in channel_files
+        ]
+        if missing:
+            raise FileNotFoundError(
+                "?? {} ?????{}?????{}".format(
+                    field_id,
+                    ", ".join(missing),
+                    ", ".join(
+                        "{}={}".format(channel, file_path.name)
+                        for channel, file_path in sorted(channel_files.items())
+                    ),
+                )
+            )
+
+        fields.append(
+            {
+                "field_id": field_id,
+                "tritc_path": str(channel_files["tritc"]),
+                "fitc_path": str(channel_files["fitc"]),
+                "merge_path": str(channel_files["merge"]),
+            }
+        )
+
     return fields
 
 
@@ -100,8 +170,8 @@ def main() -> int:
             mvimageid_python=args.mvimageid_python,
             worker_path=args.worker,
             timeout_seconds=args.timeout,
-            case_no="CASE20260717112412",
-            protein_key="protein1",
+            case_no=args.case_no,
+            protein_key=args.protein_key,
         )
     finally:
         after = mvimageid_inventory(args.mvimageid_root.resolve())

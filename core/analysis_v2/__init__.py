@@ -8,6 +8,11 @@ from .environment_snapshot import (
 from .manifest_store import ManifestStore
 from .head_calibration_model import HeadCalibrationModel, LabelEditCommand
 from .head_calibration_service import HeadCalibrationField, HeadCalibrationService
+from .head_measurement_service import HeadMeasurementService
+from .head_measurement_result import (
+    build_head_measurement_result,
+    validate_head_measurement_output,
+)
 from .label_image_io import (
     atomic_save_label_image,
     read_label_image,
@@ -37,6 +42,7 @@ __all__ = [
     "HeadCalibrationField",
     "HeadCalibrationModel",
     "HeadCalibrationService",
+    "HeadMeasurementService",
     "LabelEditCommand",
     "ManifestStore",
     "DirectCellposeRunner",
@@ -45,6 +51,8 @@ __all__ = [
     "TaskStateStore",
     "atomic_write_json",
     "atomic_save_label_image",
+    "build_head_measurement_result",
+    "validate_head_measurement_output",
     "describe_path",
     "generate_run_id",
     "run_head_segmentation",
