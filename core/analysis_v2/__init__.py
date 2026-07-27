@@ -6,6 +6,14 @@ from .environment_snapshot import (
     sha256_file,
 )
 from .manifest_store import ManifestStore
+from .head_calibration_model import HeadCalibrationModel, LabelEditCommand
+from .head_calibration_service import HeadCalibrationField, HeadCalibrationService
+from .label_image_io import (
+    atomic_save_label_image,
+    read_label_image,
+    relabel_consecutive,
+    validate_label_image,
+)
 from .direct_cellpose_runner import (
     DirectCellposeRunner,
     DirectCellposeRunResult,
@@ -26,15 +34,23 @@ __all__ = [
     "ALLOWED_STATUSES",
     "AnalysisTaskPaths",
     "EnvironmentSnapshotWriter",
+    "HeadCalibrationField",
+    "HeadCalibrationModel",
+    "HeadCalibrationService",
+    "LabelEditCommand",
     "ManifestStore",
     "DirectCellposeRunner",
     "DirectCellposeRunResult",
     "StageLogger",
     "TaskStateStore",
     "atomic_write_json",
+    "atomic_save_label_image",
     "describe_path",
     "generate_run_id",
     "run_head_segmentation",
+    "read_label_image",
+    "relabel_consecutive",
     "sha256_file",
     "validate_worker_field",
+    "validate_label_image",
 ]
