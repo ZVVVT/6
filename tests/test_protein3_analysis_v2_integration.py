@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from core.analysis_v2.manifest_store import ManifestStore
+from core.analysis_v2.tail_calibration_service import (
+    complete_tail_calibration,
+    publish_tail_final_labels,
+)
+from core.analysis_v2.task_paths import AnalysisTaskPaths
+from core.analysis_v2.task_state import TaskStateStore
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ANALYSIS_WINDOW = PROJECT_ROOT / "app" / "analysis_window.py"
+TAIL_WORKER = PROJECT_ROOT / "app" / "analysis_v2" / "tail_analysis_workers.py"
+
+
+class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
+    def test_protein3_routes_before_legacy_single_worker(self):
+        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
+        protein3_route = source.index('if protein_key == "protein3":', source.index("def run_analysis"))
+        legacy_worker = source.index("SingleProteinAnalysisWorker(", protein3_route)
+        self.assertLess(protein3_route, legacy_worker)
+        route_block = source[protein3_route:legacy_worker]
+        self.assertIn('workflow="protein3_tail"', route_block)
+        self.assertIn("return", route_block)
+
+    def test_head_route_and_batch_file_remain_separate(self):
+        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
+        run_source = source[source.index("def run_analysis"):]
+        self.assertIn('if protein_part == "head":', run_source)
+        self.assertIn("_start_head_analysis_v2(", run_source)
+        self.assertNotIn("batch_analysis", run_source)
+
+    def test_head_calibration_routes_protein3_to_tail_worker(self):
+        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
+        callback = source[
+            source.index("def _on_head_calibration_completed"):
+            source.index("def _on_head_calibration_closed")
+        ]
+        self.assertIn('context.get("workflow") == "protein3_tail"', callback)
+        self.assertIn("_start_tail_path_worker(project_root, task_root)", callback)
+        self.assertLess(
+            callback.index('context.get("workflow") == "protein3_tail"'),
+            callback.index("HeadMeasurementWorker("),
+        )
+
+    def test_tail_worker_is_mvimageid_python_subprocess(self):
+        source = TAIL_WORKER.read_text(encoding="utf-8")
+        self.assertIn("subprocess.run(", source)
+        self.assertIn("str(self.python_executable)", source)
+        self.assertIn("tail_path_worker.py", source)
+        self.assertNotIn("import cv2", source)
+        self.assertNotIn("TailPathService", source)
+
+    def test_formal_code_has_no_test_path_dependencies(self):
+        paths = [
+            ANALYSIS_WINDOW,
+            TAIL_WORKER,
+            PROJECT_ROOT / "app" / "analysis_v2" / "tail_calibration_window.py",
+            PROJECT_ROOT / "core" / "analysis_v2" / "tail_calibration_service.py",
+            PROJECT_ROOT / "tools" / "analysis_v2" / "tail_path_worker.py",
+        ]
+        text = "\n".join(path.read_text(encoding="utf-8") for path in paths).lower()
+        self.assertNotIn("experiments", text)
+        self.assertNotIn("analysis_v2_tail_runs", text)
+        self.assertNotIn("f:\\v1", text)
+
+    def test_editor_state_alone_cannot_publish(self):
+        with tempfile.TemporaryDirectory(dir=str(PROJECT_ROOT / "workspace")) as temp:
+            task_root, payload = self._make_task(Path(temp))
+            output_dir = Path(payload["output_dir"])
+            (output_dir / "editor_state_v2_2.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                FileNotFoundError, "请在尾部编辑器中点击保存结果"
+            ):
+                publish_tail_final_labels(payload)
+            self.assertFalse((output_dir / "001_TailFinalLabels.tif").exists())
+            self.assertEqual(
+                TaskStateStore.from_task_paths(
+                    AnalysisTaskPaths._build(PROJECT_ROOT, task_root, "test_run")
+                ).load()["status"],
+                "tail_calibration_required",
+            )
+
+    def test_saved_editor_output_publishes_and_completes(self):
+        with tempfile.TemporaryDirectory(dir=str(PROJECT_ROOT / "workspace")) as temp:
+            task_root, payload = self._make_task(Path(temp))
+            source = (
+                Path(payload["output_dir"])
+                / "edited_tail_regions_head_id_uint16.tif"
+            )
+            source.write_bytes(b"saved-tail-labels")
+            published = publish_tail_final_labels(payload)
+            final_path = Path(published["tail_final_labels"])
+            self.assertEqual(final_path.read_bytes(), b"saved-tail-labels")
+            result = complete_tail_calibration(task_root, [published])
+            self.assertEqual(result["state"]["status"], "tail_calibrated")
+            roles = [item["role"] for item in result["manifest"]["files"]]
+            self.assertIn("tail_final_labels", roles)
+
+    def test_page_unlocks_on_tail_success_and_abort(self):
+        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
+        success = source[
+            source.index("def _on_tail_calibration_completed"):
+            source.index("def _on_tail_calibration_aborted")
+        ]
+        aborted = source[
+            source.index("def _on_tail_calibration_aborted"):
+            source.index("def _on_head_calibration_closed")
+        ]
+        self.assertIn("_finish_analysis_v2_ui()", success)
+        self.assertIn("_finish_analysis_v2_ui()", aborted)
+
+    def test_legacy_tail_pipeline_is_retained(self):
+        self.assertTrue((PROJECT_ROOT / "pipelines" / "pipeline_tail.cppipe").is_file())
+
+    @staticmethod
+    def _make_task(root: Path):
+        task_root = root / "task"
+        paths = AnalysisTaskPaths._build(PROJECT_ROOT, task_root, "test_run")
+        paths.create_directories()
+        TaskStateStore.from_task_paths(paths).initialize(
+            case_no="case1", protein_key="protein3"
+        )
+        TaskStateStore.from_task_paths(paths).update(
+            "tail_calibration_required",
+            "tail_calibration",
+            "waiting",
+        )
+        ManifestStore.from_task_paths(paths).initialize(
+            case_no="case1", protein_key="protein3"
+        )
+        output_dir = paths.calibration_tail_dir / "001"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return task_root, {
+            "task_root": str(task_root),
+            "field_id": "001",
+            "output_dir": str(output_dir),
+        }
+
+
+if __name__ == "__main__":
+    unittest.main()

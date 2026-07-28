@@ -29,6 +29,8 @@ from app.analysis_v2.head_analysis_workers import (
 from app.analysis_v2.head_calibration_window import (
     HeadCalibrationWindow,
 )
+from app.analysis_v2.tail_analysis_workers import TailPathWorker
+from app.analysis_v2.tail_calibration_window import TailCalibrationController
 from app.long_message_dialog import show_long_message_dialog
 from app.result_viewer import ResultViewer
 from core.config_manager import ConfigManager
@@ -38,6 +40,7 @@ from core.analysis_v2.head_input_adapter import (
 from core.analysis_v2.head_result_publisher import (
     stage_head_measurement_output,
 )
+from core.analysis_v2.tail_calibration_service import mark_tail_stage
 from core.image_channel_matcher import ImageChannelMatcher
 from core.result_parser import ResultParser
 from core.protein_analysis_service import ProteinAnalysisService
@@ -97,6 +100,8 @@ class AnalysisWindow(QWidget):
         self.head_segmentation_worker = None
         self.head_measurement_worker = None
         self.head_calibration_window = None
+        self.tail_path_worker = None
+        self.tail_calibration_controller = None
         self.current_analysis_v2_task_root = None
         self.current_analysis_v2_context = None
         self._analysis_running = False
@@ -743,7 +748,11 @@ class AnalysisWindow(QWidget):
 
         self.protein_part_label.setText(f"表达部位：{protein_part}")
 
-        if str(protein_part).strip().lower() == "head":
+        if protein_key == "protein3":
+            self.pipeline_label.setText(
+                "Pipeline：Analysis V2：头部校准 → 尾部路径 → 尾部校准"
+            )
+        elif str(protein_part).strip().lower() == "head":
             self.pipeline_label.setText(
                 "Pipeline：Analysis V2（Cellpose → 人工校准 → 校准后测量）"
             )
@@ -1361,6 +1370,8 @@ class AnalysisWindow(QWidget):
             or self._worker_is_running(self.analysis_worker)
             or self._worker_is_running(self.head_segmentation_worker)
             or self._worker_is_running(self.head_measurement_worker)
+            or self._worker_is_running(self.tail_path_worker)
+            or self.tail_calibration_controller is not None
             or calibration_open
         )
 
@@ -1442,6 +1453,7 @@ class AnalysisWindow(QWidget):
         complete_items,
         protein_key: str,
         protein_name: str,
+        workflow: str = "head",
     ) -> None:
         """Prepare and start Analysis V2 head segmentation."""
         if self.is_analysis_active():
@@ -1495,7 +1507,10 @@ class AnalysisWindow(QWidget):
             "case_no": case_no,
             "protein_key": protein_key,
             "protein_name": protein_name,
-            "protein_part": "head",
+            "protein_part": (
+                "tail" if workflow == "protein3_tail" else "head"
+            ),
+            "workflow": str(workflow),
             "field_count": len(paired_fields),
             "project_root": str(project_root),
             "raw_image_folder": str(
@@ -1540,6 +1555,75 @@ class AnalysisWindow(QWidget):
             self._clear_analysis_v2_state()
             self.set_running_state(False)
             raise
+
+    def _prepare_protein3_formal_inputs(
+        self,
+        complete_items,
+        protein_name: str,
+    ):
+        """Prepare and return ordered protein3 fields sourced only from cp_input."""
+        project_root = Path(
+            getattr(self.config, "app_root", Path(__file__).resolve().parents[1])
+        ).resolve()
+        workspace_root = Path(self.config.get_workspace_root())
+        if not workspace_root.is_absolute():
+            workspace_root = (project_root / workspace_root).resolve()
+        else:
+            workspace_root = workspace_root.resolve()
+        cp_input_dir = (
+            workspace_root
+            / self.get_current_case_no()
+            / "cp_input"
+            / "protein3"
+        ).resolve()
+        service = ProteinAnalysisService(self.config)
+        service.prepare_input_folder(
+            complete_items=list(complete_items),
+            cp_input_dir=cp_input_dir,
+            protein_name=protein_name,
+            log_callback=self.append_log,
+        )
+
+        formal_items = []
+        for item in complete_items:
+            field_no = str(item.get("field_no", "") or "").strip()
+            formal = {
+                "field_no": field_no,
+                "status": "完整",
+                "G": "",
+                "R": "",
+                "Merge": "",
+            }
+            for channel in ("G", "R", "Merge"):
+                source_text = str(item.get(channel, "") or "").strip()
+                if not source_text:
+                    if channel == "Merge":
+                        raise RuntimeError(
+                            "Q96P56 视野 {} 缺少 Merge 输入。".format(field_no)
+                        )
+                    raise RuntimeError(
+                        "Q96P56 视野 {} 缺少 {} 输入。".format(
+                            field_no, channel
+                        )
+                    )
+                target_name = service._standard_input_name(
+                    field_no=field_no,
+                    channel=channel,
+                    source=Path(source_text),
+                )
+                target = (cp_input_dir / target_name).resolve()
+                if not target.is_file():
+                    raise FileNotFoundError(
+                        "正式输入未生成：{}".format(target)
+                    )
+                formal[channel] = str(target)
+            formal_items.append(formal)
+        self.append_log(
+            "Q96P56 正式输入：{}（视野数 {}）。".format(
+                cp_input_dir, len(formal_items)
+            )
+        )
+        return formal_items
 
     def _on_head_segmentation_finished(
         self,
@@ -1662,7 +1746,7 @@ class AnalysisWindow(QWidget):
         self,
         result: object,
     ) -> None:
-        """Close calibration and start calibrated-label measurement."""
+        """Close calibration and route to head measurement or protein3 tail path."""
         window = self.sender()
 
         if window is not self.head_calibration_window:
@@ -1722,6 +1806,10 @@ class AnalysisWindow(QWidget):
                     "人工校准窗口未能安全关闭。"
                 )
 
+            if context.get("workflow") == "protein3_tail":
+                self._start_tail_path_worker(project_root, task_root)
+                return
+
             worker = HeadMeasurementWorker(
                 project_root=project_root,
                 task_root=task_root,
@@ -1754,15 +1842,146 @@ class AnalysisWindow(QWidget):
             task_root_text = str(
                 self.current_analysis_v2_task_root or ""
             )
+            is_tail_route = (
+                dict(self.current_analysis_v2_context or {}).get("workflow")
+                == "protein3_tail"
+            )
             self._show_analysis_v2_error(
-                "头部测量启动失败",
-                "人工校准数据已保留，但无法启动头部测量。旧结果没有被修改。",
+                (
+                    "尾部自动处理启动失败"
+                    if is_tail_route
+                    else "头部测量启动失败"
+                ),
+                (
+                    "头部校准数据已保留，但无法启动尾部自动处理。旧结果没有被修改。"
+                    if is_tail_route
+                    else "人工校准数据已保留，但无法启动头部测量。旧结果没有被修改。"
+                ),
                 "{}\n\n任务目录：{}".format(
                     exception,
                     task_root_text,
                 ),
             )
             self._finish_analysis_v2_ui()
+
+    def _start_tail_path_worker(
+        self,
+        project_root: Path,
+        task_root: Path,
+    ) -> None:
+        if self._worker_is_running(self.tail_path_worker):
+            raise RuntimeError("尾部自动路径任务已经在运行。")
+        mark_tail_stage(
+            task_root,
+            "tail_segmenting",
+            "正在执行尾部 Stage 1～2.3",
+        )
+        worker = TailPathWorker(
+            project_root=project_root,
+            task_root=task_root,
+            python_executable=Path(self.config.get_python_exe()),
+            parent=self,
+        )
+        worker.log_signal.connect(self.append_log)
+        worker.finished_signal.connect(self._on_tail_path_finished)
+        worker.finished.connect(self._on_tail_path_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self.tail_path_worker = worker
+        self.btn_run_analysis.setText("正在处理尾部路径...")
+        self.append_log(
+            "Analysis V2：头部校准完成，Q96P56 转入尾部 Stage 1～2.3。"
+        )
+        worker.start()
+
+    def _on_tail_path_finished(
+        self,
+        success: bool,
+        result: object,
+        error_message: str,
+    ) -> None:
+        if not success:
+            self._analysis_v2_finish_pending = True
+            self._show_analysis_v2_error(
+                "尾部自动处理失败",
+                "尾部 Stage 1～2.3 未完成；任务目录和头部校准结果已保留。",
+                str(error_message or "尾部自动处理失败。"),
+            )
+            return
+        try:
+            payload = dict(result) if isinstance(result, dict) else {}
+            fields = list(payload.get("fields") or [])
+            context = dict(self.current_analysis_v2_context or {})
+            expected_count = int(context.get("field_count", 0) or 0)
+            if not fields or len(fields) != expected_count:
+                raise RuntimeError(
+                    "尾部视野数不一致：期望 {}，实际 {}。".format(
+                        expected_count, len(fields)
+                    )
+                )
+            task_root = Path(self.current_analysis_v2_task_root).resolve()
+            mark_tail_stage(task_root, "tail_segmented", "全部视野尾部自动路径完成")
+            mark_tail_stage(
+                task_root,
+                "tail_calibration_required",
+                "等待人工尾部校准",
+            )
+            controller = TailCalibrationController(
+                task_root=task_root,
+                field_payloads=fields,
+                parent=self,
+            )
+            controller.log_signal.connect(self.append_log)
+            controller.calibration_completed.connect(
+                self._on_tail_calibration_completed
+            )
+            controller.calibration_aborted.connect(
+                self._on_tail_calibration_aborted
+            )
+            self.tail_calibration_controller = controller
+            self.btn_run_analysis.setText("等待尾部校准...")
+            controller.start()
+        except BaseException as exception:
+            self._analysis_v2_finish_pending = True
+            self._show_analysis_v2_error(
+                "打开尾部编辑器失败",
+                "尾部自动结果已保留，但无法开始人工尾部校准。",
+                str(exception),
+            )
+
+    def _on_tail_path_thread_finished(self) -> None:
+        worker = self.sender()
+        if self.tail_path_worker is worker:
+            self.tail_path_worker = None
+        if self._analysis_v2_finish_pending:
+            self._finish_analysis_v2_ui()
+
+    def _on_tail_calibration_completed(self, result: object) -> None:
+        self.tail_calibration_controller = None
+        payload = dict(result) if isinstance(result, dict) else {}
+        field_count = len(payload.get("fields") or [])
+        message = "头部和尾部校准完成，等待测量"
+        self.append_log(
+            "Analysis V2：{}（视野数 {}）。".format(message, field_count)
+        )
+        QMessageBox.information(self, "校准完成", message)
+        self._finish_analysis_v2_ui()
+
+    def _on_tail_calibration_aborted(self, message: str) -> None:
+        self.tail_calibration_controller = None
+        task_root = str(self.current_analysis_v2_task_root or "")
+        self.append_log(
+            "Analysis V2：尾部校准未完成：{}；任务目录：{}".format(
+                message, task_root
+            )
+        )
+        QMessageBox.warning(
+            self,
+            "尾部校准未完成",
+            "{}\n\n任务状态和编辑数据已保留：\n{}".format(
+                message, task_root
+            ),
+        )
+        self._finish_analysis_v2_ui()
 
     def _on_head_calibration_closed(
         self,
@@ -2182,6 +2401,27 @@ class AnalysisWindow(QWidget):
 
         self.append_log(f"准备运行分析：{protein_name}")
         self.append_log(f"当前蛋白导入目录：{self.current_raw_image_folder}")
+
+        if protein_key == "protein3":
+            try:
+                formal_items = self._prepare_protein3_formal_inputs(
+                    complete_items=complete_items,
+                    protein_name=protein_name,
+                )
+                self._start_head_analysis_v2(
+                    complete_items=formal_items,
+                    protein_key=protein_key,
+                    protein_name=protein_name,
+                    workflow="protein3_tail",
+                )
+            except BaseException as exception:
+                self._show_analysis_v2_error(
+                    "Q96P56 组合流程启动失败",
+                    "Analysis V2 组合流程未能启动，旧结果没有被修改。",
+                    str(exception),
+                )
+                self._finish_analysis_v2_ui()
+            return
 
         if protein_part == "head":
             try:
