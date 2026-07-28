@@ -64,7 +64,7 @@ class HeadSegmentationWorker(QThread):
 
             if not self.paired_fields:
                 raise RuntimeError(
-                    "\u6ca1\u6709\u53ef\u7528\u4e8e\u5934\u90e8\u8bc6\u522b\u7684 R/G/Merge \u89c6\u91ce\u3002"
+                    "\u6ca1\u6709\u53ef\u7528\u4e8e\u5934\u90e8\u8bc6\u522b\u7684 R/G \u89c6\u91ce\u3002"
                 )
 
             paths = AnalysisTaskPaths.for_case(

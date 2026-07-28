@@ -23,6 +23,7 @@ from .image_canvas import ImageCanvas
 
 class HeadCalibrationWindow(QMainWindow):
     calibration_completed = Signal(object)
+    calibration_closed = Signal(bool)
 
     def __init__(
         self,
@@ -56,6 +57,8 @@ class HeadCalibrationWindow(QMainWindow):
             )
         )
         self._switching_field = False
+        self._calibration_completed = False
+        self._calibration_closed_emitted = False
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -356,12 +359,35 @@ class HeadCalibrationWindow(QMainWindow):
                 ),
             )
             self.statusBar().showMessage("头部校准已完成")
+            self._calibration_completed = True
+            self.controls.complete_button.setEnabled(False)
             self.calibration_completed.emit(result)
         except BaseException as exception:
             self._show_error("完成头部校准失败", exception)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._save_current():
-            event.accept()
-        else:
-            event.ignore()
+        if not self._calibration_completed:
+            answer = QMessageBox.question(
+                self,
+                "取消头部校准",
+                "当前尚未完成全部头部校准。\n\n"
+                "关闭窗口会取消本次头部分析，但已经进行的人工修改会保留在任务目录中。\n\n"
+                "确认关闭吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+
+            if not self._save_current():
+                event.ignore()
+                return
+
+        event.accept()
+
+        if not self._calibration_closed_emitted:
+            self._calibration_closed_emitted = True
+            self.calibration_closed.emit(
+                bool(self._calibration_completed)
+            )

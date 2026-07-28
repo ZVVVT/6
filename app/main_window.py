@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QLabel,
+    QMessageBox,
     QStackedWidget,
     QFrame,
 )
@@ -72,6 +73,7 @@ class MainWindow(QMainWindow):
         self.database = Database(str(database_path))
 
         self.current_case = None
+        self._analysis_navigation_locked = False
         self._page_title_map = {}
         self._page_button_map = {}
 
@@ -108,7 +110,7 @@ class MainWindow(QMainWindow):
         来源：config.ini
         [AppInfo]
         app_name = xxx
-        logo_path = assets\logo.png
+        logo_path = assets\\logo.png
         """
         try:
             self.config_manager.load()
@@ -243,6 +245,9 @@ class MainWindow(QMainWindow):
         self.page_settings = SettingsWindow()
 
         self.page_settings.config_saved.connect(self.on_config_saved)
+        self.page_analysis.analysis_activity_changed.connect(
+            self.on_analysis_activity_changed
+        )
 
         self.register_page(self.page_cases, self.btn_cases, "病例管理")
         self.register_page(self.page_detail, self.btn_detail, "病例详情")
@@ -385,14 +390,55 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 页面切换
     # ------------------------------------------------------------------
+    def on_analysis_activity_changed(
+        self,
+        running: bool,
+    ):
+        """Lock case/config navigation while an analysis owns page context."""
+        self._analysis_navigation_locked = bool(
+            running
+        )
+
+        self.set_case_related_buttons_enabled(
+            self.current_case is not None
+        )
+
+        if running:
+            self.statusBar().showMessage(
+                "分析进行中：已锁定病例和页面切换，避免结果写入错误病例。"
+            )
+        else:
+            self.statusBar().showMessage(
+                "分析流程已结束。"
+            )
+
     def set_case_related_buttons_enabled(self, enabled: bool):
-        self.btn_detail.setEnabled(enabled)
-        self.btn_analysis.setEnabled(enabled)
-        self.btn_reports.setEnabled(enabled)
+        allowed = bool(enabled) and not self._analysis_navigation_locked
+        self.btn_detail.setEnabled(allowed)
+        self.btn_analysis.setEnabled(allowed)
+        self.btn_reports.setEnabled(allowed)
+
+        self.btn_cases.setEnabled(
+            not self._analysis_navigation_locked
+        )
+        self.btn_settings.setEnabled(
+            not self._analysis_navigation_locked
+        )
+
         if hasattr(self, "menu_buttons"):
             self.refresh_side_button_icons()
 
     def switch_page(self, page, active_button):
+        if (
+            self._analysis_navigation_locked
+            and hasattr(self, "page_analysis")
+            and page is not self.page_analysis
+        ):
+            self.statusBar().showMessage(
+                "分析进行中，请先完成或取消当前分析。"
+            )
+            return
+
         self.stack.setCurrentWidget(page)
         for btn in self.menu_buttons:
             btn.setChecked(btn == active_button)
@@ -451,6 +497,25 @@ class MainWindow(QMainWindow):
         if not case_data:
             return
 
+        if self._analysis_navigation_locked and self.current_case:
+            current_id = self.current_case.get("id")
+            incoming_id = case_data.get("id")
+            current_no = str(
+                self.current_case.get("case_no", "") or ""
+            ).strip()
+            incoming_no = str(
+                case_data.get("case_no", "") or ""
+            ).strip()
+
+            if (
+                (current_id and incoming_id and current_id != incoming_id)
+                or (current_no and incoming_no and current_no != incoming_no)
+            ):
+                self.statusBar().showMessage(
+                    "分析进行中，暂时不能切换病例。"
+                )
+                return
+
         case_id = case_data.get("id")
         if case_id:
             fresh_case = self.database.get_case(case_id)
@@ -496,6 +561,35 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 旧占位方法保留，避免外部调用报错
     # ------------------------------------------------------------------
+    def closeEvent(self, event):
+        analysis_page = getattr(
+            self,
+            "page_analysis",
+            None,
+        )
+
+        if (
+            analysis_page is not None
+            and hasattr(
+                analysis_page,
+                "is_analysis_active",
+            )
+            and analysis_page.is_analysis_active()
+        ):
+            message = (
+                "分析正在运行或等待人工校准，暂时不能退出软件。"
+            )
+            self.statusBar().showMessage(message)
+            QMessageBox.information(
+                self,
+                "分析进行中",
+                message,
+            )
+            event.ignore()
+            return
+
+        super().closeEvent(event)
+
     def create_placeholder_page(self, title: str, message: str):
         page = QWidget()
         layout = QVBoxLayout(page)

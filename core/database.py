@@ -459,6 +459,110 @@ class Database:
             conn.commit()
             return cursor.lastrowid
 
+    def replace_protein_analysis_with_fields(
+        self,
+        case_id,
+        protein_name,
+        protein_part,
+        image_folder,
+        output_folder,
+        total_fields,
+        total_sperm_count,
+        positive_count,
+        mean_intensity,
+        expression_rate,
+        field_results,
+        status="完成",
+    ):
+        """Atomically replace one protein summary and all field rows.
+
+        The legacy two-step save methods are retained for compatibility.
+        Analysis V2 uses this transaction so a field-row failure cannot
+        leave the previous completed result deleted.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self.connect()
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("BEGIN")
+
+            cursor.execute(
+                """
+                DELETE FROM field_results
+                WHERE analysis_id IN (
+                    SELECT id FROM protein_analysis
+                    WHERE case_id = ? AND protein_name = ?
+                )
+                """,
+                (case_id, protein_name),
+            )
+            cursor.execute(
+                """
+                DELETE FROM protein_analysis
+                WHERE case_id = ? AND protein_name = ?
+                """,
+                (case_id, protein_name),
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO protein_analysis (
+                    case_id, protein_name, protein_part, image_folder,
+                    output_folder, total_fields, total_sperm_count,
+                    positive_count, mean_intensity, expression_rate,
+                    status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    case_id,
+                    protein_name,
+                    protein_part,
+                    image_folder,
+                    output_folder,
+                    total_fields,
+                    total_sperm_count,
+                    positive_count,
+                    mean_intensity,
+                    expression_rate,
+                    status,
+                    now,
+                ),
+            )
+            analysis_id = cursor.lastrowid
+
+            for item in list(field_results or []):
+                cursor.execute(
+                    """
+                    INSERT INTO field_results (
+                        analysis_id, field_no, sperm_count,
+                        positive_count, mean_intensity,
+                        expression_rate, overlay_image_path, csv_path
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        analysis_id,
+                        str(item.get("field_no", "") or ""),
+                        item.get("sperm_count", 0),
+                        item.get("positive_count", 0),
+                        item.get("mean_intensity", 0),
+                        item.get("expression_rate", 0),
+                        str(item.get("overlay_image_path", "") or ""),
+                        str(item.get("csv_path", "") or ""),
+                    ),
+                )
+
+            conn.commit()
+            return analysis_id
+
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def get_protein_analysis_by_case(self, case_id):
         with self.connect() as conn:
             cursor = conn.cursor()

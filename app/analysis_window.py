@@ -1,4 +1,5 @@
 import shutil
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -21,9 +22,22 @@ from PySide6.QtWidgets import (
     QSplitter,
 )
 
+from app.analysis_v2.head_analysis_workers import (
+    HeadMeasurementWorker,
+    HeadSegmentationWorker,
+)
+from app.analysis_v2.head_calibration_window import (
+    HeadCalibrationWindow,
+)
 from app.long_message_dialog import show_long_message_dialog
 from app.result_viewer import ResultViewer
 from core.config_manager import ConfigManager
+from core.analysis_v2.head_input_adapter import (
+    build_head_segmentation_fields,
+)
+from core.analysis_v2.head_result_publisher import (
+    stage_head_measurement_output,
+)
 from core.image_channel_matcher import ImageChannelMatcher
 from core.result_parser import ResultParser
 from core.protein_analysis_service import ProteinAnalysisService
@@ -66,6 +80,8 @@ class SingleProteinAnalysisWorker(QThread):
 
 
 class AnalysisWindow(QWidget):
+    analysis_activity_changed = Signal(bool)
+
     def __init__(self, database, parent=None):
         super().__init__(parent)
 
@@ -76,6 +92,16 @@ class AnalysisWindow(QWidget):
         self.current_case = None
         self.imported_images = []
         self.analysis_worker = None
+
+        # Analysis V2 head workflow state.
+        self.head_segmentation_worker = None
+        self.head_measurement_worker = None
+        self.head_calibration_window = None
+        self.current_analysis_v2_task_root = None
+        self.current_analysis_v2_context = None
+        self._analysis_running = False
+        self._analysis_v2_finish_pending = False
+        self._analysis_v2_select_next_pending = False
         self.current_output_dir = None
         self.current_raw_image_folder = None
         self._suspend_protein_changed = False
@@ -663,6 +689,20 @@ class AnalysisWindow(QWidget):
         if not protein_key:
             return
 
+        protein_key = str(protein_key)
+
+        if (
+            self._analysis_running
+            and self.current_protein_key
+            and self.current_protein_key != protein_key
+        ):
+            QMessageBox.information(
+                self,
+                "分析进行中",
+                "当前分析尚未结束，暂时不能切换检测项目。",
+            )
+            return
+
         if self.current_protein_key == protein_key and not self._suspend_protein_changed:
             # 当前蛋白重复点击时不重新刷日志，但仍确保按钮状态正确。
             self.update_protein_buttons()
@@ -700,10 +740,16 @@ class AnalysisWindow(QWidget):
 
         protein_name = self.config.get_protein_display_name(protein_key)
         protein_part = self.config.get_protein_part(protein_key) or "未配置"
-        pipeline_path = self.config.get_pipeline_by_protein(protein_key)
 
         self.protein_part_label.setText(f"表达部位：{protein_part}")
-        self.pipeline_label.setText(f"Pipeline：{pipeline_path}")
+
+        if str(protein_part).strip().lower() == "head":
+            self.pipeline_label.setText(
+                "Pipeline：Analysis V2（Cellpose → 人工校准 → 校准后测量）"
+            )
+        else:
+            pipeline_path = self.config.get_pipeline_by_protein(protein_key)
+            self.pipeline_label.setText(f"Pipeline：{pipeline_path}")
 
         self.append_log(f"当前选择蛋白：{protein_name}，内部编号：{protein_key}")
 
@@ -954,19 +1000,38 @@ class AnalysisWindow(QWidget):
         self.append_log("系统配置已刷新。")
 
     def set_case(self, case_data: dict):
-        self.current_case = case_data
+        incoming = dict(case_data or {})
 
-        self.case_no_label.setText(str(case_data.get("case_no", "")))
-        self.patient_name_label.setText(str(case_data.get("patient_name", "")))
-        self.sample_no_label.setText(str(case_data.get("sample_no", "")))
-        self.test_date_label.setText(str(case_data.get("test_date", "")))
+        if self._analysis_running and self.current_case:
+            current_id = self.current_case.get("id")
+            incoming_id = incoming.get("id")
+            current_no = self.get_current_case_no()
+            incoming_no = str(incoming.get("case_no", "") or "").strip()
+
+            if (
+                (current_id and incoming_id and current_id != incoming_id)
+                or (current_no and incoming_no and current_no != incoming_no)
+            ):
+                QMessageBox.information(
+                    self,
+                    "分析进行中",
+                    "当前分析尚未结束，暂时不能切换病例。",
+                )
+                return
+
+        self.current_case = incoming
+
+        self.case_no_label.setText(str(incoming.get("case_no", "")))
+        self.patient_name_label.setText(str(incoming.get("patient_name", "")))
+        self.sample_no_label.setText(str(incoming.get("sample_no", "")))
+        self.test_date_label.setText(str(incoming.get("test_date", "")))
 
         self.update_case_summary_label()
         self.refresh_protein_status()
         self.on_protein_changed()
 
         self.append_log(
-            f"已载入病例：{case_data.get('case_no', '')} - {case_data.get('patient_name', '')}"
+            f"已载入病例：{incoming.get('case_no', '')} - {incoming.get('patient_name', '')}"
         )
 
     def get_current_case_no(self):
@@ -1276,9 +1341,764 @@ class AnalysisWindow(QWidget):
 
                 self.table.setItem(row_index, col_index, table_item)
 
+    def _worker_is_running(self, worker) -> bool:
+        try:
+            return bool(worker and worker.isRunning())
+        except RuntimeError:
+            return False
+
+    def is_analysis_active(self) -> bool:
+        """Return whether legacy or Analysis V2 work is still active."""
+        calibration_open = False
+        if self.head_calibration_window is not None:
+            try:
+                calibration_open = self.head_calibration_window.isVisible()
+            except RuntimeError:
+                calibration_open = False
+
+        return bool(
+            self._analysis_running
+            or self._worker_is_running(self.analysis_worker)
+            or self._worker_is_running(self.head_segmentation_worker)
+            or self._worker_is_running(self.head_measurement_worker)
+            or calibration_open
+        )
+
+    def _analysis_context_matches_current(
+        self,
+        context,
+    ) -> tuple:
+        context = dict(context or {})
+        current_case = dict(self.current_case or {})
+
+        expected_case_id = context.get("case_id")
+        current_case_id = current_case.get("id")
+
+        expected_case_no = str(
+            context.get("case_no", "") or ""
+        ).strip()
+        current_case_no = self.get_current_case_no()
+
+        expected_protein_key = str(
+            context.get("protein_key", "") or ""
+        ).strip()
+        current_protein_key = self.get_current_protein_key()
+
+        if (
+            expected_case_id
+            and current_case_id
+            and expected_case_id != current_case_id
+        ):
+            return False, "当前病例已发生变化。"
+
+        if (
+            expected_case_no
+            and current_case_no != expected_case_no
+        ):
+            return False, "当前病例编号已发生变化。"
+
+        if (
+            expected_protein_key
+            and current_protein_key != expected_protein_key
+        ):
+            return False, "当前检测项目已发生变化。"
+
+        return True, ""
+
+    def _clear_analysis_v2_state(self) -> None:
+        self.current_analysis_v2_task_root = None
+        self.current_analysis_v2_context = None
+        self._analysis_v2_finish_pending = False
+        self._analysis_v2_select_next_pending = False
+
+    def _finish_analysis_v2_ui(
+        self,
+        select_next: bool = False,
+    ) -> None:
+        self.set_running_state(False)
+        self._clear_analysis_v2_state()
+
+        if select_next:
+            self.select_next_unanalyzed_protein()
+
+    def _show_analysis_v2_error(
+        self,
+        title: str,
+        summary: str,
+        detail: str,
+    ) -> None:
+        message = str(detail or "未知错误")
+        self.append_log("{}：{}".format(title, message))
+        show_long_message_dialog(
+            self,
+            title=title,
+            summary=summary,
+            detail=message,
+            level="error",
+        )
+
+    def _start_head_analysis_v2(
+        self,
+        complete_items,
+        protein_key: str,
+        protein_name: str,
+    ) -> None:
+        """Prepare and start Analysis V2 head segmentation."""
+        if self.is_analysis_active():
+            raise RuntimeError("已有分析任务正在运行。")
+
+        case_snapshot = dict(self.current_case or {})
+        case_no = str(
+            case_snapshot.get("case_no", "") or ""
+        ).strip()
+
+        if not case_no:
+            raise RuntimeError("当前病例编号为空。")
+
+        protein_key = str(protein_key or "").strip()
+        protein_name = str(protein_name or "").strip()
+
+        if not protein_key:
+            raise RuntimeError("当前蛋白内部编号为空。")
+
+        paired_fields = build_head_segmentation_fields(
+            complete_items
+        )
+
+        project_root = Path(
+            getattr(self.config, "app_root", Path(__file__).resolve().parents[1])
+        ).resolve()
+
+        workspace_root = Path(
+            self.config.get_workspace_root()
+        )
+        if not workspace_root.is_absolute():
+            workspace_root = (
+                project_root / workspace_root
+            ).resolve()
+        else:
+            workspace_root = workspace_root.resolve()
+
+        target_output_dir = (
+            workspace_root
+            / case_no
+            / "cp_output"
+            / protein_key
+        )
+
+        self.current_analysis_v2_task_root = None
+        self._analysis_v2_finish_pending = False
+        self._analysis_v2_select_next_pending = False
+        self.current_analysis_v2_context = {
+            "case": case_snapshot,
+            "case_id": case_snapshot.get("id"),
+            "case_no": case_no,
+            "protein_key": protein_key,
+            "protein_name": protein_name,
+            "protein_part": "head",
+            "field_count": len(paired_fields),
+            "project_root": str(project_root),
+            "raw_image_folder": str(
+                self.current_raw_image_folder or ""
+            ),
+            "target_output_dir": str(target_output_dir),
+            "started_perf_counter": time.perf_counter(),
+        }
+
+        worker = HeadSegmentationWorker(
+            project_root=project_root,
+            case_data=case_snapshot,
+            protein_key=protein_key,
+            paired_fields=paired_fields,
+            config=self.config,
+            parent=self,
+        )
+        worker.log_signal.connect(self.append_log)
+        worker.finished_signal.connect(
+            self._on_head_segmentation_finished
+        )
+        worker.finished.connect(
+            self._on_head_segmentation_thread_finished
+        )
+        worker.finished.connect(worker.deleteLater)
+
+        self.head_segmentation_worker = worker
+        self.set_running_state(True)
+        self.btn_run_analysis.setText("正在识别头部...")
+
+        self.append_log(
+            "Analysis V2：开始头部分析，视野数 {}，Merge 可选。".format(
+                len(paired_fields)
+            )
+        )
+
+        try:
+            worker.start()
+        except BaseException:
+            self.head_segmentation_worker = None
+            worker.deleteLater()
+            self._clear_analysis_v2_state()
+            self.set_running_state(False)
+            raise
+
+    def _on_head_segmentation_finished(
+        self,
+        success: bool,
+        elapsed: float,
+        result: object,
+        error_message: str,
+    ) -> None:
+        """Open manual calibration after head segmentation."""
+        payload = dict(result) if isinstance(result, dict) else {}
+
+        if not success:
+            self._analysis_v2_finish_pending = True
+            self.current_analysis_v2_context = None
+            self.current_analysis_v2_task_root = None
+            self._show_analysis_v2_error(
+                "头部识别失败",
+                "Analysis V2 头部识别失败，旧分析结果没有被修改。",
+                str(error_message or "头部识别失败。"),
+            )
+            return
+
+        try:
+            context = dict(self.current_analysis_v2_context or {})
+            task_root_text = str(
+                payload.get("task_root", "") or ""
+            ).strip()
+
+            if not task_root_text:
+                raise RuntimeError(
+                    "头部识别结果缺少 task_root。"
+                )
+
+            task_root = Path(task_root_text).resolve()
+            if not task_root.is_dir():
+                raise FileNotFoundError(
+                    "头部识别任务目录不存在：{}".format(
+                        task_root
+                    )
+                )
+
+            expected_case_no = str(
+                context.get("case_no", "") or ""
+            ).strip()
+            expected_protein_key = str(
+                context.get("protein_key", "") or ""
+            ).strip()
+            actual_case_no = str(
+                payload.get("case_no", "") or ""
+            ).strip()
+            actual_protein_key = str(
+                payload.get("protein_key", "") or ""
+            ).strip()
+
+            if expected_case_no != actual_case_no:
+                raise RuntimeError(
+                    "识别结果病例编号与启动时不一致。"
+                )
+            if expected_protein_key != actual_protein_key:
+                raise RuntimeError(
+                    "识别结果蛋白编号与启动时不一致。"
+                )
+            if self.head_calibration_window is not None:
+                raise RuntimeError(
+                    "已有头部校准窗口未关闭。"
+                )
+
+            self.current_analysis_v2_task_root = task_root
+            context["segmentation_payload"] = payload
+            context["segmentation_elapsed_seconds"] = float(
+                elapsed or 0.0
+            )
+            self.current_analysis_v2_context = context
+
+            window = HeadCalibrationWindow(
+                task_root=task_root,
+                parent=self,
+            )
+            window.setAttribute(
+                Qt.WA_DeleteOnClose,
+                True,
+            )
+            window.calibration_completed.connect(
+                self._on_head_calibration_completed
+            )
+            window.calibration_closed.connect(
+                self._on_head_calibration_closed
+            )
+
+            self.head_calibration_window = window
+            self.btn_run_analysis.setText("等待人工校准...")
+            self.append_log(
+                "Analysis V2：头部识别完成，已打开人工校准窗口。"
+            )
+
+            window.show()
+            window.raise_()
+            window.activateWindow()
+
+        except BaseException as exception:
+            self._analysis_v2_finish_pending = True
+            self._show_analysis_v2_error(
+                "打开头部校准失败",
+                "头部识别已经结束，但无法打开人工校准窗口。旧结果没有被修改。",
+                str(exception),
+            )
+
+    def _on_head_segmentation_thread_finished(
+        self,
+    ) -> None:
+        worker = self.sender()
+
+        if self.head_segmentation_worker is worker:
+            self.head_segmentation_worker = None
+
+        if self._analysis_v2_finish_pending:
+            self._finish_analysis_v2_ui()
+
+    def _on_head_calibration_completed(
+        self,
+        result: object,
+    ) -> None:
+        """Close calibration and start calibrated-label measurement."""
+        window = self.sender()
+
+        if window is not self.head_calibration_window:
+            self.append_log(
+                "Analysis V2：忽略过期的校准完成信号。"
+            )
+            return
+
+        worker = None
+
+        try:
+            task_root = Path(
+                self.current_analysis_v2_task_root
+            ).resolve()
+            context = dict(
+                self.current_analysis_v2_context or {}
+            )
+
+            if not task_root.is_dir():
+                raise FileNotFoundError(
+                    "Analysis V2 任务目录不存在：{}".format(
+                        task_root
+                    )
+                )
+            if self._worker_is_running(
+                self.head_measurement_worker
+            ):
+                raise RuntimeError(
+                    "头部测量任务已经在运行。"
+                )
+
+            matches, reason = (
+                self._analysis_context_matches_current(
+                    context
+                )
+            )
+            if not matches:
+                raise RuntimeError(reason)
+
+            project_root = Path(
+                str(context.get("project_root", "") or "")
+            ).resolve()
+            if not project_root.is_dir():
+                raise FileNotFoundError(
+                    "项目根目录不存在：{}".format(
+                        project_root
+                    )
+                )
+
+            context["calibration_result"] = (
+                result if isinstance(result, dict) else {}
+            )
+            self.current_analysis_v2_context = context
+
+            if not window.close():
+                raise RuntimeError(
+                    "人工校准窗口未能安全关闭。"
+                )
+
+            worker = HeadMeasurementWorker(
+                project_root=project_root,
+                task_root=task_root,
+                config=self.config,
+                parent=self,
+            )
+            worker.log_signal.connect(self.append_log)
+            worker.finished_signal.connect(
+                self._on_head_measurement_finished
+            )
+            worker.finished.connect(
+                self._on_head_measurement_thread_finished
+            )
+            worker.finished.connect(worker.deleteLater)
+
+            self.head_measurement_worker = worker
+            self.btn_run_analysis.setText("正在测量头部...")
+            self.append_log(
+                "Analysis V2：人工校准完成，开始测量最终头部标签。"
+            )
+            worker.start()
+
+        except BaseException as exception:
+            if worker is not None:
+                try:
+                    worker.deleteLater()
+                except RuntimeError:
+                    pass
+            self.head_measurement_worker = None
+            task_root_text = str(
+                self.current_analysis_v2_task_root or ""
+            )
+            self._show_analysis_v2_error(
+                "头部测量启动失败",
+                "人工校准数据已保留，但无法启动头部测量。旧结果没有被修改。",
+                "{}\n\n任务目录：{}".format(
+                    exception,
+                    task_root_text,
+                ),
+            )
+            self._finish_analysis_v2_ui()
+
+    def _on_head_calibration_closed(
+        self,
+        completed: bool,
+    ) -> None:
+        window = self.sender()
+
+        if window is self.head_calibration_window:
+            self.head_calibration_window = None
+
+        if completed:
+            self.append_log(
+                "Analysis V2：人工校准窗口已关闭。"
+            )
+            return
+
+        self.append_log(
+            "Analysis V2：用户取消人工校准，本次头部分析已结束；旧结果保持不变。"
+        )
+        self._finish_analysis_v2_ui()
+
+    def _save_head_analysis_v2_to_database(
+        self,
+        context,
+        output_dir: Path,
+        summary_result,
+    ) -> str:
+        context = dict(context or {})
+        summary_result = dict(summary_result or {})
+
+        case_id = context.get("case_id")
+        protein_name = str(
+            context.get("protein_name", "") or ""
+        ).strip()
+        image_folder = str(
+            context.get("raw_image_folder", "") or ""
+        )
+        output_folder = str(Path(output_dir).resolve())
+
+        if not case_id:
+            raise RuntimeError(
+                "当前 Analysis V2 上下文缺少数据库病例 ID。"
+            )
+        if not protein_name:
+            raise RuntimeError(
+                "当前 Analysis V2 上下文缺少蛋白名称。"
+            )
+        if not hasattr(
+            self.database,
+            "replace_protein_analysis_with_fields",
+        ):
+            raise RuntimeError(
+                "数据库组件缺少原子结果保存接口。"
+            )
+        if not summary_result.get("success"):
+            raise RuntimeError(
+                summary_result.get(
+                    "message",
+                    "头部结果解析失败。",
+                )
+            )
+
+        total = dict(summary_result.get("total") or {})
+        rows = list(summary_result.get("rows") or [])
+        image_csv = str(
+            summary_result.get("image_csv", "") or ""
+        )
+
+        field_results = []
+        for item in rows:
+            field_results.append({
+                "field_no": str(
+                    item.get("image_number", "") or ""
+                ),
+                "sperm_count": item.get("sperm_count", 0),
+                "positive_count": item.get("positive_count", 0),
+                "mean_intensity": item.get("mean_intensity", 0),
+                "expression_rate": item.get("expression_rate", 0),
+                "overlay_image_path": "",
+                "csv_path": image_csv,
+            })
+
+        self.database.replace_protein_analysis_with_fields(
+            case_id=case_id,
+            protein_name=protein_name,
+            protein_part="head",
+            image_folder=image_folder,
+            output_folder=output_folder,
+            total_fields=total.get("field_count", 0),
+            total_sperm_count=total.get("sperm_count", 0),
+            positive_count=total.get("positive_count", 0),
+            mean_intensity=total.get("mean_intensity", 0),
+            expression_rate=total.get("expression_rate", 0),
+            field_results=field_results,
+            status="完成",
+        )
+
+        return (
+            f"{protein_name} 结果已保存到数据库："
+            f"视野数 {total.get('field_count', 0)}，"
+            f"精子总数 {total.get('sperm_count', 0)}，"
+            f"共定位数 {total.get('positive_count', 0)}，"
+            f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
+            f"荧光强度 {self.format_int_for_display(total.get('mean_intensity', 0))}。"
+        )
+
+    def _on_head_measurement_finished(
+        self,
+        success: bool,
+        elapsed: float,
+        result: object,
+        error_message: str,
+    ) -> None:
+        """Publish measured output, atomically save DB rows, then commit files."""
+        payload = dict(result) if isinstance(result, dict) else {}
+
+        if not success:
+            self._analysis_v2_finish_pending = True
+            task_root_text = str(
+                self.current_analysis_v2_task_root or ""
+            )
+            self._show_analysis_v2_error(
+                "头部测量失败",
+                "Analysis V2 头部测量失败，人工校准数据已保留，旧结果没有被修改。",
+                "{}\n\n任务目录：{}".format(
+                    error_message or "头部测量失败。",
+                    task_root_text,
+                ),
+            )
+            return
+
+        publication = None
+        transaction_committed = False
+
+        try:
+            context = dict(
+                self.current_analysis_v2_context or {}
+            )
+            matches, reason = (
+                self._analysis_context_matches_current(
+                    context
+                )
+            )
+            if not matches:
+                raise RuntimeError(
+                    "{} 为避免写入错误病例，结果未发布。".format(
+                        reason
+                    )
+                )
+
+            source_text = str(
+                payload.get(
+                    "measurement_output_dir",
+                    "",
+                )
+                or ""
+            ).strip()
+            target_text = str(
+                context.get(
+                    "target_output_dir",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not source_text:
+                raise RuntimeError(
+                    "测量结果缺少 measurement_output_dir。"
+                )
+            if not target_text:
+                raise RuntimeError(
+                    "Analysis V2 上下文缺少正式输出目录。"
+                )
+
+            source_dir = Path(source_text).resolve()
+            target_dir = Path(target_text).resolve()
+            expected_field_count = int(
+                context.get("field_count", 0) or 0
+            )
+
+            self.append_log(
+                "Analysis V2：测量完成，正在安全发布正式结果。"
+            )
+
+            publication = stage_head_measurement_output(
+                source_dir=source_dir,
+                target_dir=target_dir,
+                expected_field_count=expected_field_count,
+            )
+
+            save_message = (
+                self._save_head_analysis_v2_to_database(
+                    context=context,
+                    output_dir=target_dir,
+                    summary_result=publication.summary,
+                )
+            )
+
+            cleanup_warning = publication.commit()
+            publication = None
+            transaction_committed = True
+
+            context["measurement_payload"] = payload
+            context["measurement_elapsed_seconds"] = float(
+                elapsed or 0.0
+            )
+            self.current_analysis_v2_context = context
+
+            self.current_output_dir = target_dir
+            raw_folder_text = str(
+                context.get("raw_image_folder", "") or ""
+            ).strip()
+            if raw_folder_text:
+                self.current_raw_image_folder = Path(
+                    raw_folder_text
+                )
+
+            self.result_viewer.set_output_dir(
+                str(target_dir)
+            )
+            self.result_viewer.refresh_results()
+            self.append_log(save_message)
+            self.append_log(
+                "Analysis V2 正式输出：{}".format(
+                    target_dir
+                )
+            )
+            if cleanup_warning:
+                self.append_log(cleanup_warning)
+
+            self.refresh_protein_status()
+            self.refresh_current_protein_workspace()
+
+            started = float(
+                context.get("started_perf_counter", 0) or 0
+            )
+            total_elapsed = (
+                time.perf_counter() - started
+                if started > 0
+                else float(elapsed or 0.0)
+            )
+
+            # 先登记结束请求，再显示模态提示框。
+            # QThread 的 finished 信号可能在 QMessageBox 的嵌套事件循环中到达；
+            # 若先显示提示框，finished 可能在 finish_pending 仍为 False 时被消费，
+            # 导致页面永久停留在“正在测量头部”。
+            self._analysis_v2_select_next_pending = True
+            self._analysis_v2_finish_pending = True
+
+            # 工作线程通常已经返回，但 Qt 的 finished 槽可能尚未被主线程处理。
+            # 此时直接恢复 UI；稍后到达的 finished 只负责清理线程引用，不会重复结束。
+            if not self._worker_is_running(
+                self.head_measurement_worker
+            ):
+                self._finish_analysis_v2_ui(
+                    select_next=True
+                )
+
+            QMessageBox.information(
+                self,
+                "头部分析完成",
+                "Analysis V2 头部分析完成。\n"
+                "总用时（含人工校准）：{:.2f} 秒\n\n"
+                "输出目录：\n{}\n\n{}".format(
+                    total_elapsed,
+                    target_dir,
+                    save_message,
+                ),
+            )
+
+        except BaseException as exception:
+            task_root_text = str(
+                self.current_analysis_v2_task_root or ""
+            )
+            self._analysis_v2_finish_pending = True
+
+            if transaction_committed:
+                self._show_analysis_v2_error(
+                    "结果已保存但界面刷新失败",
+                    "新文件和数据库记录已经保存成功，但结果界面刷新失败。重新进入蛋白分析页即可重新加载结果。",
+                    "{}\n\nAnalysis V2 任务目录：{}".format(
+                        exception,
+                        task_root_text,
+                    ),
+                )
+                return
+
+            rollback_detail = ""
+
+            if publication is not None:
+                try:
+                    publication.rollback()
+                except BaseException as rollback_exception:
+                    rollback_detail = (
+                        "\n\n文件回滚异常：{}".format(
+                            rollback_exception
+                        )
+                    )
+
+            self._show_analysis_v2_error(
+                "头部结果发布失败",
+                "新结果未能完成发布，系统已尽力恢复旧文件和旧数据库记录。",
+                "{}{}\n\nAnalysis V2 任务目录：{}".format(
+                    exception,
+                    rollback_detail,
+                    task_root_text,
+                ),
+            )
+
+    def _on_head_measurement_thread_finished(
+        self,
+    ) -> None:
+        worker = self.sender()
+
+        if self.head_measurement_worker is worker:
+            self.head_measurement_worker = None
+
+        if self._analysis_v2_finish_pending:
+            select_next = bool(
+                self._analysis_v2_select_next_pending
+            )
+            self._finish_analysis_v2_ui(
+                select_next=select_next
+            )
+
     def run_analysis(self):
         if not self.current_case:
             QMessageBox.information(self, "提示", "请先选择病例。")
+            return
+
+        if self.is_analysis_active():
+            QMessageBox.information(
+                self,
+                "提示",
+                "已有分析任务正在运行。",
+            )
             return
 
         if not self.imported_images:
@@ -1296,9 +2116,20 @@ class AnalysisWindow(QWidget):
 
         protein_key = self.get_current_protein_key()
         protein_name = self.get_current_protein_name()
+        protein_part = str(
+            self.config.get_protein_part(protein_key) or ""
+        ).strip().lower()
 
         if not protein_key:
             QMessageBox.warning(self, "提示", "当前蛋白配置为空，无法运行分析。")
+            return
+
+        if protein_part not in {"head", "tail"}:
+            QMessageBox.warning(
+                self,
+                "提示",
+                "当前蛋白表达部位未正确配置为 head 或 tail。",
+            )
             return
 
         if not self.current_raw_image_folder or not Path(self.current_raw_image_folder).exists():
@@ -1338,6 +2169,7 @@ class AnalysisWindow(QWidget):
                 f"共定位数：{positive_count}\n"
                 f"标定率：{expression_rate}\n\n"
                 "继续运行会用新的分析结果替换该蛋白旧结果。\n"
+                "新结果完全成功前，旧文件和旧数据库记录会继续保留。\n"
                 "不会影响当前病例下其他蛋白的结果。\n\n"
                 "是否继续重新分析？",
                 QMessageBox.Yes | QMessageBox.No,
@@ -1350,8 +2182,25 @@ class AnalysisWindow(QWidget):
 
         self.append_log(f"准备运行分析：{protein_name}")
         self.append_log(f"当前蛋白导入目录：{self.current_raw_image_folder}")
-        self.set_running_state(True)
 
+        if protein_part == "head":
+            try:
+                self._start_head_analysis_v2(
+                    complete_items=complete_items,
+                    protein_key=protein_key,
+                    protein_name=protein_name,
+                )
+            except BaseException as exception:
+                self._show_analysis_v2_error(
+                    "头部分析启动失败",
+                    "Analysis V2 头部分析未能启动，旧结果没有被修改。",
+                    str(exception),
+                )
+                self._finish_analysis_v2_ui()
+            return
+
+        # 尾部仍使用已验证的旧 ProteinAnalysisService 流程。
+        self.set_running_state(True)
         self.analysis_worker = SingleProteinAnalysisWorker(
             case_data=self.current_case,
             protein_key=protein_key,
@@ -1360,10 +2209,6 @@ class AnalysisWindow(QWidget):
         )
         self.analysis_worker.log_signal.connect(self.append_log)
         self.analysis_worker.finished_signal.connect(self.on_analysis_finished)
-        # 注意：finished_signal 是自定义业务信号，在线程 run() 返回前发出。
-        # 不能在 on_analysis_finished 里立刻把 self.analysis_worker 置空，
-        # 否则可能触发 “QThread: Destroyed while thread is still running”。
-        # 等 Qt 自带 finished 信号发出后，再统一释放线程对象。
         self.analysis_worker.finished.connect(self.on_analysis_thread_finished)
         self.analysis_worker.start()
 
@@ -1531,13 +2376,21 @@ class AnalysisWindow(QWidget):
     # -------------------------
 
     def closeEvent(self, event):
-        if self.analysis_worker and self.analysis_worker.isRunning():
-            QMessageBox.information(self, "提示", "分析正在运行，暂时不能关闭窗口。")
+        if self.is_analysis_active():
+            QMessageBox.information(
+                self,
+                "提示",
+                "分析正在运行或等待人工校准，暂时不能关闭窗口。",
+            )
             event.ignore()
             return
         super().closeEvent(event)
 
     def set_running_state(self, running: bool):
+        running = bool(running)
+        changed = self._analysis_running != running
+        self._analysis_running = running
+
         self.btn_select_folder.setEnabled(not running)
         self.btn_import.setEnabled(not running)
         self.btn_next_protein.setEnabled(not running)
@@ -1549,7 +2402,14 @@ class AnalysisWindow(QWidget):
             self.btn_run_analysis.setText("正在分析...")
         else:
             self.btn_run_analysis.setText("运行分析")
-            self.btn_run_analysis.setEnabled(self.get_complete_image_count(self.imported_images) > 0)
+            self.btn_run_analysis.setEnabled(
+                self.get_complete_image_count(
+                    self.imported_images
+                ) > 0
+            )
+
+        if changed:
+            self.analysis_activity_changed.emit(running)
 
     def append_log(self, message: str):
         message = str(message)
