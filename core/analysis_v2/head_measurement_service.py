@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .environment_snapshot import EnvironmentSnapshotWriter
 from .head_measurement_result import validate_head_measurement_output
@@ -37,78 +37,134 @@ def _unique_source(
     role: str,
     fallback_directory: Path,
     fallback_matcher: Any,
-) -> Path:
+    required: bool = True,
+) -> Optional[Path]:
     candidates = []
+
     for record in manifest_files:
         metadata = record.get("metadata") or {}
+
         if (
             record.get("role") == role
-            and metadata.get("field_id") == field_id
+            and str(metadata.get("field_id") or "") == field_id
         ):
             candidate = _record_path(task_root, record)
-            if candidate.is_file() and candidate not in candidates:
-                candidates.append(candidate)
-    if not candidates:
-        candidates = sorted(
-            path.resolve()
-            for path in fallback_directory.iterdir()
-            if path.is_file() and fallback_matcher(path.name)
+
+            if candidate.is_file():
+                candidates.append(candidate.resolve())
+
+    if not candidates and fallback_directory.is_dir():
+        candidates.extend(
+            candidate.resolve()
+            for candidate in sorted(fallback_directory.iterdir())
+            if candidate.is_file()
+            and fallback_matcher(candidate.name)
         )
-    if len(candidates) != 1:
-        raise ValueError(
-            "{} 的 {} 候选数量应为 1，实际为 {}：{}".format(
-                field_id,
-                role,
-                len(candidates),
-                [str(path) for path in candidates],
-            )
+
+    unique_candidates = []
+    seen = set()
+
+    for candidate in candidates:
+        key = str(candidate).casefold()
+
+        if key not in seen:
+            seen.add(key)
+            unique_candidates.append(candidate)
+
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+
+    if not unique_candidates and not required:
+        return None
+
+    raise ValueError(
+        "视野 {} 的 {} 源文件数量不是 1：{}".format(
+            field_id,
+            role,
+            [str(candidate) for candidate in unique_candidates],
         )
-    return candidates[0]
+    )
 
 
 def collect_head_measurement_fields(
     task_root: Path,
 ) -> List[Dict[str, Any]]:
-    """优先通过 manifest 定位各视野源文件，文件名搜索仅作回退。"""
+    """Locate calibrated head fields and source images."""
     root = Path(task_root).resolve()
     manifest_path = root / "manifest.json"
     manifest_files = []
+
     if manifest_path.is_file():
-        with manifest_path.open("r", encoding="utf-8") as manifest_file:
+        with manifest_path.open(
+            "r",
+            encoding="utf-8",
+        ) as manifest_file:
             manifest = json.load(manifest_file)
-        manifest_files = list(manifest.get("files") or [])
+
+        manifest_files = list(
+            manifest.get("files") or []
+        )
 
     field_ids = sorted({
-        str((record.get("metadata") or {}).get("field_id") or "")
+        str(
+            (record.get("metadata") or {}).get(
+                "field_id"
+            ) or ""
+        )
         for record in manifest_files
         if record.get("role") == "head_final_labels"
-        and (record.get("metadata") or {}).get("field_id")
+        and (record.get("metadata") or {}).get(
+            "field_id"
+        )
     })
+
     calibration_head = root / "calibration" / "head"
+
     if not field_ids:
         suffix = "_HeadFinalLabels.tif"
+
         field_ids = [
-            path.name[:-len(suffix)]
-            for path in sorted(calibration_head.glob("*{}".format(suffix)))
+            item.name[:-len(suffix)]
+            for item in sorted(
+                calibration_head.glob(
+                    "*{}".format(suffix)
+                )
+            )
         ]
+
     if not field_ids:
-        raise ValueError("未找到已校准头部视野")
+        raise ValueError(
+            "\u672a\u627e\u5230\u5df2\u6821\u51c6\u5934\u90e8\u89c6\u91ce"
+        )
 
     source_input = root / "input"
     fields = []
+
     for field_id in field_ids:
         def channel_matcher(channel: str) -> Any:
             suffixes = (
                 "_{}.tif".format(channel).lower(),
                 "_{}.tiff".format(channel).lower(),
             )
+
             return lambda name: (
-                name.lower().startswith(field_id.lower() + "_")
+                name.lower().startswith(
+                    field_id.lower() + "_"
+                )
                 and name.lower().endswith(suffixes)
             )
 
-        labels_name = "{}_HeadFinalLabels.tif".format(field_id).lower()
-        objects_name = "{}_HeadFinalObjects.json".format(field_id).lower()
+        labels_name = (
+            "{}_HeadFinalLabels.tif".format(
+                field_id
+            ).lower()
+        )
+        objects_name = (
+            "{}_HeadFinalObjects.json".format(
+                field_id
+            ).lower()
+        )
+
         fitc = _unique_source(
             root,
             manifest_files,
@@ -117,6 +173,7 @@ def collect_head_measurement_fields(
             source_input,
             channel_matcher("FITC"),
         )
+
         tritc = _unique_source(
             root,
             manifest_files,
@@ -125,6 +182,7 @@ def collect_head_measurement_fields(
             source_input,
             channel_matcher("TRITC"),
         )
+
         merge = _unique_source(
             root,
             manifest_files,
@@ -132,25 +190,39 @@ def collect_head_measurement_fields(
             "merge_input",
             source_input,
             channel_matcher("Merge"),
+            required=False,
         )
+
         labels = _unique_source(
             root,
             manifest_files,
             field_id,
             "head_final_labels",
             calibration_head,
-            lambda name: name.lower() == labels_name,
+            lambda name: (
+                name.lower() == labels_name
+            ),
         )
+
         objects = _unique_source(
             root,
             manifest_files,
             field_id,
             "head_final_objects",
             calibration_head,
-            lambda name: name.lower() == objects_name,
+            lambda name: (
+                name.lower() == objects_name
+            ),
         )
-        with objects.open("r", encoding="utf-8") as objects_file:
-            expected_count = int(json.load(objects_file)["object_count"])
+
+        with objects.open(
+            "r",
+            encoding="utf-8",
+        ) as objects_file:
+            expected_count = int(
+                json.load(objects_file)["object_count"]
+            )
+
         fields.append({
             "field_id": field_id,
             "fitc": fitc,
@@ -160,6 +232,7 @@ def collect_head_measurement_fields(
             "objects": objects,
             "expected_object_count": expected_count,
         })
+
     return fields
 
 
@@ -167,38 +240,103 @@ def prepare_standardized_head_input(
     fields: List[Dict[str, Any]],
     input_dir: Path,
 ) -> Dict[str, Any]:
-    """复制源文件并统一为测量管道使用的稳定名称。"""
+    """Create stable measurement inputs.
+
+    Merge is optional in the original input. The validated CellProfiler
+    pipeline still expects one Merge file per field, so TRITC is copied
+    into the temporary Merge position when a real Merge is unavailable.
+    Merge does not participate in the measurement formulas.
+    """
     target_dir = Path(input_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     records = []
+
     for field in fields:
         field_id = field["field_id"]
+        merge_source = field.get("merge")
+        merge_is_fallback = merge_source is None
+
+        effective_merge_source = (
+            field["tritc"]
+            if merge_is_fallback
+            else merge_source
+        )
+
         destinations = {
-            "fitc": target_dir / "{}_G.tif".format(field_id),
-            "tritc": target_dir / "{}_R.tif".format(field_id),
-            "merge": target_dir / "{}_Merge.tif".format(field_id),
-            "labels": target_dir / "{}_HeadFinalLabels.tif".format(field_id),
+            "fitc": (
+                target_dir
+                / "{}_G.tif".format(field_id)
+            ),
+            "tritc": (
+                target_dir
+                / "{}_R.tif".format(field_id)
+            ),
+            "merge": (
+                target_dir
+                / "{}_Merge.tif".format(field_id)
+            ),
+            "labels": (
+                target_dir
+                / "{}_HeadFinalLabels.tif".format(
+                    field_id
+                )
+            ),
         }
+
+        sources = {
+            "fitc": field["fitc"],
+            "tritc": field["tritc"],
+            "merge": effective_merge_source,
+            "labels": field["labels"],
+        }
+
         for key, destination in destinations.items():
-            shutil.copy2(str(field[key]), str(destination))
+            shutil.copy2(
+                str(sources[key]),
+                str(destination),
+            )
+
         records.append({
             "field_id": field_id,
             "fitc_source_path": str(field["fitc"]),
             "tritc_source_path": str(field["tritc"]),
-            "merge_source_path": str(field["merge"]),
-            "final_labels_source_path": str(field["labels"]),
-            "final_objects_source_path": str(field["objects"]),
+            "merge_source_path": (
+                str(merge_source)
+                if merge_source is not None
+                else ""
+            ),
+            "merge_effective_source_path": str(
+                effective_merge_source
+            ),
+            "merge_is_fallback": merge_is_fallback,
+            "final_labels_source_path": str(
+                field["labels"]
+            ),
+            "final_objects_source_path": str(
+                field["objects"]
+            ),
             "g_path": str(destinations["fitc"]),
             "r_path": str(destinations["tritc"]),
             "merge_path": str(destinations["merge"]),
-            "final_labels_path": str(destinations["labels"]),
-            "expected_object_count": field["expected_object_count"],
+            "final_labels_path": str(
+                destinations["labels"]
+            ),
+            "expected_object_count": (
+                field["expected_object_count"]
+            ),
         })
 
-    field_ids = [field["field_id"] for field in fields]
+    field_ids = [
+        field["field_id"]
+        for field in fields
+    ]
+
     actual_names = sorted(
-        path.name for path in target_dir.iterdir() if path.is_file()
+        item.name
+        for item in target_dir.iterdir()
+        if item.is_file()
     )
+
     expected_names = sorted(
         name
         for field_id in field_ids
@@ -206,35 +344,54 @@ def prepare_standardized_head_input(
             "{}_G.tif".format(field_id),
             "{}_R.tif".format(field_id),
             "{}_Merge.tif".format(field_id),
-            "{}_HeadFinalLabels.tif".format(field_id),
+            "{}_HeadFinalLabels.tif".format(
+                field_id
+            ),
         )
     )
+
     counts = {
-        "G": len(list(target_dir.glob("*_G.tif"))),
-        "R": len(list(target_dir.glob("*_R.tif"))),
-        "Merge": len(list(target_dir.glob("*_Merge.tif"))),
+        "G": len(
+            list(target_dir.glob("*_G.tif"))
+        ),
+        "R": len(
+            list(target_dir.glob("*_R.tif"))
+        ),
+        "Merge": len(
+            list(target_dir.glob("*_Merge.tif"))
+        ),
         "HeadFinalLabels": len(
-            list(target_dir.glob("*_HeadFinalLabels.tif"))
+            list(
+                target_dir.glob(
+                    "*_HeadFinalLabels.tif"
+                )
+            )
         ),
     }
+
     required_count = len(field_ids)
+
     required_counts = {
         "G": required_count,
         "R": required_count,
         "Merge": required_count,
         "HeadFinalLabels": required_count,
     }
+
     if (
         len(actual_names) != required_count * 4
         or actual_names != expected_names
         or counts != required_counts
     ):
         raise ValueError(
-            "测量输入预检失败；分类数量={}；实际文件={}".format(
+            "\u6d4b\u91cf\u8f93\u5165\u9884\u68c0\u5931\u8d25\uff1b"
+            "\u5206\u7c7b\u6570\u91cf={}\uff1b"
+            "\u5b9e\u9645\u6587\u4ef6={}".format(
                 counts,
                 actual_names,
             )
         )
+
     return {
         "records": records,
         "file_names": actual_names,

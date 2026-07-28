@@ -28,7 +28,7 @@ class HeadCalibrationControls(QWidget):
     zoomOutRequested = Signal()
     completeRequested = Signal()
 
-    def __init__(self, field_ids, parent=None) -> None:
+    def __init__(self, field_ids, channels=None, parent=None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -37,7 +37,7 @@ class HeadCalibrationControls(QWidget):
         self.field_combo = QComboBox()
         self.field_combo.addItems(field_ids)
         self.channel_combo = QComboBox()
-        self.channel_combo.addItems(["Merge", "TRITC"])
+        self.channel_combo.addItems(list(channels or ["TRITC", "FITC"]))
         self.select_button = QPushButton("选择")
         self.add_button = QPushButton("新增头部")
         self.delete_button = QPushButton("删除选中头部")
@@ -81,6 +81,33 @@ class HeadCalibrationControls(QWidget):
         self.zoom_in_button.clicked.connect(self.zoomInRequested)
         self.zoom_out_button.clicked.connect(self.zoomOutRequested)
         self.complete_button.clicked.connect(self.completeRequested)
+
+    def set_channels(
+        self,
+        channels,
+        current_channel=None,
+    ) -> None:
+        normalized = [
+            str(channel)
+            for channel in channels
+            if str(channel)
+        ]
+
+        self.channel_combo.blockSignals(True)
+        self.channel_combo.clear()
+        self.channel_combo.addItems(normalized)
+
+        if (
+            current_channel
+            and current_channel in normalized
+        ):
+            self.channel_combo.setCurrentText(
+                current_channel
+            )
+        elif normalized:
+            self.channel_combo.setCurrentIndex(0)
+
+        self.channel_combo.blockSignals(False)
 
     def set_history_enabled(self, can_undo: bool, can_redo: bool) -> None:
         self.undo_button.setEnabled(can_undo)

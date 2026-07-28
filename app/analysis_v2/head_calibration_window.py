@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -22,27 +22,74 @@ from .image_canvas import ImageCanvas
 
 
 class HeadCalibrationWindow(QMainWindow):
-    def __init__(self, task_root: Path, parent=None) -> None:
+    calibration_completed = Signal(object)
+
+    def __init__(
+        self,
+        task_root: Path,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Analysis V2 - 人工头部校准")
+
+        self.setWindowTitle(
+            "Analysis V2 - \u4eba\u5de5\u5934\u90e8\u6821\u51c6"
+        )
         self.resize(1500, 900)
-        self.service = HeadCalibrationService(task_root)
+
+        self.service = HeadCalibrationService(
+            task_root
+        )
+
+        field_ids = self.service.field_ids()
+
+        if not field_ids:
+            raise ValueError(
+                "\u6821\u51c6\u4efb\u52a1\u4e0d\u5305\u542b\u53ef\u7528\u89c6\u91ce"
+            )
+
+        first_field_id = field_ids[0]
+
         self.current_field_id = ""
-        self.current_channel = "Merge"
+        self.current_channel = (
+            self.service.default_channel(
+                first_field_id
+            )
+        )
         self._switching_field = False
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.controls = HeadCalibrationControls(self.service.field_ids())
+
+        self.controls = HeadCalibrationControls(
+            field_ids,
+            self.service.available_channels(
+                first_field_id
+            ),
+        )
+
+        self.controls.set_channels(
+            self.service.available_channels(
+                first_field_id
+            ),
+            self.current_channel,
+        )
+
         self.canvas = ImageCanvas()
+
         layout.addWidget(self.controls)
         layout.addWidget(self.canvas, 1)
+
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar())
+
         self._connect_signals()
         self._install_shortcuts()
-        self._load_field(self.service.field_ids()[0], fit=True)
+
+        self._load_field(
+            first_field_id,
+            fit=True,
+        )
 
     def _connect_signals(self) -> None:
         self.controls.previousRequested.connect(lambda: self._move_field(-1))
@@ -72,29 +119,88 @@ class HeadCalibrationWindow(QMainWindow):
         QMessageBox.critical(self, title, "{}：{}".format(type(exception).__name__, exception))
         self.statusBar().showMessage("{}：{}".format(title, exception))
 
-    def _load_field(self, field_id: str, fit: bool = False) -> None:
+    def _load_field(
+        self,
+        field_id: str,
+        fit: bool = False,
+    ) -> None:
         started = time.perf_counter()
+
         try:
-            field = self.service.load_field(field_id)
-            image = self.service.image(field_id, self.current_channel)
-            self.current_field_id = field_id
-            self.canvas.set_image(image, fit=False)
-            self.canvas.set_labels(field.model.labels, field.model.selected_object_id)
-            if fit:
-                self.canvas.fit_to_window()
-            self.controls.field_combo.blockSignals(True)
-            self.controls.field_combo.setCurrentText(field_id)
-            self.controls.field_combo.blockSignals(False)
-            self._select_mode()
-            self._update_status()
-            elapsed = (time.perf_counter() - started) * 1000.0
-            self.statusBar().showMessage(
-                "视野 {} 已加载，对象 {}，耗时 {:.0f} ms".format(
-                    field_id, field.model.object_count, elapsed
+            field = self.service.load_field(
+                field_id
+            )
+
+            channels = (
+                self.service.available_channels(
+                    field_id
                 )
             )
+
+            if self.current_channel not in channels:
+                self.current_channel = (
+                    self.service.default_channel(
+                        field_id
+                    )
+                )
+
+            self.controls.set_channels(
+                channels,
+                self.current_channel,
+            )
+
+            image = self.service.image(
+                field_id,
+                self.current_channel,
+            )
+
+            self.current_field_id = field_id
+
+            self.canvas.set_image(
+                image,
+                fit=False,
+            )
+            self.canvas.set_labels(
+                field.model.labels,
+                field.model.selected_object_id,
+            )
+
+            if fit:
+                self.canvas.fit_to_window()
+
+            self.controls.field_combo.blockSignals(
+                True
+            )
+            self.controls.field_combo.setCurrentText(
+                field_id
+            )
+            self.controls.field_combo.blockSignals(
+                False
+            )
+
+            self._select_mode()
+            self._update_status()
+
+            elapsed = (
+                time.perf_counter() - started
+            ) * 1000.0
+
+            self.statusBar().showMessage(
+                "\u89c6\u91ce {} \u5df2\u52a0\u8f7d\uff0c"
+                "\u5bf9\u8c61 {}\uff0c\u5e95\u56fe {}\uff0c"
+                "\u8017\u65f6 {:.0f} ms".format(
+                    field_id,
+                    field.model.object_count,
+                    self.current_channel,
+                    elapsed,
+                )
+            )
+
         except BaseException as exception:
-            self._show_error("加载视野失败", exception)
+            self._show_error(
+                "\u52a0\u8f7d\u89c6\u91ce\u5931\u8d25",
+                exception,
+            )
 
     def _save_current(self) -> bool:
         if not self.current_field_id:
@@ -250,6 +356,7 @@ class HeadCalibrationWindow(QMainWindow):
                 ),
             )
             self.statusBar().showMessage("头部校准已完成")
+            self.calibration_completed.emit(result)
         except BaseException as exception:
             self._show_error("完成头部校准失败", exception)
 

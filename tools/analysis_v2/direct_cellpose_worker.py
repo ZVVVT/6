@@ -261,6 +261,12 @@ def process_field(item: Dict[str, Any], model: Any, runtime: Dict[str, Any], par
     labels_path = Path(item["labels_output_path"]).resolve()
     overlay_path = Path(item["overlay_output_path"]).resolve()
     objects_path = Path(item["objects_output_path"]).resolve()
+    merge_value = str(item.get("merge_path") or "").strip()
+    merge_path = (
+        str(Path(merge_value).resolve())
+        if merge_value
+        else ""
+    )
     image = read_image(tritc_path)
     cellpose_input, gray_preview = extract_red_channel(image)
     eval_started = time.perf_counter()
@@ -278,7 +284,7 @@ def process_field(item: Dict[str, Any], model: Any, runtime: Dict[str, Any], par
         "field_id": item["field_id"],
         "tritc_path": str(tritc_path),
         "fitc_path": str(Path(item["fitc_path"]).resolve()),
-        "merge_path": str(Path(item["merge_path"]).resolve()),
+        "merge_path": merge_path,
         "labels_path": str(labels_path),
         "overlay_path": str(overlay_path),
         "runtime": runtime,
@@ -299,7 +305,7 @@ def process_field(item: Dict[str, Any], model: Any, runtime: Dict[str, Any], par
         "field_id": item["field_id"],
         "tritc_path": str(tritc_path),
         "fitc_path": str(Path(item["fitc_path"]).resolve()),
-        "merge_path": str(Path(item["merge_path"]).resolve()),
+        "merge_path": merge_path,
         "labels_output_path": str(labels_path),
         "overlay_output_path": str(overlay_path),
         "objects_output_path": str(objects_path),

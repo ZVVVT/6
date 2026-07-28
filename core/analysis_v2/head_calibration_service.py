@@ -30,7 +30,7 @@ class HeadCalibrationField:
     field_id: str
     tritc_path: Path
     fitc_path: Path
-    merge_path: Path
+    merge_path: Optional[Path]
     initial_labels_path: Path
     initial_objects_path: Path
     working_labels_path: Path
@@ -81,16 +81,46 @@ class HeadCalibrationService:
             raise ValueError("JSON 顶层必须是对象：{}".format(path))
         return payload
 
-    def _find_input(self, field_id: str, channel: str) -> Path:
-        expected = self.input_dir / "{}_{}.tif".format(field_id, channel)
+    def _find_input(
+        self,
+        field_id: str,
+        channel: str,
+        required: bool = True,
+    ) -> Optional[Path]:
+        expected = (
+            self.input_dir
+            / "{}_{}.tif".format(
+                field_id,
+                channel,
+            )
+        )
+
         if expected.is_file():
             return expected
-        matches = sorted(self.input_dir.glob("{}_{}.*".format(field_id, channel)))
-        if len(matches) != 1:
-            raise ValueError(
-                "视野 {} 的 {} 输入数量不是 1：{}".format(field_id, channel, matches)
+
+        matches = sorted(
+            self.input_dir.glob(
+                "{}_{}.*".format(
+                    field_id,
+                    channel,
+                )
             )
-        return matches[0]
+        )
+
+        if len(matches) == 1:
+            return matches[0]
+
+        if not matches and not required:
+            return None
+
+        raise ValueError(
+            "\u89c6\u91ce {} \u7684 {} "
+            "\u8f93\u5165\u6570\u91cf\u4e0d\u662f 1\uff1a{}".format(
+                field_id,
+                channel,
+                matches,
+            )
+        )
 
     def _discover_fields(self) -> List[HeadCalibrationField]:
         label_paths = sorted(self.initial_dir.glob("*_HeadInitialLabels.tif"))
@@ -107,7 +137,11 @@ class HeadCalibrationService:
                     field_id=field_id,
                     tritc_path=self._find_input(field_id, "TRITC"),
                     fitc_path=self._find_input(field_id, "FITC"),
-                    merge_path=self._find_input(field_id, "Merge"),
+                    merge_path=self._find_input(
+                        field_id,
+                        "Merge",
+                        required=False,
+                    ),
                     initial_labels_path=label_path,
                     initial_objects_path=initial_objects,
                     working_labels_path=self.output_dir / "{}_HeadWorkingLabels.tif".format(field_id),
@@ -128,6 +162,33 @@ class HeadCalibrationService:
                 return field
         raise KeyError("未知视野：{}".format(field_id))
 
+    def available_channels(
+        self,
+        field_id: str,
+    ) -> List[str]:
+        field = self.field_by_id(field_id)
+        channels = []
+
+        if field.merge_path is not None:
+            channels.append("Merge")
+
+        channels.extend([
+            "TRITC",
+            "FITC",
+        ])
+
+        return channels
+
+    def default_channel(
+        self,
+        field_id: str,
+    ) -> str:
+        channels = self.available_channels(field_id)
+
+        if "Merge" in channels:
+            return "Merge"
+
+        return "TRITC"
     def load_field(self, field_id: str) -> HeadCalibrationField:
         field = self.field_by_id(field_id)
         if field.model is None:
@@ -156,13 +217,64 @@ class HeadCalibrationService:
         )
         return field
 
-    def image(self, field_id: str, channel: str = "Merge") -> np.ndarray:
-        normalized = "TRITC" if channel.upper() == "TRITC" else "Merge"
-        cached = self._image_cache.setdefault(field_id, {})
+    def image(
+        self,
+        field_id: str,
+        channel: str = "Merge",
+    ) -> np.ndarray:
+        requested = str(
+            channel or ""
+        ).strip().upper()
+
+        aliases = {
+            "R": "TRITC",
+            "TRITC": "TRITC",
+            "G": "FITC",
+            "FITC": "FITC",
+            "MERGE": "Merge",
+        }
+
+        if requested not in aliases:
+            raise ValueError(
+                "不支持的校准底图通道：{}".format(
+                    channel
+                )
+            )
+
+        normalized = aliases[requested]
+        field = self.field_by_id(field_id)
+
+        if (
+            normalized == "Merge"
+            and field.merge_path is None
+        ):
+            normalized = "TRITC"
+
+        cached = self._image_cache.setdefault(
+            field_id,
+            {},
+        )
+
         if normalized not in cached:
-            field = self.field_by_id(field_id)
-            path = field.tritc_path if normalized == "TRITC" else field.merge_path
-            cached[normalized] = read_color_image(path)
+            if normalized == "TRITC":
+                image_path = field.tritc_path
+            elif normalized == "FITC":
+                image_path = field.fitc_path
+            else:
+                image_path = field.merge_path
+
+            if image_path is None:
+                raise FileNotFoundError(
+                    "视野 {} 不存在 {} 底图".format(
+                        field_id,
+                        normalized,
+                    )
+                )
+
+            cached[normalized] = read_color_image(
+                image_path
+            )
+
         return cached[normalized]
 
     def select_object(self, field_id: str, x: float, y: float) -> int:

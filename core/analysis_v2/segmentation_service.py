@@ -49,27 +49,91 @@ def _copy_fields(
     paths: AnalysisTaskPaths,
 ) -> List[Dict[str, str]]:
     if not paired_fields:
-        raise ValueError("至少需要一个配对视野")
+        raise ValueError("\u81f3\u5c11\u9700\u8981\u4e00\u4e2a\u914d\u5bf9\u89c6\u91ce")
+
     copied = []
     seen = set()
+
     for source in paired_fields:
         field_id = _validate_field_id(source["field_id"])
+
         if field_id.lower() in seen:
-            raise ValueError("field_id 重复：{}".format(field_id))
+            raise ValueError(
+                "field_id \u91cd\u590d\uff1a{}".format(field_id)
+            )
+
         seen.add(field_id.lower())
         item = {"field_id": field_id}
-        for channel in ("tritc", "fitc", "merge"):
-            source_path = Path(source["{}_path".format(channel)]).resolve()
+
+        for channel in ("tritc", "fitc"):
+            source_value = str(
+                source.get("{}_path".format(channel), "") or ""
+            ).strip()
+
+            if not source_value:
+                raise ValueError(
+                    "{} \u7f3a\u5c11 {} \u8f93\u5165".format(
+                        field_id,
+                        channel,
+                    )
+                )
+
+            source_path = Path(source_value).resolve()
+
             if not source_path.is_file():
-                raise FileNotFoundError("{} 文件不存在：{}".format(channel, source_path))
+                raise FileNotFoundError(
+                    "{} \u6587\u4ef6\u4e0d\u5b58\u5728\uff1a{}".format(
+                        channel,
+                        source_path,
+                    )
+                )
+
             destination = paths.input_dir / "{}_{}{}".format(
                 field_id,
-                channel.upper() if channel != "merge" else "Merge",
+                channel.upper(),
                 source_path.suffix.lower(),
             )
+
             shutil.copy2(str(source_path), str(destination))
-            item["{}_path".format(channel)] = str(destination.resolve())
+            item["{}_path".format(channel)] = str(
+                destination.resolve()
+            )
+
+        merge_value = str(
+            source.get("merge_path", "") or ""
+        ).strip()
+
+        if merge_value:
+            merge_source = Path(merge_value).resolve()
+
+            if not merge_source.is_file():
+                raise FileNotFoundError(
+                    "merge \u6587\u4ef6\u4e0d\u5b58\u5728\uff1a{}".format(
+                        merge_source
+                    )
+                )
+
+            merge_destination = (
+                paths.input_dir
+                / "{}_Merge{}".format(
+                    field_id,
+                    merge_source.suffix.lower(),
+                )
+            )
+
+            shutil.copy2(
+                str(merge_source),
+                str(merge_destination),
+            )
+
+            item["merge_path"] = str(
+                merge_destination.resolve()
+            )
+        else:
+            item["merge_path"] = ""
+
         copied.append(item)
+
     return copied
 
 
@@ -79,23 +143,35 @@ def _build_worker_input(
 ) -> Dict[str, Any]:
     worker_result_path = paths.task_root / "worker_result.json"
     fields = []
+
     for copied in copied_fields:
         field_id = copied["field_id"]
+
         fields.append({
             "field_id": field_id,
             "tritc_path": copied["tritc_path"],
             "fitc_path": copied["fitc_path"],
-            "merge_path": copied["merge_path"],
+            "merge_path": copied.get("merge_path", ""),
             "labels_output_path": str(
-                (paths.segmentation_head_dir / "{}_HeadInitialLabels.tif".format(field_id)).resolve()
+                (
+                    paths.segmentation_head_dir
+                    / "{}_HeadInitialLabels.tif".format(field_id)
+                ).resolve()
             ),
             "overlay_output_path": str(
-                (paths.segmentation_head_dir / "{}_HeadInitialOverlay.png".format(field_id)).resolve()
+                (
+                    paths.segmentation_head_dir
+                    / "{}_HeadInitialOverlay.png".format(field_id)
+                ).resolve()
             ),
             "objects_output_path": str(
-                (paths.segmentation_head_dir / "{}_HeadInitialObjects.json".format(field_id)).resolve()
+                (
+                    paths.segmentation_head_dir
+                    / "{}_HeadInitialObjects.json".format(field_id)
+                ).resolve()
             ),
         })
+
     return {
         "schema_version": "analysis_v2_direct_cellpose_input_v1",
         "task_id": paths.run_id,
@@ -164,8 +240,15 @@ def run_head_segmentation(
         state.update("input_ready", "head_segmentation", "配对视野已复制到任务 input")
         for item in copied_fields:
             for channel in ("tritc", "fitc", "merge"):
+                source_value = str(
+                    item.get("{}_path".format(channel), "") or ""
+                ).strip()
+
+                if not source_value:
+                    continue
+
                 manifest.add_file(
-                    Path(item["{}_path".format(channel)]),
+                    Path(source_value),
                     role="{}_input".format(channel),
                     stage="head_segmentation",
                     metadata={"field_id": item["field_id"]},
