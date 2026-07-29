@@ -9,6 +9,12 @@ from .manifest_store import ManifestStore
 from .head_calibration_model import HeadCalibrationModel, LabelEditCommand
 from .head_calibration_service import HeadCalibrationField, HeadCalibrationService
 from .head_measurement_service import HeadMeasurementService
+from .tail_measurement_service import (
+    TailMeasurementService,
+    collect_tail_measurement_fields,
+    prepare_standardized_tail_input,
+    validate_tail_measurement_output,
+)
 from .head_measurement_result import (
     build_head_measurement_result,
     validate_head_measurement_output,
@@ -43,6 +49,10 @@ __all__ = [
     "HeadCalibrationModel",
     "HeadCalibrationService",
     "HeadMeasurementService",
+    "TailMeasurementService",
+    "collect_tail_measurement_fields",
+    "prepare_standardized_tail_input",
+    "validate_tail_measurement_output",
     "LabelEditCommand",
     "ManifestStore",
     "DirectCellposeRunner",

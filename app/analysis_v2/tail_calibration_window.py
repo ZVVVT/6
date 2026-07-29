@@ -96,6 +96,31 @@ class TailCalibrationController(QObject):
             else:
                 self.calibration_aborted.emit("请在尾部编辑器中点击保存结果")
             return
+        except ValueError as exception:
+            message = str(exception)
+            if "有效区域冲突" not in message:
+                self.calibration_aborted.emit(message)
+                return
+
+            answer = QMessageBox.warning(
+                self.parent(),
+                "尾部区域存在冲突",
+                "{}\n\n"
+                "这表示两条已接受尾部使用了同一批尾部碎片，不能直接进入测量。\n\n"
+                "选择“重开编辑器”将继续当前视野，并自动恢复编辑状态。"
+                "请根据提示中的 Head 编号删除或重新绘制冲突尾部，"
+                "然后再次点击“保存结果”。\n\n"
+                "选择“稍后处理”会保留当前任务目录和编辑数据。".format(
+                    message
+                ),
+                QMessageBox.Retry | QMessageBox.Cancel,
+                QMessageBox.Retry,
+            )
+            if answer == QMessageBox.Retry:
+                self._start_editor()
+            else:
+                self.calibration_aborted.emit(message)
+            return
         except BaseException as exception:
             self.calibration_aborted.emit(str(exception))
             return

@@ -38,6 +38,8 @@ ALLOWED_STATUSES = {
     "tail_segmented",
     "tail_calibration_required",
     "tail_calibrated",
+    "tail_measuring",
+    "tail_measured",
     "measuring",
     "completed",
     "failed",

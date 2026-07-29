@@ -29,7 +29,10 @@ from app.analysis_v2.head_analysis_workers import (
 from app.analysis_v2.head_calibration_window import (
     HeadCalibrationWindow,
 )
-from app.analysis_v2.tail_analysis_workers import TailPathWorker
+from app.analysis_v2.tail_analysis_workers import (
+    TailMeasurementWorker,
+    TailPathWorker,
+)
 from app.analysis_v2.tail_calibration_window import TailCalibrationController
 from app.long_message_dialog import show_long_message_dialog
 from app.result_viewer import ResultViewer
@@ -101,6 +104,7 @@ class AnalysisWindow(QWidget):
         self.head_measurement_worker = None
         self.head_calibration_window = None
         self.tail_path_worker = None
+        self.tail_measurement_worker = None
         self.tail_calibration_controller = None
         self.current_analysis_v2_task_root = None
         self.current_analysis_v2_context = None
@@ -1371,6 +1375,7 @@ class AnalysisWindow(QWidget):
             or self._worker_is_running(self.head_segmentation_worker)
             or self._worker_is_running(self.head_measurement_worker)
             or self._worker_is_running(self.tail_path_worker)
+            or self._worker_is_running(self.tail_measurement_worker)
             or self.tail_calibration_controller is not None
             or calibration_open
         )
@@ -1956,15 +1961,200 @@ class AnalysisWindow(QWidget):
             self._finish_analysis_v2_ui()
 
     def _on_tail_calibration_completed(self, result: object) -> None:
+        """Start the validated tail measurement after all editors are saved."""
         self.tail_calibration_controller = None
+        worker = None
+
+        try:
+            payload = dict(result) if isinstance(result, dict) else {}
+            fields = list(payload.get("fields") or [])
+            context = dict(self.current_analysis_v2_context or {})
+            task_root = Path(self.current_analysis_v2_task_root).resolve()
+
+            if context.get("workflow") != "protein3_tail":
+                raise RuntimeError("当前任务不是 protein3_tail 流程。")
+            if not task_root.is_dir():
+                raise FileNotFoundError(
+                    "Analysis V2 任务目录不存在：{}".format(task_root)
+                )
+            if self._worker_is_running(self.tail_measurement_worker):
+                raise RuntimeError("尾部测量任务已经在运行。")
+
+            matches, reason = self._analysis_context_matches_current(context)
+            if not matches:
+                raise RuntimeError(reason)
+
+            expected_count = int(context.get("field_count", 0) or 0)
+            if not fields or len(fields) != expected_count:
+                raise RuntimeError(
+                    "尾部校准视野数不一致：期望 {}，实际 {}。".format(
+                        expected_count, len(fields)
+                    )
+                )
+
+            project_root = Path(
+                str(context.get("project_root", "") or "")
+            ).resolve()
+            if not project_root.is_dir():
+                raise FileNotFoundError(
+                    "项目根目录不存在：{}".format(project_root)
+                )
+
+            context["tail_calibration_result"] = payload
+            self.current_analysis_v2_context = context
+
+            worker = TailMeasurementWorker(
+                project_root=project_root,
+                task_root=task_root,
+                config=self.config,
+                parent=self,
+            )
+            worker.log_signal.connect(self.append_log)
+            worker.finished_signal.connect(
+                self._on_tail_measurement_finished
+            )
+            worker.finished.connect(
+                self._on_tail_measurement_thread_finished
+            )
+            worker.finished.connect(worker.deleteLater)
+
+            self.tail_measurement_worker = worker
+            self.btn_run_analysis.setText("正在测量尾部...")
+            self.append_log(
+                "Analysis V2：全部视野尾部校准完成，开始新版尾部测量。"
+            )
+            worker.start()
+
+        except BaseException as exception:
+            if worker is not None:
+                try:
+                    worker.deleteLater()
+                except RuntimeError:
+                    pass
+            self.tail_measurement_worker = None
+            task_root_text = str(self.current_analysis_v2_task_root or "")
+            self._show_analysis_v2_error(
+                "尾部测量启动失败",
+                "人工校准结果已保留，旧正式结果没有被修改。",
+                "{}\n\n任务目录：{}".format(
+                    exception, task_root_text
+                ),
+            )
+            self._finish_analysis_v2_ui()
+
+    def _on_tail_measurement_finished(
+        self,
+        success: bool,
+        elapsed: float,
+        result: object,
+        error_message: str,
+    ) -> None:
+        """Keep validated output in candidate_output; publishing is next step."""
         payload = dict(result) if isinstance(result, dict) else {}
-        field_count = len(payload.get("fields") or [])
-        message = "头部和尾部校准完成，等待测量"
-        self.append_log(
-            "Analysis V2：{}（视野数 {}）。".format(message, field_count)
-        )
-        QMessageBox.information(self, "校准完成", message)
-        self._finish_analysis_v2_ui()
+
+        if not success:
+            self._analysis_v2_finish_pending = True
+            task_root_text = str(self.current_analysis_v2_task_root or "")
+            self._show_analysis_v2_error(
+                "尾部测量失败",
+                "新版尾部测量未完成，人工校准数据已保留，旧正式结果没有被修改。",
+                "{}\n\n任务目录：{}".format(
+                    error_message or "尾部测量失败。",
+                    task_root_text,
+                ),
+            )
+            return
+
+        try:
+            context = dict(self.current_analysis_v2_context or {})
+            matches, reason = self._analysis_context_matches_current(context)
+            if not matches:
+                raise RuntimeError(
+                    "{} 为避免关联错误病例，本次结果未进入发布阶段。".format(
+                        reason
+                    )
+                )
+
+            measurement = dict(payload.get("measurement_result") or {})
+            validation = dict(measurement.get("validation") or {})
+            parsed_result = dict(validation.get("result_parser") or {})
+            total = dict(parsed_result.get("total") or {})
+            candidate_dir = str(
+                payload.get("candidate_output_dir", "") or ""
+            ).strip()
+
+            if not parsed_result.get("success"):
+                raise RuntimeError(
+                    parsed_result.get("message") or "尾部结果解析失败。"
+                )
+            if parsed_result.get("calculation_mode") != "head_equivalent":
+                raise RuntimeError("尾部测量未使用 head_equivalent 公式。")
+            if not candidate_dir or not Path(candidate_dir).is_dir():
+                raise FileNotFoundError(
+                    "尾部 candidate_output 不存在：{}".format(candidate_dir)
+                )
+
+            context["tail_measurement_payload"] = payload
+            context["tail_measurement_elapsed_seconds"] = float(elapsed or 0.0)
+            self.current_analysis_v2_context = context
+
+            self.append_log(
+                "Analysis V2：尾部测量已通过严格校验；"
+                "视野 {}，精子 {}，有效尾部 {}，荧光强度 {}，标定率 {}%。".format(
+                    total.get("field_count", 0),
+                    total.get("sperm_count", 0),
+                    total.get("positive_count", 0),
+                    total.get("mean_intensity_raw", 0),
+                    total.get("expression_rate", 0),
+                )
+            )
+            self.append_log(
+                "Analysis V2：候选结果保留于 {}；尚未覆盖 cp_output 或数据库。".format(
+                    candidate_dir
+                )
+            )
+
+            self._analysis_v2_finish_pending = True
+            if not self._worker_is_running(self.tail_measurement_worker):
+                self._finish_analysis_v2_ui()
+
+            QMessageBox.information(
+                self,
+                "尾部测量完成",
+                "Analysis V2 尾部测量和严格校验完成。\n"
+                "本阶段尚未覆盖正式结果或数据库。\n\n"
+                "视野数：{}\n"
+                "精子总数：{}\n"
+                "有效尾部数：{}\n"
+                "C 荧光强度：{}\n"
+                "标定率：{}%\n\n"
+                "候选输出：\n{}".format(
+                    total.get("field_count", 0),
+                    total.get("sperm_count", 0),
+                    total.get("positive_count", 0),
+                    total.get("mean_intensity_raw", 0),
+                    total.get("expression_rate", 0),
+                    candidate_dir,
+                ),
+            )
+
+        except BaseException as exception:
+            self._analysis_v2_finish_pending = True
+            task_root_text = str(self.current_analysis_v2_task_root or "")
+            self._show_analysis_v2_error(
+                "尾部测量结果校验失败",
+                "候选结果未进入发布阶段，旧正式结果没有被修改。",
+                "{}\n\n任务目录：{}".format(
+                    exception, task_root_text
+                ),
+            )
+
+    def _on_tail_measurement_thread_finished(self) -> None:
+        worker = self.sender()
+        if self.tail_measurement_worker is worker:
+            self.tail_measurement_worker = None
+        if self._analysis_v2_finish_pending:
+            self._finish_analysis_v2_ui()
 
     def _on_tail_calibration_aborted(self, message: str) -> None:
         self.tail_calibration_controller = None

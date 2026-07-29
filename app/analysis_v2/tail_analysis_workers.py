@@ -2,9 +2,14 @@
 
 import json
 import subprocess
+import time
+import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
+
+from core.analysis_v2.tail_measurement_service import TailMeasurementService
+from core.config_manager import ConfigManager
 
 
 class TailPathWorker(QThread):
@@ -77,3 +82,83 @@ class TailPathWorker(QThread):
             self.finished_signal.emit(True, result, "")
         except BaseException as exception:
             self.finished_signal.emit(False, {}, str(exception))
+
+class TailMeasurementWorker(QThread):
+    """Measure calibrated Analysis V2 tail labels without publishing them."""
+
+    log_signal = Signal(str)
+    finished_signal = Signal(bool, float, object, str)
+
+    def __init__(
+        self,
+        project_root: Path,
+        task_root: Path,
+        config: ConfigManager,
+        timeout_seconds: float = 900.0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.project_root = Path(project_root).resolve()
+        self.task_root = Path(task_root).resolve()
+        self.config = config
+        self.timeout_seconds = float(timeout_seconds)
+
+    def run(self) -> None:
+        started = time.perf_counter()
+
+        try:
+            pipeline = (
+                self.project_root
+                / "pipelines"
+                / "analysis_v2"
+                / "measure_tail_from_labels.cppipe"
+            ).resolve()
+
+            if not pipeline.is_file():
+                raise FileNotFoundError(
+                    "尾部测量管道不存在：{}".format(pipeline)
+                )
+
+            self.log_signal.emit(
+                "Analysis V2：开始测量人工校准后的尾部标签。"
+            )
+
+            service = TailMeasurementService(
+                task_root=self.task_root,
+                pipeline=pipeline,
+                mvimageid_root=self.config.get_source_project_dir(),
+                python_exe=self.config.get_python_exe(),
+                plugins_directory=self.config.get_plugins_directory(),
+                timeout_seconds=self.timeout_seconds,
+            )
+            result = service.run()
+            elapsed = time.perf_counter() - started
+
+            payload = {
+                "task_root": str(self.task_root),
+                "measurement_result": result,
+                "candidate_output_dir": str(service.output_dir),
+                "measurement_result_path": str(service.result_path),
+                "measurement_manifest_path": str(
+                    service.measurement_manifest_path
+                ),
+            }
+
+            self.log_signal.emit(
+                "Analysis V2：尾部测量和严格校验完成，用时 {:.2f} 秒。".format(
+                    elapsed
+                )
+            )
+            self.finished_signal.emit(True, elapsed, payload, "")
+
+        except BaseException as exception:
+            elapsed = time.perf_counter() - started
+            detail = "".join(
+                traceback.format_exception(
+                    type(exception),
+                    exception,
+                    exception.__traceback__,
+                )
+            )
+            self.finished_signal.emit(False, elapsed, {}, detail)
+

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
+import numpy as np
+
+from core.analysis_v2.label_image_io import atomic_save_label_image, read_label_image
 from core.analysis_v2.manifest_store import ManifestStore
 from core.analysis_v2.tail_calibration_service import (
     complete_tail_calibration,
@@ -95,10 +99,24 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
                 Path(payload["output_dir"])
                 / "edited_tail_regions_head_id_uint16.tif"
             )
-            source.write_bytes(b"saved-tail-labels")
+            labels = np.zeros((8, 8), dtype=np.uint16)
+            labels[1:3, 1:3] = 7
+            atomic_save_label_image(source, labels)
+            Path(payload["output_dir"], "edited_tail_region_conflicts.json").write_text(
+                json.dumps({"conflicts": []}), encoding="utf-8"
+            )
+            head_labels = np.zeros((8, 8), dtype=np.uint16)
+            head_labels[4:6, 4:6] = 7
+            atomic_save_label_image(
+                task_root / "calibration" / "head" / "001_HeadFinalLabels.tif",
+                head_labels,
+            )
             published = publish_tail_final_labels(payload)
             final_path = Path(published["tail_final_labels"])
-            self.assertEqual(final_path.read_bytes(), b"saved-tail-labels")
+            self.assertEqual(
+                sorted(int(value) for value in np.unique(read_label_image(final_path)) if value),
+                [1],
+            )
             result = complete_tail_calibration(task_root, [published])
             self.assertEqual(result["state"]["status"], "tail_calibrated")
             roles = [item["role"] for item in result["manifest"]["files"]]
@@ -114,7 +132,7 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
             source.index("def _on_tail_calibration_aborted"):
             source.index("def _on_head_calibration_closed")
         ]
-        self.assertIn("_finish_analysis_v2_ui()", success)
+        self.assertIn("TailMeasurementWorker(", success)
         self.assertIn("_finish_analysis_v2_ui()", aborted)
 
     def test_legacy_tail_pipeline_is_retained(self):

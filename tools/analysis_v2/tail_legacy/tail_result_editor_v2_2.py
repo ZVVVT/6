@@ -42,7 +42,7 @@ try:
     from matplotlib import font_manager
     from matplotlib.widgets import Button
     from PIL import Image
-    from scipy.ndimage import gaussian_filter1d
+    from scipy.ndimage import distance_transform_edt, gaussian_filter1d
     from scipy.spatial import cKDTree
     from skimage.graph import route_through_array
 except ImportError as exc:
@@ -235,6 +235,173 @@ def fragment_ids_near_path(
     values = local_labels[local_mask > 0]
     values = np.unique(values[values > 0])
     return [int(value) for value in values.tolist()]
+
+
+def build_path_aware_region_labels(
+    fragment_labels: np.ndarray,
+    accepted_records: list[Any],
+) -> tuple[np.ndarray, list[dict[str, int]]]:
+    """按中心线划分共享碎片，同时保持唯一碎片的原有整块归属。"""
+    labels = np.asarray(fragment_labels)
+    if labels.ndim != 2:
+        raise ValueError(f"尾部碎片标签图必须是二维图像：{labels.shape}")
+
+    height, width = labels.shape
+    region_labels = np.zeros(labels.shape, dtype=np.uint16)
+    fragment_users: dict[int, list[Any]] = {}
+    for record in accepted_records:
+        for fragment_id in set(record.selected_fragment_ids):
+            value = int(fragment_id)
+            if value > 0:
+                fragment_users.setdefault(value, []).append(record)
+
+    for fragment_id, records in fragment_users.items():
+        fragment_mask = labels == fragment_id
+        if not np.any(fragment_mask):
+            continue
+
+        if len(records) == 1:
+            region_labels[fragment_mask] = np.uint16(records[0].head_id)
+            if int(np.count_nonzero(region_labels[fragment_mask])) != int(
+                np.count_nonzero(fragment_mask)
+            ):
+                raise ValueError(
+                    f"唯一尾部碎片 {fragment_id} 未保持完整区域。"
+                )
+            continue
+
+        fragment_y, fragment_x = np.nonzero(fragment_mask)
+        all_paths = [
+            np.asarray(record.selected_points_xy, dtype=np.float32)
+            for record in records
+        ]
+        valid_paths = [path for path in all_paths if len(path) >= 2]
+        if len(valid_paths) != len(records):
+            raise ValueError(
+                f"共享尾部碎片 {fragment_id} 存在缺少中心线的已接受结果。"
+            )
+
+        minimum_x = max(
+            0,
+            int(
+                math.floor(
+                    min(
+                        float(fragment_x.min()),
+                        *(float(path[:, 0].min()) for path in valid_paths),
+                    )
+                )
+            )
+            - 1,
+        )
+        maximum_x = min(
+            width - 1,
+            int(
+                math.ceil(
+                    max(
+                        float(fragment_x.max()),
+                        *(float(path[:, 0].max()) for path in valid_paths),
+                    )
+                )
+            )
+            + 1,
+        )
+        minimum_y = max(
+            0,
+            int(
+                math.floor(
+                    min(
+                        float(fragment_y.min()),
+                        *(float(path[:, 1].min()) for path in valid_paths),
+                    )
+                )
+            )
+            - 1,
+        )
+        maximum_y = min(
+            height - 1,
+            int(
+                math.ceil(
+                    max(
+                        float(fragment_y.max()),
+                        *(float(path[:, 1].max()) for path in valid_paths),
+                    )
+                )
+            )
+            + 1,
+        )
+
+        local_shape = (
+            maximum_y - minimum_y + 1,
+            maximum_x - minimum_x + 1,
+        )
+        distance_images: list[np.ndarray] = []
+        for path in valid_paths:
+            shifted = path.copy()
+            shifted[:, 0] -= minimum_x
+            shifted[:, 1] -= minimum_y
+            seed_image = np.ones(local_shape, dtype=np.uint8)
+            cv2.polylines(
+                seed_image,
+                [np.rint(shifted).astype(np.int32).reshape(-1, 1, 2)],
+                False,
+                0,
+                1,
+                lineType=cv2.LINE_8,
+            )
+            if not np.any(seed_image == 0):
+                raise ValueError(
+                    f"共享尾部碎片 {fragment_id} 的中心线无法栅格化。"
+                )
+            distance_images.append(distance_transform_edt(seed_image))
+
+        distances = np.stack(distance_images, axis=0)
+        nearest_distance = np.min(distances, axis=0)
+        nearest_count = np.count_nonzero(
+            distances == nearest_distance[np.newaxis, ...],
+            axis=0,
+        )
+        nearest_index = np.argmin(distances, axis=0)
+        local_fragment = fragment_mask[
+            minimum_y : maximum_y + 1,
+            minimum_x : maximum_x + 1,
+        ]
+        local_output = region_labels[
+            minimum_y : maximum_y + 1,
+            minimum_x : maximum_x + 1,
+        ]
+        ambiguous = local_fragment & (nearest_count > 1)
+        assignment_count = np.zeros(local_shape, dtype=np.uint16)
+        for index, record in enumerate(records):
+            assigned = (
+                local_fragment
+                & (nearest_count == 1)
+                & (nearest_index == index)
+            )
+            assignment_count[assigned] += 1
+            local_output[assigned] = np.uint16(record.head_id)
+
+        if np.any(assignment_count > 1):
+            raise ValueError(
+                f"共享尾部碎片 {fragment_id} 仍存在区域重叠。"
+            )
+        if np.any(local_fragment & (local_output == 0) & ~ambiguous):
+            raise ValueError(
+                f"共享尾部碎片 {fragment_id} 存在非等距未分配像素。"
+            )
+
+    missing_heads = [
+        int(record.head_id)
+        for record in accepted_records
+        if not np.any(region_labels == int(record.head_id))
+    ]
+    if missing_heads:
+        raise ValueError(
+            f"已接受尾部没有任何区域像素：Head {missing_heads}"
+        )
+
+    conflict_rows: list[dict[str, int]] = []
+    return region_labels, conflict_rows
+
 
 def fragment_boundary_mask(fragment_labels: np.ndarray) -> np.ndarray:
     binary = (fragment_labels > 0).astype(np.uint8)
@@ -1331,12 +1498,6 @@ class TailResultEditor:
         height, width = self.fragment_labels.shape
         self._ensure_result_cache()
 
-        if 0 <= xi < width and 0 <= yi < height:
-            owner = int(self.result_owner_image[yi, xi])
-            if owner > 0:
-                self._select_head_id(owner)
-                return "result"
-
         if self.path_tree is not None and len(self.path_tree_head_ids):
             distance, path_index = self.path_tree.query(
                 np.asarray(point, dtype=np.float32),
@@ -1346,6 +1507,12 @@ class TailResultEditor:
                 self._select_head_id(
                     int(self.path_tree_head_ids[int(path_index)])
                 )
+                return "result"
+
+        if 0 <= xi < width and 0 <= yi < height:
+            owner = int(self.result_owner_image[yi, xi])
+            if owner > 0:
+                self._select_head_id(owner)
                 return "result"
 
         distance, head_index = self.head_tree.query(
@@ -1801,27 +1968,10 @@ class TailResultEditor:
             self.output_dir / "edited_tail_head_id_labels_uint16.tif"
         )
 
-        region_labels = np.zeros(self.fragment_labels.shape, dtype=np.uint16)
-        conflict_rows: list[dict[str, int]] = []
-        for record in self._accepted_records():
-            if not record.selected_fragment_ids:
-                continue
-            mask = np.isin(
-                self.fragment_labels,
-                np.asarray(record.selected_fragment_ids, dtype=np.uint32),
-            )
-            conflict_count = int(
-                np.count_nonzero(mask & (region_labels > 0))
-            )
-            writable = mask & (region_labels == 0)
-            region_labels[writable] = np.uint16(record.head_id)
-            if conflict_count:
-                conflict_rows.append(
-                    {
-                        "head_id": int(record.head_id),
-                        "conflict_pixels": conflict_count,
-                    }
-                )
+        region_labels, conflict_rows = build_path_aware_region_labels(
+            self.fragment_labels,
+            self._accepted_records(),
+        )
 
         Image.fromarray(region_labels).save(
             self.output_dir / "edited_tail_regions_head_id_uint16.tif"

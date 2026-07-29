@@ -11,9 +11,20 @@ class ResultParser:
     LOG_EXTS = {".log", ".txt"}
     PDF_EXTS = {".pdf"}
 
-    def __init__(self, output_dir: str, protein_part: str = ""):
+    CALCULATION_MODE_LEGACY = "legacy"
+    CALCULATION_MODE_HEAD_EQUIVALENT = "head_equivalent"
+
+    def __init__(
+        self,
+        output_dir: str,
+        protein_part: str = "",
+        calculation_mode: str = "",
+    ):
         self.output_dir = Path(output_dir)
         self.protein_part = self._normalize_part(protein_part)
+        self.calculation_mode = self._normalize_calculation_mode(
+            calculation_mode
+        )
 
     def scan_files(self) -> list:
         if not self.output_dir.exists():
@@ -167,13 +178,14 @@ class ResultParser:
     def parse_image_summary(self, protein_part: str = "") -> dict:
         image_csv = self.find_image_csv()
         requested_part = self._normalize_part(protein_part or self.protein_part)
+        part_was_explicit = bool(requested_part)
 
         empty_result = {
             "success": False,
             "message": "未找到 Image.csv。",
             "image_csv": "",
             "object_csv": "",
-            "calculation_mode": requested_part,
+            "calculation_mode": self.calculation_mode or requested_part,
             "warnings": [],
             "rows": [],
             "total": {},
@@ -206,14 +218,25 @@ class ResultParser:
                 return empty_result
 
         part = self._infer_part(requested_part, image_df, object_df, object_csv)
+        calculation_mode = self._resolve_calculation_mode(
+            part=part,
+            object_df=object_df,
+            part_was_explicit=part_was_explicit,
+        )
         warnings = []
 
-        ok, message = self._validate_required_columns(image_df, object_df, object_csv, part)
+        ok, message = self._validate_required_columns(
+            image_df,
+            object_df,
+            object_csv,
+            part,
+            calculation_mode,
+        )
         if not ok:
             empty_result["message"] = message
             empty_result["image_csv"] = str(image_csv)
             empty_result["object_csv"] = str(object_csv or "")
-            empty_result["calculation_mode"] = part
+            empty_result["calculation_mode"] = calculation_mode
             return empty_result
 
         if "Count_R_colocalized" not in image_df.columns and "Count_G_colocalized" in image_df.columns:
@@ -270,18 +293,62 @@ class ResultParser:
                 expression_rate = 0
                 rate_fraction = 0
 
-            if part == "tail":
-                # 尾部荧光强度：∑Math_IntegratedIntensity255 / ∑AreaShape_Area * Math_ColocalizationRate
+            if (
+                part == "tail"
+                and calculation_mode == self.CALCULATION_MODE_LEGACY
+            ):
+                # 旧批量尾部口径保持不变：
+                # ∑Math_IntegratedIntensity255 / ∑AreaShape_Area
+                # × Math_ColocalizationRate。
                 if stats["area_sum"] > 0:
-                    mean_intensity = stats["integrated255_sum"] / stats["area_sum"] * rate_fraction
+                    mean_intensity = (
+                        stats["integrated255_sum"]
+                        / stats["area_sum"]
+                        * rate_fraction
+                    )
                 else:
                     mean_intensity = 0
             else:
-                # 头部荧光强度：∑Math_MeanIntensity255 / Count_R_objects
+                # 头部，以及 Analysis V2 人工校准尾部，统一使用：
+                # ∑Math_MeanIntensity255 / Count_R_objects。
                 if r_count and r_count > 0:
                     mean_intensity = stats["mean255_sum"] / r_count
                 else:
                     mean_intensity = 0
+
+            if (
+                part == "tail"
+                and calculation_mode
+                == self.CALCULATION_MODE_HEAD_EQUIVALENT
+            ):
+                if (
+                    g_objects_count is not None
+                    and colocalized_count is not None
+                    and int(round(g_objects_count))
+                    != int(round(colocalized_count))
+                ):
+                    warnings.append(
+                        "视野 {} 的 Count_G_objects={} 与 "
+                        "Count_R_colocalized={} 不一致。".format(
+                            self._normalize_image_number(image_number),
+                            int(round(g_objects_count)),
+                            int(round(colocalized_count)),
+                        )
+                    )
+
+                if (
+                    g_objects_count is not None
+                    and stats["object_count"]
+                    != int(round(g_objects_count))
+                ):
+                    warnings.append(
+                        "视野 {} 的 G_objects.csv 对象行数={} 与 "
+                        "Count_G_objects={} 不一致。".format(
+                            self._normalize_image_number(image_number),
+                            stats["object_count"],
+                            int(round(g_objects_count)),
+                        )
+                    )
 
             rows.append({
                 "image_number": self._normalize_image_number(image_number),
@@ -289,6 +356,8 @@ class ResultParser:
                 "positive_count": int(round(colocalized_count or 0)),
                 "expression_rate": round(expression_rate or 0, 2),
                 "mean_intensity": int(round(mean_intensity or 0)),
+                "mean_intensity_raw": round(mean_intensity or 0, 4),
+                "calculation_mode": calculation_mode,
                 # 以下字段用于核查/总计，不直接影响旧 UI。
                 "rate_fraction": round(rate_fraction or 0, 6),
                 "mean255_sum": round(stats["mean255_sum"], 2),
@@ -300,15 +369,15 @@ class ResultParser:
                 "g_objects_run": int(round(g_objects_run or 0)),
             })
 
-        total = self._build_total(rows, part)
+        total = self._build_total(rows, part, calculation_mode)
 
         return {
             "success": True,
             "message": "解析成功。",
             "image_csv": str(image_csv),
             "object_csv": str(object_csv or ""),
-            "calculation_mode": part,
-            "warnings": warnings,
+            "calculation_mode": calculation_mode,
+            "warnings": self._deduplicate_warnings(warnings),
             "rows": rows,
             "total": total,
         }
@@ -352,6 +421,68 @@ class ResultParser:
             return "head"
         return ""
 
+    @classmethod
+    def _normalize_calculation_mode(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if text in {
+            "legacy",
+            "tail_legacy",
+            "legacy_tail",
+            "旧版",
+            "旧尾部",
+        }:
+            return cls.CALCULATION_MODE_LEGACY
+        if text in {
+            "head_equivalent",
+            "tail_head_equivalent",
+            "analysis_v2",
+            "v2",
+            "头部同口径",
+        }:
+            return cls.CALCULATION_MODE_HEAD_EQUIVALENT
+        return ""
+
+    def _resolve_calculation_mode(
+        self,
+        part: str,
+        object_df,
+        part_was_explicit: bool,
+    ) -> str:
+        if part == "head":
+            return self.CALCULATION_MODE_HEAD_EQUIVALENT
+
+        if part != "tail":
+            return self.calculation_mode or self.CALCULATION_MODE_HEAD_EQUIVALENT
+
+        if self.calculation_mode:
+            return self.calculation_mode
+
+        # 旧调用只传 protein_part="tail" 时必须继续使用旧公式，
+        # 这样批量分析和历史流程不会被新功能改变。
+        if part_was_explicit:
+            return self.CALCULATION_MODE_LEGACY
+
+        # ResultViewer 等未传表达部位的读取场景，可根据对象列安全识别。
+        columns = set(object_df.columns) if object_df is not None else set()
+        if (
+            "Math_MeanIntensity255" in columns
+            and "Math_IntegratedIntensity255" not in columns
+        ):
+            return self.CALCULATION_MODE_HEAD_EQUIVALENT
+
+        return self.CALCULATION_MODE_LEGACY
+
+    @staticmethod
+    def _deduplicate_warnings(warnings: list) -> list:
+        result = []
+        seen = set()
+        for warning in warnings:
+            text = str(warning or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                result.append(text)
+        return result
+
     def _infer_part(self, requested_part: str, image_df, object_df, object_csv: Optional[Path]) -> str:
         if requested_part in {"head", "tail"}:
             return requested_part
@@ -360,16 +491,26 @@ class ResultParser:
         object_cols = set(object_df.columns) if object_df is not None else set()
         object_name = object_csv.name.lower() if object_csv is not None else ""
 
-        if "Math_MeanIntensity255" in object_cols:
-            return "head"
+        # 文件名优先于测量列。新人工尾部与头部都包含
+        # Math_MeanIntensity255，但尾部对象文件仍固定为 G_objects.csv。
         if "g_objects" in object_name:
             return "tail"
-        if "Count_R_colocalized" in image_cols and "Math_IntegratedIntensity255" in object_cols:
+        if "g_colocalized" in object_name:
+            return "head"
+        if "Count_R_colocalized" in image_cols:
             return "tail"
+        if "Math_MeanIntensity255" in object_cols:
+            return "head"
         return "head"
 
     @staticmethod
-    def _validate_required_columns(image_df, object_df, object_csv: Optional[Path], part: str):
+    def _validate_required_columns(
+        image_df,
+        object_df,
+        object_csv: Optional[Path],
+        part: str,
+        calculation_mode: str,
+    ):
         missing = []
 
         if "Count_R_objects" not in image_df.columns:
@@ -387,14 +528,31 @@ class ResultParser:
             missing.append(f"对象级 CSV 为空：{object_csv}")
         else:
             object_cols = set(object_df.columns)
-            if part == "tail":
+            if (
+                part == "tail"
+                and calculation_mode == ResultParser.CALCULATION_MODE_LEGACY
+            ):
                 if "Math_IntegratedIntensity255" not in object_cols:
-                    missing.append("尾部对象 CSV 缺少 Math_IntegratedIntensity255，无法计算尾部荧光强度。")
+                    missing.append(
+                        "旧批量尾部对象 CSV 缺少 "
+                        "Math_IntegratedIntensity255，无法计算尾部荧光强度。"
+                    )
                 if "AreaShape_Area" not in object_cols:
-                    missing.append("尾部对象 CSV 缺少 AreaShape_Area，无法计算尾部荧光强度。")
+                    missing.append(
+                        "旧批量尾部对象 CSV 缺少 AreaShape_Area，"
+                        "无法计算尾部荧光强度。"
+                    )
             else:
                 if "Math_MeanIntensity255" not in object_cols:
-                    missing.append("头部对象 CSV 缺少 Math_MeanIntensity255，无法计算头部荧光强度。")
+                    target = (
+                        "Analysis V2 尾部"
+                        if part == "tail"
+                        else "头部"
+                    )
+                    missing.append(
+                        "{}对象 CSV 缺少 Math_MeanIntensity255，"
+                        "无法计算荧光强度。".format(target)
+                    )
 
         if missing:
             return False, "；".join(missing)
@@ -508,7 +666,11 @@ class ResultParser:
         return None
 
     @staticmethod
-    def _build_total(rows: list, part: str) -> dict:
+    def _build_total(
+        rows: list,
+        part: str,
+        calculation_mode: str,
+    ) -> dict:
         total_sperm_count = sum(item.get("sperm_count", 0) for item in rows)
         total_positive_count = sum(item.get("positive_count", 0) for item in rows)
         total_mean255_sum = sum(item.get("mean255_sum", 0) for item in rows)
@@ -520,16 +682,29 @@ class ResultParser:
         else:
             total_rate_fraction = 0
 
-        if part == "tail":
+        if (
+            part == "tail"
+            and calculation_mode == ResultParser.CALCULATION_MODE_LEGACY
+        ):
             if total_area_sum > 0:
-                total_mean_intensity = total_integrated255_sum / total_area_sum * total_rate_fraction
+                total_mean_intensity = (
+                    total_integrated255_sum
+                    / total_area_sum
+                    * total_rate_fraction
+                )
             else:
                 total_mean_intensity = 0
         else:
             if total_sperm_count > 0:
                 total_mean_intensity = total_mean255_sum / total_sperm_count
             elif rows:
-                total_mean_intensity = sum(item.get("mean_intensity", 0) for item in rows) / len(rows)
+                total_mean_intensity = (
+                    sum(
+                        item.get("mean_intensity_raw", 0)
+                        for item in rows
+                    )
+                    / len(rows)
+                )
             else:
                 total_mean_intensity = 0
 
@@ -539,6 +714,8 @@ class ResultParser:
             "positive_count": int(total_positive_count),
             "expression_rate": round(total_rate_fraction * 100, 2),
             "mean_intensity": int(round(total_mean_intensity or 0)),
+            "mean_intensity_raw": round(total_mean_intensity or 0, 4),
+            "calculation_mode": calculation_mode,
             "rate_fraction": round(total_rate_fraction, 6),
             "mean255_sum": round(total_mean255_sum, 2),
             "integrated255_sum": round(total_integrated255_sum, 2),
