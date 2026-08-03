@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-精子尾部整图所见即所得校准工具 V2.2
+精子尾部整图所见即所得校准工具 V2.6
 
 界面原则：
 - 整张Merge图一次显示，不逐个头部翻页；
@@ -33,7 +33,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import cv2
@@ -50,10 +50,10 @@ except ImportError as exc:
     raise SystemExit(1) from exc
 
 
-VERSION = "tail_result_editor_v2_2"
+VERSION = "tail_result_editor_v2_12_fast_ui"
 
 
-def configure_chinese_font() -> str | None:
+def configure_chinese_font() -> Optional[str]:
     # 优先使用Windows系统自带中文字体，避免界面出现方框。
     preferred_names = [
         "Microsoft YaHei",
@@ -197,7 +197,7 @@ def fragment_ids_near_path(
     fragment_labels: np.ndarray,
     points_xy: np.ndarray,
     radius_px: int,
-) -> list[int]:
+) -> List[int]:
     """只在路径包围盒内查找碎片，避免每次点击扫描整张大图。"""
     if len(points_xy) < 2:
         return []
@@ -237,108 +237,737 @@ def fragment_ids_near_path(
     return [int(value) for value in values.tolist()]
 
 
+def resample_polyline(
+    points_xy: np.ndarray,
+    spacing_px: float = 1.0,
+) -> np.ndarray:
+    """按近似等弧长重采样路径，避免原路径点疏密影响碎片选择。"""
+    points = np.asarray(points_xy, dtype=np.float32)
+    if len(points) < 2:
+        return points.copy()
+
+    segment_lengths = np.linalg.norm(
+        np.diff(points, axis=0),
+        axis=1,
+    )
+    cumulative = np.concatenate(
+        [np.asarray([0.0], dtype=np.float32), np.cumsum(segment_lengths)]
+    )
+    total_length = float(cumulative[-1])
+    if total_length <= 1e-6:
+        return points[:1].copy()
+
+    spacing = max(0.5, float(spacing_px))
+    sample_distances = np.arange(
+        0.0,
+        total_length,
+        spacing,
+        dtype=np.float32,
+    )
+    if len(sample_distances) == 0 or float(sample_distances[-1]) < total_length:
+        sample_distances = np.append(
+            sample_distances,
+            np.float32(total_length),
+        )
+
+    sampled = np.column_stack(
+        [
+            np.interp(sample_distances, cumulative, points[:, 0]),
+            np.interp(sample_distances, cumulative, points[:, 1]),
+        ]
+    ).astype(np.float32)
+    return deduplicate_points(sampled)
+
+
+def _compress_fragment_runs(
+    labels_along_path: np.ndarray,
+) -> List[List[int]]:
+    """将逐点碎片编号压缩为[label, start, end)游程。"""
+    values = np.asarray(labels_along_path, dtype=np.int64)
+    if len(values) == 0:
+        return []
+
+    runs: List[List[int]] = []
+    start = 0
+    for index in range(1, len(values) + 1):
+        if index == len(values) or int(values[index]) != int(values[start]):
+            runs.append([int(values[start]), int(start), int(index)])
+            start = index
+    return runs
+
+
+def _merge_same_fragment_runs(
+    runs: List[List[int]],
+) -> List[List[int]]:
+    merged: List[List[int]] = []
+    for label, start, end in runs:
+        if merged and int(merged[-1][0]) == int(label):
+            merged[-1][2] = int(end)
+        else:
+            merged.append([int(label), int(start), int(end)])
+    return merged
+
+
+def select_single_smooth_fragment_chain(
+    fragment_labels: np.ndarray,
+    points_xy: np.ndarray,
+    radius_px: int,
+    *,
+    blocked_fragment_ids: Optional[Set[int]] = None,
+) -> Tuple[List[int], Dict[str, Any]]:
+    """
+    沿中心路径逐点只选择最近的一个原子碎片，再清除短暂跳转。
+
+    与“路径半径内全部吸入”不同，本函数保证结果是沿同一条路径出现的
+    单序列碎片链。路径旁边平行、交叉或短暂靠近的其他碎片不会仅因位于
+    选择半径内而被加入。
+    """
+    labels = np.asarray(fragment_labels)
+    if labels.ndim != 2:
+        raise ValueError(f"尾部碎片标签图必须是二维图像：{labels.shape}")
+
+    route = resample_polyline(
+        np.asarray(points_xy, dtype=np.float32),
+        spacing_px=1.0,
+    )
+    if len(route) < 2:
+        return [], {
+            "route_sample_count": int(len(route)),
+            "nearby_fragment_count": 0,
+            "selected_fragment_count": 0,
+            "removed_short_run_count": 0,
+            "blocked_fragment_count": 0,
+        }
+
+    radius = max(1, int(radius_px))
+    height, width = labels.shape
+    minimum_x = max(0, int(np.floor(route[:, 0].min())) - radius - 2)
+    maximum_x = min(width - 1, int(np.ceil(route[:, 0].max())) + radius + 2)
+    minimum_y = max(0, int(np.floor(route[:, 1].min())) - radius - 2)
+    maximum_y = min(height - 1, int(np.ceil(route[:, 1].max())) + radius + 2)
+
+    local_original = labels[
+        minimum_y : maximum_y + 1,
+        minimum_x : maximum_x + 1,
+    ]
+    local = local_original.copy()
+
+    blocked = {
+        int(value)
+        for value in (blocked_fragment_ids or set())
+        if int(value) > 0
+    }
+    if blocked:
+        blocked_values = np.asarray(sorted(blocked), dtype=local.dtype)
+        local[np.isin(local, blocked_values)] = 0
+
+    nearby_mask = np.zeros(local.shape, dtype=np.uint8)
+    shifted = route.copy()
+    shifted[:, 0] -= minimum_x
+    shifted[:, 1] -= minimum_y
+    cv2.polylines(
+        nearby_mask,
+        [np.rint(shifted).astype(np.int32).reshape(-1, 1, 2)],
+        False,
+        1,
+        radius * 2 + 1,
+        lineType=cv2.LINE_8,
+    )
+    nearby_values = np.unique(local_original[nearby_mask > 0])
+    nearby_ids = [
+        int(value)
+        for value in nearby_values.tolist()
+        if int(value) > 0
+    ]
+
+    if not np.any(local > 0):
+        return [], {
+            "route_sample_count": int(len(route)),
+            "nearby_fragment_count": int(len(nearby_ids)),
+            "selected_fragment_count": 0,
+            "removed_short_run_count": 0,
+            "blocked_fragment_count": int(
+                len([value for value in nearby_ids if value in blocked])
+            ),
+        }
+
+    # 在局部ROI中寻找每个路径采样点最近的原子碎片。每个路径位置只允许
+    # 一个碎片，因此不会把左右两侧的平行尾部同时吸入。
+    distance, nearest_indices = distance_transform_edt(
+        local == 0,
+        return_indices=True,
+    )
+    x = np.clip(
+        np.rint(route[:, 0]).astype(np.int32) - minimum_x,
+        0,
+        local.shape[1] - 1,
+    )
+    y = np.clip(
+        np.rint(route[:, 1]).astype(np.int32) - minimum_y,
+        0,
+        local.shape[0] - 1,
+    )
+    sampled_distance = distance[y, x]
+    sampled_labels = local[
+        nearest_indices[0, y, x],
+        nearest_indices[1, y, x],
+    ].astype(np.int64)
+    sampled_labels[sampled_distance > float(radius)] = 0
+
+    runs = _compress_fragment_runs(sampled_labels)
+
+    # 短暂离开同一碎片通常来自边界锯齿或交叉处等距抖动。若零值小间隙
+    # 两侧是同一碎片，则桥接回来。
+    maximum_bridge_gap = max(2, int(round(radius * 0.6)))
+    for index in range(1, len(runs) - 1):
+        label, start, end = runs[index]
+        previous_label = int(runs[index - 1][0])
+        next_label = int(runs[index + 1][0])
+        if (
+            int(label) == 0
+            and end - start <= maximum_bridge_gap
+            and previous_label > 0
+            and previous_label == next_label
+        ):
+            runs[index][0] = previous_label
+    runs = _merge_same_fragment_runs(runs)
+
+    # 删除只在路径上出现极短距离的旁支。真实尾部碎片应沿路径持续出现，
+    # 而交叉/平行尾部通常只在少量采样点上成为最近碎片。
+    minimum_run_length = max(3, int(round(radius * 0.6)))
+    removed_short_run_count = 0
+    changed = True
+    while changed:
+        changed = False
+        for index, run in enumerate(runs):
+            label, start, end = run
+            run_length = int(end - start)
+            if int(label) <= 0 or run_length >= minimum_run_length:
+                continue
+
+            previous_label = int(runs[index - 1][0]) if index > 0 else 0
+            next_label = (
+                int(runs[index + 1][0])
+                if index + 1 < len(runs)
+                else 0
+            )
+
+            # A-B-A中的短B视为交叉点抖动，恢复为A；其他短旁支置空。
+            replacement = (
+                previous_label
+                if previous_label > 0 and previous_label == next_label
+                else 0
+            )
+            run[0] = replacement
+            removed_short_run_count += 1
+            changed = True
+
+        if changed:
+            runs = _merge_same_fragment_runs(runs)
+
+    # 再处理稍长但明显的A-B-A短暂切换，避免路径在交叉处拐入旁边尾部
+    # 后又立刻返回原尾部。
+    maximum_detour_length = max(
+        minimum_run_length + 1,
+        int(round(radius * 1.5)),
+    )
+    for index in range(1, len(runs) - 1):
+        label, start, end = runs[index]
+        previous_label = int(runs[index - 1][0])
+        next_label = int(runs[index + 1][0])
+        if (
+            int(label) > 0
+            and previous_label > 0
+            and previous_label == next_label
+            and int(label) != previous_label
+            and end - start <= maximum_detour_length
+        ):
+            runs[index][0] = previous_label
+            removed_short_run_count += 1
+    runs = _merge_same_fragment_runs(runs)
+
+    selected_ids: List[int] = []
+    for label, _start, _end in runs:
+        value = int(label)
+        if value > 0 and value not in selected_ids:
+            selected_ids.append(value)
+
+    return selected_ids, {
+        "route_sample_count": int(len(route)),
+        "nearby_fragment_count": int(len(nearby_ids)),
+        "selected_fragment_count": int(len(selected_ids)),
+        "removed_short_run_count": int(removed_short_run_count),
+        "blocked_fragment_count": int(
+            len([value for value in nearby_ids if value in blocked])
+        ),
+        "selected_fragment_ids": selected_ids,
+    }
+
+
+
+
+
+def resample_polyline_uniform(
+    points_xy: np.ndarray,
+    step_px: float = 1.5,
+) -> np.ndarray:
+    points = np.asarray(points_xy, dtype=np.float32)
+    if len(points) < 2:
+        return points.copy()
+    delta = np.diff(points, axis=0)
+    seg = np.linalg.norm(delta, axis=1)
+    keep = np.concatenate([[True], seg > 1e-6])
+    points = points[keep]
+    if len(points) < 2:
+        return points.copy()
+    seg = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    cumulative = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(cumulative[-1])
+    if total <= 1e-6:
+        return points[:1].copy()
+    sample_count = max(2, int(math.ceil(total / max(0.5, float(step_px)))) + 1)
+    sample_s = np.linspace(0.0, total, sample_count, dtype=np.float32)
+    x = np.interp(sample_s, cumulative, points[:, 0])
+    y = np.interp(sample_s, cumulative, points[:, 1])
+    return np.column_stack([x, y]).astype(np.float32)
+
+
+def polyline_unit_tangents(points_xy: np.ndarray) -> np.ndarray:
+    points = np.asarray(points_xy, dtype=np.float32)
+    if len(points) == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    if len(points) == 1:
+        return np.zeros((1, 2), dtype=np.float32)
+    tangent = np.gradient(points, axis=0).astype(np.float32)
+    norm = np.linalg.norm(tangent, axis=1, keepdims=True)
+    tangent = np.divide(
+        tangent,
+        np.maximum(norm, 1e-6),
+        out=np.zeros_like(tangent),
+    )
+    return tangent
+
+
+def longest_true_run_length(mask: np.ndarray, step_px: float) -> float:
+    values = np.asarray(mask, dtype=bool)
+    best = 0
+    current = 0
+    for value in values.tolist():
+        if value:
+            current += 1
+            best = max(best, current)
+        else:
+            current = 0
+    return float(best) * float(step_px)
+
+
+def classify_path_interaction(
+    new_path_xy: np.ndarray,
+    existing_path_xy: np.ndarray,
+    proximity_px: float,
+    *,
+    minimum_crossing_angle_deg: float = 28.0,
+    maximum_crossing_span_px: float = 22.0,
+    sample_step_px: float = 1.5,
+) -> Dict[str, Union[float, str, bool]]:
+    """区分真实短交叉和沿同一尾部长距离重合。
+
+    方向按无向切线比较，因此0度表示同向/反向重合，90度表示正交。
+    """
+    new_path = resample_polyline_uniform(new_path_xy, sample_step_px)
+    old_path = resample_polyline_uniform(existing_path_xy, sample_step_px)
+    if len(new_path) < 2 or len(old_path) < 2:
+        return {
+            "relation": "invalid",
+            "is_transverse_crossing": False,
+            "median_angle_deg": 0.0,
+            "maximum_close_span_px": 0.0,
+            "minimum_distance_px": float("inf"),
+        }
+
+    tree = cKDTree(old_path)
+    distances, nearest = tree.query(new_path, k=1)
+    distances = np.asarray(distances, dtype=np.float32)
+    nearest = np.asarray(nearest, dtype=np.int32)
+    close = distances <= float(proximity_px)
+    if not np.any(close):
+        return {
+            "relation": "disjoint",
+            "is_transverse_crossing": False,
+            "median_angle_deg": 90.0,
+            "maximum_close_span_px": 0.0,
+            "minimum_distance_px": float(distances.min()),
+        }
+
+    new_tangent = polyline_unit_tangents(new_path)
+    old_tangent = polyline_unit_tangents(old_path)
+    dot = np.sum(new_tangent[close] * old_tangent[nearest[close]], axis=1)
+    dot = np.clip(np.abs(dot), 0.0, 1.0)
+    angles = np.degrees(np.arccos(dot))
+    median_angle = float(np.median(angles)) if len(angles) else 0.0
+    close_span = longest_true_run_length(close, sample_step_px)
+    transverse = (
+        median_angle >= float(minimum_crossing_angle_deg)
+        and close_span <= float(maximum_crossing_span_px)
+    )
+    return {
+        "relation": "transverse_crossing" if transverse else "longitudinal_overlap",
+        "is_transverse_crossing": bool(transverse),
+        "median_angle_deg": median_angle,
+        "maximum_close_span_px": float(close_span),
+        "minimum_distance_px": float(distances.min()),
+    }
+
+
+def rasterize_path_corridor(
+    shape: Tuple[int, int],
+    points_xy: np.ndarray,
+    radius_px: int,
+) -> np.ndarray:
+    """将中心路径栅格化为窄带，避免整块吸入同一原子碎片的旁支。"""
+    points = np.asarray(points_xy, dtype=np.float32)
+    mask = np.zeros(shape, dtype=np.uint8)
+    if len(points) < 2:
+        return mask.astype(bool)
+
+    radius = max(1, int(radius_px))
+    points_int = np.rint(points).astype(np.int32)
+    cv2.polylines(
+        mask,
+        [points_int.reshape(-1, 1, 2)],
+        False,
+        1,
+        radius * 2 + 1,
+        lineType=cv2.LINE_8,
+    )
+    cv2.circle(mask, tuple(points_int[0]), radius, 1, -1, lineType=cv2.LINE_8)
+    cv2.circle(mask, tuple(points_int[-1]), radius, 1, -1, lineType=cv2.LINE_8)
+    return mask > 0
+
+
+def path_constrained_fragment_mask(
+    fragment_labels: np.ndarray,
+    fragment_ids: List[int],
+    points_xy: np.ndarray,
+    radius_px: int,
+) -> np.ndarray:
+    """仅保留选中碎片中位于中心路径窄带内的像素。"""
+    labels = np.asarray(fragment_labels)
+    values = np.asarray(
+        sorted({int(value) for value in fragment_ids if int(value) > 0}),
+        dtype=labels.dtype,
+    )
+    if len(values) == 0 or len(points_xy) < 2:
+        return np.zeros(labels.shape, dtype=bool)
+    fragment_mask = np.isin(labels, values)
+    corridor = rasterize_path_corridor(labels.shape, points_xy, radius_px)
+    return fragment_mask & corridor
+
+
+
+def path_constrained_manual_region_mask(
+    fragment_labels: np.ndarray,
+    fragment_ids: List[int],
+    points_xy: np.ndarray,
+    radius_px: int,
+    manual_signal_support: Optional[np.ndarray],
+) -> np.ndarray:
+    """
+    人工结果区域 = 已选碎片窄带 + 窄带内未编号的真实绿色/概率信号。
+
+    只补充 fragment_labels==0 的像素，避免把未选择的旁边有编号碎片整块吸入。
+    """
+    labels = np.asarray(fragment_labels)
+    corridor = rasterize_path_corridor(labels.shape, points_xy, radius_px)
+    if not np.any(corridor):
+        return np.zeros(labels.shape, dtype=bool)
+
+    selected = path_constrained_fragment_mask(
+        labels,
+        fragment_ids,
+        points_xy,
+        radius_px,
+    )
+    if manual_signal_support is None:
+        return selected
+
+    support = np.asarray(manual_signal_support, dtype=bool)
+    if support.shape != labels.shape:
+        raise ValueError(
+            "手动区域信号支持与碎片标签尺寸不一致："
+            f"{support.shape} != {labels.shape}"
+        )
+    unlabeled_signal = corridor & support & (labels == 0)
+    return selected | unlabeled_signal
+
+def record_uses_path_corridor(record: Any) -> bool:
+    """人工新增/重画只使用路径窄带；初始自动草稿保持原区域。"""
+    return str(getattr(record, "selected_source", "")).startswith("manual")
+
+
+def record_region_mask(
+    fragment_labels: np.ndarray,
+    record: Any,
+    manual_corridor_radius_px: int,
+    manual_signal_support: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    fragment_ids = [
+        int(value)
+        for value in getattr(record, "selected_fragment_ids", [])
+        if int(value) > 0
+    ]
+    if not fragment_ids:
+        return np.zeros(np.asarray(fragment_labels).shape, dtype=bool)
+    if record_uses_path_corridor(record):
+        return path_constrained_manual_region_mask(
+            fragment_labels,
+            fragment_ids,
+            np.asarray(record.selected_points_xy, dtype=np.float32),
+            radius_px=manual_corridor_radius_px,
+            manual_signal_support=manual_signal_support,
+        )
+    return np.isin(
+        np.asarray(fragment_labels),
+        np.asarray(fragment_ids, dtype=np.asarray(fragment_labels).dtype),
+    )
+
+
 def build_path_aware_region_labels(
     fragment_labels: np.ndarray,
-    accepted_records: list[Any],
-) -> tuple[np.ndarray, list[dict[str, int]]]:
-    """按中心线划分共享碎片，同时保持唯一碎片的原有整块归属。"""
+    accepted_records: List[Any],
+    manual_corridor_radius_px: int = 5,
+    manual_signal_support: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, List[Dict[str, int]]]:
+    """
+    自动草稿保持原碎片区域；人工新增/重画只保留中心路径窄带。
+
+    同一碎片可被多条中心线穿过。像素仅被一个候选区域覆盖时直接归属；
+    多条候选区域重叠时按最近中心线唯一分配，等距像素保持未分配。
+    """
     labels = np.asarray(fragment_labels)
     if labels.ndim != 2:
         raise ValueError(f"尾部碎片标签图必须是二维图像：{labels.shape}")
 
     height, width = labels.shape
     region_labels = np.zeros(labels.shape, dtype=np.uint16)
-    fragment_users: dict[int, list[Any]] = {}
+    fragment_users: Dict[int, List[Any]] = {}
     for record in accepted_records:
         for fragment_id in set(record.selected_fragment_ids):
             value = int(fragment_id)
             if value > 0:
                 fragment_users.setdefault(value, []).append(record)
 
+    conflict_rows: List[Dict[str, int]] = []
+    radius = max(1, int(manual_corridor_radius_px))
+
     for fragment_id, records in fragment_users.items():
         fragment_mask = labels == fragment_id
         if not np.any(fragment_mask):
             continue
 
-        if len(records) == 1:
-            region_labels[fragment_mask] = np.uint16(records[0].head_id)
-            if int(np.count_nonzero(region_labels[fragment_mask])) != int(
-                np.count_nonzero(fragment_mask)
-            ):
-                raise ValueError(
-                    f"唯一尾部碎片 {fragment_id} 未保持完整区域。"
-                )
-            continue
-
         fragment_y, fragment_x = np.nonzero(fragment_mask)
-        all_paths = [
+        valid_paths = [
             np.asarray(record.selected_points_xy, dtype=np.float32)
             for record in records
         ]
-        valid_paths = [path for path in all_paths if len(path) >= 2]
-        if len(valid_paths) != len(records):
+        if any(len(path) < 2 for path in valid_paths):
             raise ValueError(
-                f"共享尾部碎片 {fragment_id} 存在缺少中心线的已接受结果。"
+                f"尾部碎片 {fragment_id} 存在缺少中心线的已接受结果。"
             )
 
         minimum_x = max(
             0,
-            int(
-                math.floor(
-                    min(
-                        float(fragment_x.min()),
-                        *(float(path[:, 0].min()) for path in valid_paths),
-                    )
-                )
-            )
-            - 1,
+            int(math.floor(min(
+                float(fragment_x.min()),
+                *(float(path[:, 0].min()) for path in valid_paths),
+            ))) - radius - 1,
         )
         maximum_x = min(
             width - 1,
-            int(
-                math.ceil(
-                    max(
-                        float(fragment_x.max()),
-                        *(float(path[:, 0].max()) for path in valid_paths),
-                    )
-                )
-            )
-            + 1,
+            int(math.ceil(max(
+                float(fragment_x.max()),
+                *(float(path[:, 0].max()) for path in valid_paths),
+            ))) + radius + 1,
         )
         minimum_y = max(
             0,
-            int(
-                math.floor(
-                    min(
-                        float(fragment_y.min()),
-                        *(float(path[:, 1].min()) for path in valid_paths),
-                    )
-                )
-            )
-            - 1,
+            int(math.floor(min(
+                float(fragment_y.min()),
+                *(float(path[:, 1].min()) for path in valid_paths),
+            ))) - radius - 1,
         )
         maximum_y = min(
             height - 1,
-            int(
-                math.ceil(
-                    max(
-                        float(fragment_y.max()),
-                        *(float(path[:, 1].max()) for path in valid_paths),
-                    )
-                )
-            )
-            + 1,
+            int(math.ceil(max(
+                float(fragment_y.max()),
+                *(float(path[:, 1].max()) for path in valid_paths),
+            ))) + radius + 1,
         )
 
         local_shape = (
             maximum_y - minimum_y + 1,
             maximum_x - minimum_x + 1,
         )
-        distance_images: list[np.ndarray] = []
-        for path in valid_paths:
+        local_fragment = fragment_mask[
+            minimum_y : maximum_y + 1,
+            minimum_x : maximum_x + 1,
+        ]
+        local_output = region_labels[
+            minimum_y : maximum_y + 1,
+            minimum_x : maximum_x + 1,
+        ]
+
+        candidate_masks: List[np.ndarray] = []
+        shifted_paths: List[np.ndarray] = []
+        for record, path in zip(records, valid_paths):
             shifted = path.copy()
             shifted[:, 0] -= minimum_x
             shifted[:, 1] -= minimum_y
+            shifted_paths.append(shifted)
+
+            if record_uses_path_corridor(record):
+                corridor = rasterize_path_corridor(
+                    local_shape,
+                    shifted,
+                    radius,
+                )
+                candidate_masks.append(local_fragment & corridor)
+            else:
+                candidate_masks.append(local_fragment.copy())
+
+        claims = np.stack(candidate_masks, axis=0)
+        claim_count = np.count_nonzero(claims, axis=0)
+
+        for index, record in enumerate(records):
+            assigned = claims[index] & (claim_count == 1)
+            local_output[assigned] = np.uint16(record.head_id)
+
+        overlap = local_fragment & (claim_count > 1)
+        ambiguous_count = 0
+        if np.any(overlap):
+            distance_images: List[np.ndarray] = []
+            for shifted in shifted_paths:
+                seed_image = np.ones(local_shape, dtype=np.uint8)
+                cv2.polylines(
+                    seed_image,
+                    [np.rint(shifted).astype(np.int32).reshape(-1, 1, 2)],
+                    False,
+                    0,
+                    1,
+                    lineType=cv2.LINE_8,
+                )
+                if not np.any(seed_image == 0):
+                    raise ValueError(
+                        f"共享尾部碎片 {fragment_id} 的中心线无法栅格化。"
+                    )
+                distance_images.append(distance_transform_edt(seed_image))
+
+            distances = np.stack(distance_images, axis=0)
+            # 未声明该像素的记录不能参与最近中心线竞争。
+            distances = np.where(claims, distances, np.inf)
+            nearest_distance = np.min(distances, axis=0)
+            nearest_count = np.count_nonzero(
+                np.isclose(
+                    distances,
+                    nearest_distance[np.newaxis, ...],
+                    atol=1e-6,
+                    rtol=0.0,
+                ),
+                axis=0,
+            )
+            nearest_index = np.argmin(distances, axis=0)
+            for index, record in enumerate(records):
+                assigned = (
+                    overlap
+                    & (nearest_count == 1)
+                    & (nearest_index == index)
+                )
+                local_output[assigned] = np.uint16(record.head_id)
+            ambiguous_count = int(np.count_nonzero(overlap & (nearest_count > 1)))
+
+        if len(records) == 1 and not record_uses_path_corridor(records[0]):
+            if not np.all(local_output[local_fragment] == int(records[0].head_id)):
+                raise ValueError(
+                    f"唯一自动尾部碎片 {fragment_id} 未保持完整区域。"
+                )
+
+        if len(records) > 1 or ambiguous_count:
+            conflict_rows.append(
+                {
+                    "fragment_id": int(fragment_id),
+                    "claimant_count": int(len(records)),
+                    "overlap_pixel_count": int(np.count_nonzero(overlap)),
+                    "ambiguous_pixel_count": int(ambiguous_count),
+                }
+            )
+
+
+    # 补充人工中心线窄带内、原子碎片标签为0但存在真实绿色/概率信号的像素。
+    # 这些像素不属于任何 fragment_id，因此需要单独按最近中心线唯一分配。
+    manual_records = [
+        record
+        for record in accepted_records
+        if record_uses_path_corridor(record)
+        and len(np.asarray(record.selected_points_xy)) >= 2
+    ]
+    if manual_records and manual_signal_support is not None:
+        support = np.asarray(manual_signal_support, dtype=bool)
+        if support.shape != labels.shape:
+            raise ValueError(
+                "手动区域信号支持与碎片标签尺寸不一致："
+                f"{support.shape} != {labels.shape}"
+            )
+
+        best_distance = np.full(labels.shape, np.inf, dtype=np.float32)
+        best_owner = np.zeros(labels.shape, dtype=np.uint16)
+        tie_mask = np.zeros(labels.shape, dtype=bool)
+
+        for record in manual_records:
+            path = np.asarray(record.selected_points_xy, dtype=np.float32)
+            minimum_x = max(
+                0,
+                int(math.floor(float(path[:, 0].min()))) - radius - 2,
+            )
+            maximum_x = min(
+                width - 1,
+                int(math.ceil(float(path[:, 0].max()))) + radius + 2,
+            )
+            minimum_y = max(
+                0,
+                int(math.floor(float(path[:, 1].min()))) - radius - 2,
+            )
+            maximum_y = min(
+                height - 1,
+                int(math.ceil(float(path[:, 1].max()))) + radius + 2,
+            )
+            if maximum_x < minimum_x or maximum_y < minimum_y:
+                continue
+
+            local_shape = (
+                maximum_y - minimum_y + 1,
+                maximum_x - minimum_x + 1,
+            )
+            shifted = path.copy()
+            shifted[:, 0] -= minimum_x
+            shifted[:, 1] -= minimum_y
+
+            corridor = rasterize_path_corridor(
+                local_shape,
+                shifted,
+                radius,
+            )
+            local_support = support[
+                minimum_y : maximum_y + 1,
+                minimum_x : maximum_x + 1,
+            ]
+            local_labels = labels[
+                minimum_y : maximum_y + 1,
+                minimum_x : maximum_x + 1,
+            ]
+            candidate = corridor & local_support & (local_labels == 0)
+            if not np.any(candidate):
+                continue
+
             seed_image = np.ones(local_shape, dtype=np.uint8)
             cv2.polylines(
                 seed_image,
@@ -348,46 +977,41 @@ def build_path_aware_region_labels(
                 1,
                 lineType=cv2.LINE_8,
             )
-            if not np.any(seed_image == 0):
-                raise ValueError(
-                    f"共享尾部碎片 {fragment_id} 的中心线无法栅格化。"
-                )
-            distance_images.append(distance_transform_edt(seed_image))
+            distance = distance_transform_edt(seed_image).astype(np.float32)
 
-        distances = np.stack(distance_images, axis=0)
-        nearest_distance = np.min(distances, axis=0)
-        nearest_count = np.count_nonzero(
-            distances == nearest_distance[np.newaxis, ...],
-            axis=0,
+            local_best_distance = best_distance[
+                minimum_y : maximum_y + 1,
+                minimum_x : maximum_x + 1,
+            ]
+            local_best_owner = best_owner[
+                minimum_y : maximum_y + 1,
+                minimum_x : maximum_x + 1,
+            ]
+            local_tie = tie_mask[
+                minimum_y : maximum_y + 1,
+                minimum_x : maximum_x + 1,
+            ]
+
+            closer = candidate & (distance < local_best_distance - 1e-6)
+            equal = (
+                candidate
+                & np.isfinite(local_best_distance)
+                & np.isclose(distance, local_best_distance, atol=1e-6, rtol=0.0)
+                & (local_best_owner != int(record.head_id))
+            )
+            local_best_distance[closer] = distance[closer]
+            local_best_owner[closer] = np.uint16(record.head_id)
+            local_tie[closer] = False
+            local_tie[equal] = True
+
+        assignable = (
+            (best_owner > 0)
+            & ~tie_mask
+            & (region_labels == 0)
+            & (labels == 0)
         )
-        nearest_index = np.argmin(distances, axis=0)
-        local_fragment = fragment_mask[
-            minimum_y : maximum_y + 1,
-            minimum_x : maximum_x + 1,
-        ]
-        local_output = region_labels[
-            minimum_y : maximum_y + 1,
-            minimum_x : maximum_x + 1,
-        ]
-        ambiguous = local_fragment & (nearest_count > 1)
-        assignment_count = np.zeros(local_shape, dtype=np.uint16)
-        for index, record in enumerate(records):
-            assigned = (
-                local_fragment
-                & (nearest_count == 1)
-                & (nearest_index == index)
-            )
-            assignment_count[assigned] += 1
-            local_output[assigned] = np.uint16(record.head_id)
+        region_labels[assignable] = best_owner[assignable]
 
-        if np.any(assignment_count > 1):
-            raise ValueError(
-                f"共享尾部碎片 {fragment_id} 仍存在区域重叠。"
-            )
-        if np.any(local_fragment & (local_output == 0) & ~ambiguous):
-            raise ValueError(
-                f"共享尾部碎片 {fragment_id} 存在非等距未分配像素。"
-            )
 
     missing_heads = [
         int(record.head_id)
@@ -399,7 +1023,6 @@ def build_path_aware_region_labels(
             f"已接受尾部没有任何区域像素：Head {missing_heads}"
         )
 
-    conflict_rows: list[dict[str, int]] = []
     return region_labels, conflict_rows
 
 
@@ -414,7 +1037,7 @@ def build_manual_evidence(
     merge_rgb: np.ndarray,
     probability: np.ndarray,
     fragment_labels: np.ndarray,
-    green_image: np.ndarray | None = None,
+    green_image: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     if green_image is None:
         green = merge_rgb[..., 1]
@@ -443,6 +1066,47 @@ def build_manual_evidence(
     return np.clip(evidence, 0.0, 1.0)
 
 
+
+def build_manual_region_support(
+    merge_rgb: np.ndarray,
+    probability: np.ndarray,
+    green_image: Optional[np.ndarray],
+) -> np.ndarray:
+    """
+    手动路径区域的补充信号支持。
+
+    原子碎片图只覆盖图结构附近区域，真实绿色尾部的局部像素可能没有碎片编号。
+    本掩模仅用于填补“碎片标签为0”的路径窄带像素，不会把旁边已有其他
+    碎片编号的整条尾部自动吸入。
+    """
+    if green_image is None:
+        green = merge_rgb[..., 1]
+    else:
+        green = np.asarray(green_image)
+        if green.ndim == 3:
+            green = green[..., 1 if green.shape[2] > 1 else 0]
+
+    green_norm = robust_normalize(green, low_p=0.2, high_p=99.8)
+    probability_norm = np.clip(
+        np.asarray(probability, dtype=np.float32),
+        0.0,
+        1.0,
+    )
+
+    # 阈值保持高召回，但最终仍受中心线路径窄带限制。
+    probability_support = probability_norm >= 0.025
+    green_support = green_norm >= 0.085
+    support = probability_support | green_support
+
+    # 去掉完全孤立的单像素噪声；不做开运算，避免破坏细尾部。
+    neighbour_count = cv2.filter2D(
+        support.astype(np.uint8),
+        ddepth=cv2.CV_16U,
+        kernel=np.ones((3, 3), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+    )
+    return support & (neighbour_count >= 2)
+
 def to_uint8_rgb(image: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         gray = np.round(robust_normalize(image) * 255.0).astype(np.uint8)
@@ -459,7 +1123,7 @@ def to_uint8_rgb(image: np.ndarray) -> np.ndarray:
     raise ValueError(f"无法转换图像维度：{image.shape}")
 
 
-def load_json(path: Path) -> dict[str, Any]:
+def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -485,7 +1149,7 @@ def sample_probability(
     probability: np.ndarray,
     points_xy: np.ndarray,
     low_threshold: float = 0.08,
-) -> dict[str, float]:
+) -> Dict[str, float]:
     if len(points_xy) == 0:
         return {
             "mean_probability": 0.0,
@@ -627,13 +1291,13 @@ def local_route(
 
 def piecewise_manual_route(
     probability: np.ndarray,
-    guide_points_xy: list[tuple[float, float]],
+    guide_points_xy: List[Tuple[float, float]],
     margin_px: int,
 ) -> np.ndarray:
     if len(guide_points_xy) < 2:
         raise ValueError("手动路径至少需要起点和末端两个点。")
 
-    pieces: list[np.ndarray] = []
+    pieces: List[np.ndarray] = []
     for index in range(len(guide_points_xy) - 1):
         start = np.asarray(guide_points_xy[index], dtype=np.float32)
         end = np.asarray(guide_points_xy[index + 1], dtype=np.float32)
@@ -690,19 +1354,19 @@ class EditorRecord:
     entry_status: str
     initial_status: str
     current_status: str
-    candidates: list[dict[str, Any]]
-    selected_rank: int | None
+    candidates: List[Dict[str, Any]]
+    selected_rank: Optional[int]
     selected_points_xy: np.ndarray
-    selected_fragment_ids: list[int]
+    selected_fragment_ids: List[int]
     suggested_points_xy: np.ndarray
     selected_source: str
     accepted_by_user: bool
     deleted: bool
-    review_reasons: list[str]
+    review_reasons: List[str]
     original_global_status: str
     edit_note: str = ""
 
-    def selected_candidate(self) -> dict[str, Any] | None:
+    def selected_candidate(self) -> Optional[Dict[str, Any]]:
         if self.selected_rank is None:
             return None
         for candidate in self.candidates:
@@ -722,10 +1386,11 @@ class TailResultEditor:
         merge_rgb: np.ndarray,
         probability: np.ndarray,
         fragment_labels: np.ndarray,
-        green_image: np.ndarray | None,
-        entries_payload: dict[str, Any],
-        path_payload: dict[str, Any],
-        global_payload: dict[str, Any],
+        head_labels: np.ndarray,
+        green_image: Optional[np.ndarray],
+        entries_payload: Dict[str, Any],
+        path_payload: Dict[str, Any],
+        global_payload: Dict[str, Any],
         output_dir: Path,
         manual_margin_px: int,
         manual_fragment_radius_px: int,
@@ -735,10 +1400,29 @@ class TailResultEditor:
         self.probability = probability
         self.fragment_labels = fragment_labels
         self.fragment_boundary = fragment_boundary_mask(fragment_labels)
+        self.head_labels = np.asarray(head_labels)
+        if self.head_labels.ndim == 3:
+            self.head_labels = self.head_labels[..., 0]
+        if self.head_labels.ndim != 2:
+            raise ValueError(
+                f"HeadFinalLabels必须是二维标签图：{self.head_labels.shape}"
+            )
+        self.head_labels = np.rint(self.head_labels).astype(np.uint16, copy=False)
+        if self.head_labels.shape != self.fragment_labels.shape:
+            raise ValueError(
+                "HeadFinalLabels与尾部碎片图尺寸不一致："
+                f"{self.head_labels.shape} != {self.fragment_labels.shape}"
+            )
+        self.fragment_boundary = fragment_boundary_mask(fragment_labels)
         self.manual_evidence = build_manual_evidence(
             merge_rgb,
             probability,
             fragment_labels,
+            green_image,
+        )
+        self.manual_region_support = build_manual_region_support(
+            merge_rgb,
+            probability,
             green_image,
         )
         self.output_dir = output_dir
@@ -764,18 +1448,42 @@ class TailResultEditor:
         )
         self.head_tree = cKDTree(self.head_centers)
 
+        # 使用HeadFinalLabels的真实轮廓进行显示和点击，而不是人为圆圈。
+        head_boundary = np.zeros(self.head_labels.shape, dtype=bool)
+        labels_i32 = self.head_labels.astype(np.int32, copy=False)
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            shifted = np.roll(labels_i32, shift=(dy, dx), axis=(0, 1))
+            different = (labels_i32 > 0) & (shifted != labels_i32)
+            if dy == -1:
+                different[-1, :] = False
+            elif dy == 1:
+                different[0, :] = False
+            if dx == -1:
+                different[:, -1] = False
+            elif dx == 1:
+                different[:, 0] = False
+            head_boundary |= different
+        boundary_y, boundary_x = np.nonzero(head_boundary)
+        self.head_boundary_tree: Optional[cKDTree] = None
+        self.head_boundary_ids = np.zeros((0,), dtype=np.int32)
+        if len(boundary_x):
+            boundary_xy = np.column_stack([boundary_x, boundary_y]).astype(np.float32)
+            self.head_boundary_tree = cKDTree(boundary_xy)
+            self.head_boundary_ids = self.head_labels[boundary_y, boundary_x].astype(np.int32)
+
         # 整图编辑状态：不再按头部逐个翻页。
-        self.selected_index: int | None = None
+        self.selected_index: Optional[int] = None
         self.mode = "idle"  # idle / await_head / drawing
-        self.manual_target_index: int | None = None
-        self.manual_points: list[tuple[float, float]] = []
-        self.manual_segments: list[np.ndarray] = []
-        self.manual_preview: np.ndarray | None = None
-        self.manual_preview_fragment_ids: list[int] = []
-        self.manual_conflict_fragment_ids: list[int] = []
+        self.manual_target_index: Optional[int] = None
+        self.manual_points: List[Tuple[float, float]] = []
+        self.manual_segments: List[np.ndarray] = []
+        self.manual_preview: Optional[np.ndarray] = None
+        self.manual_preview_fragment_ids: List[int] = []
+        self.manual_preview_region_mask: Optional[np.ndarray] = None
+        self.manual_conflict_fragment_ids: List[int] = []
         self.message = ""
         self.show_fragments = False
-        self.edit_history: list[tuple[int, EditorRecord]] = []
+        self.edit_history: List[Tuple[int, EditorRecord]] = []
 
         self.result_owner_image = np.zeros(
             self.fragment_labels.shape,
@@ -785,7 +1493,7 @@ class TailResultEditor:
             int(self.fragment_labels.max()) + 1,
             dtype=np.uint16,
         )
-        self.path_tree: cKDTree | None = None
+        self.path_tree: Optional[cKDTree] = None
         self.path_tree_head_ids = np.zeros((0,), dtype=np.int32)
         self.result_cache_dirty = True
 
@@ -816,6 +1524,18 @@ class TailResultEditor:
                 interpolation=cv2.INTER_NEAREST,
             )
         ).astype(np.uint32)
+        self.display_head_labels = np.rint(
+            cv2.resize(
+                self.head_labels.astype(np.float32),
+                (self.display_width, self.display_height),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        ).astype(np.uint16)
+        self.display_manual_region_support = cv2.resize(
+            self.manual_region_support.astype(np.uint8),
+            (self.display_width, self.display_height),
+            interpolation=cv2.INTER_NEAREST,
+        ) > 0
         display_fragment_boundary = fragment_boundary_mask(self.display_fragment_labels)
         self.display_fragment_rgba = np.zeros(
             (self.display_height, self.display_width, 4),
@@ -824,6 +1544,22 @@ class TailResultEditor:
         self.display_fragment_rgba[display_fragment_boundary] = (
             0.0, 0.9, 1.0, 0.40
         )
+
+        # 所有头部的真实标签轮廓：橙色细线，黑色外沿增强对比。
+        display_head_binary = self.display_head_labels > 0
+        display_head_boundary = self._label_boundary(self.display_head_labels)
+        display_head_halo = cv2.dilate(
+            display_head_boundary.astype(np.uint8),
+            np.ones((3, 3), dtype=np.uint8),
+            iterations=1,
+        ) > 0
+        self.display_head_rgba = np.zeros(
+            (self.display_height, self.display_width, 4),
+            dtype=np.float32,
+        )
+        self.display_head_rgba[display_head_halo] = (0.0, 0.0, 0.0, 0.90)
+        self.display_head_rgba[display_head_boundary] = (1.0, 0.45, 0.0, 1.0)
+
         self.display_result_owner_image = np.zeros(
             (self.display_height, self.display_width),
             dtype=np.uint16,
@@ -833,23 +1569,24 @@ class TailResultEditor:
             dtype=np.float32,
         )
 
-        self.state_path = self.output_dir / "editor_state_v2_2.json"
+        self.state_path = self.output_dir / "editor_state_v2_3_draft_mvp.json"
         self._load_existing_state()
 
         self.figure: Any = None
         self.axis: Any = None
         self.status_text: Any = None
-        self.buttons: dict[str, Button] = {}
+        self.buttons: Dict[str, Button] = {}
+        self.artists: Dict[str, Any] = {}
 
         self._setup_figure()
         self.redraw()
 
     def _build_records(
         self,
-        entries_payload: dict[str, Any],
-        path_payload: dict[str, Any],
-        global_payload: dict[str, Any],
-    ) -> list[EditorRecord]:
+        entries_payload: Dict[str, Any],
+        path_payload: Dict[str, Any],
+        global_payload: Dict[str, Any],
+    ) -> List[EditorRecord]:
         path_by_head = {
             int(item["head_id"]): item
             for item in path_payload.get("results", [])
@@ -859,7 +1596,7 @@ class TailResultEditor:
             for item in global_payload.get("results", [])
         }
 
-        records: list[EditorRecord] = []
+        records: List[EditorRecord] = []
         for entry in entries_payload.get("results", []):
             head_id = int(entry["head_id"])
             path_result = path_by_head.get(head_id, {})
@@ -868,11 +1605,11 @@ class TailResultEditor:
             candidates = deepcopy(path_result.get("candidates", []))
             candidates.sort(key=lambda item: int(item.get("rank", 999)))
 
-            selected_rank: int | None = None
+            selected_rank: Optional[int] = None
             selected_points = np.zeros((0, 2), dtype=np.float32)
             suggested_points = np.zeros((0, 2), dtype=np.float32)
             global_status = ""
-            review_reasons: list[str] = []
+            review_reasons: List[str] = []
 
             if global_result is not None:
                 global_status = str(global_result.get("status", ""))
@@ -918,11 +1655,28 @@ class TailResultEditor:
                 selected_rank = None
                 selected_points = np.zeros((0, 2), dtype=np.float32)
 
-            selected_fragment_ids = fragment_ids_near_path(
-                self.fragment_labels,
-                selected_points,
-                radius_px=self.manual_fragment_radius_px,
-            )
+            # Draft-aware compatibility:
+            # the adapter may provide exact atomic fragment IDs for the initial
+            # TailDraft result.  Prefer those IDs so initialization cannot
+            # accidentally absorb neighbouring branches near the centreline.
+            selected_fragment_ids: List[int] = []
+            if selected_rank is not None:
+                for candidate in candidates:
+                    if int(candidate.get("rank", -1)) != int(selected_rank):
+                        continue
+                    selected_fragment_ids = [
+                        int(value)
+                        for value in candidate.get("selected_fragment_ids", [])
+                        if int(value) > 0
+                    ]
+                    break
+
+            if not selected_fragment_ids:
+                selected_fragment_ids = fragment_ids_near_path(
+                    self.fragment_labels,
+                    selected_points,
+                    radius_px=self.manual_fragment_radius_px,
+                )
 
             records.append(
                 EditorRecord(
@@ -955,6 +1709,7 @@ class TailResultEditor:
     def _load_existing_state(self) -> None:
         candidates = [
             self.state_path,
+            self.output_dir / "editor_state_v2_2.json",
             self.output_dir / "editor_state_v2_1.json",
         ]
         source_path = next((path for path in candidates if path.exists()), None)
@@ -1021,13 +1776,91 @@ class TailResultEditor:
         self.figure = plt.figure(figsize=(16, 10))
         try:
             self.figure.canvas.manager.set_window_title(
-                "精子尾部结果校准 V2.2"
+                "精子尾部结果校准 V2.12"
             )
         except Exception:
             pass
 
         self.axis = self.figure.add_axes([0.02, 0.16, 0.96, 0.80])
+        self.axis.set_xlim(0, self.image_width)
+        self.axis.set_ylim(self.image_height, 0)
         self.axis.set_axis_off()
+        self.axis.set_title(
+            "精子尾部结果校准  |  橙色＝头部真实轮廓  白色＝已保存尾部  黄色＝当前选择/预览",
+            fontsize=12,
+        )
+
+        empty_rgba = np.zeros(
+            (self.display_height, self.display_width, 4),
+            dtype=np.float32,
+        )
+        self.artists["base"] = self.axis.imshow(
+            self.display_merge_rgb,
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=1,
+        )
+        self.artists["fragments"] = self.axis.imshow(
+            self.display_fragment_rgba,
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=3,
+            visible=False,
+        )
+        self.artists["accepted"] = self.axis.imshow(
+            empty_rgba.copy(),
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=5,
+        )
+        self.artists["selected_tail"] = self.axis.imshow(
+            empty_rgba.copy(),
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=8,
+            visible=False,
+        )
+        self.artists["preview"] = self.axis.imshow(
+            empty_rgba.copy(),
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=10,
+            visible=False,
+        )
+        self.artists["conflict"] = self.axis.imshow(
+            empty_rgba.copy(),
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=12,
+            visible=False,
+        )
+        self.artists["heads"] = self.axis.imshow(
+            self.display_head_rgba,
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=15,
+        )
+        self.artists["selected_head"] = self.axis.imshow(
+            empty_rgba.copy(),
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=16,
+            visible=False,
+        )
+
+        path_halo, = self.axis.plot(
+            [], [], color="#000000", linewidth=5.4, zorder=13
+        )
+        path_line, = self.axis.plot(
+            [], [], color="#ffe600", linewidth=2.8, zorder=13.1
+        )
+        manual_points, = self.axis.plot(
+            [], [], "o", color="#ffe600", markeredgecolor="#000000",
+            markeredgewidth=0.8, markersize=5.8, zorder=14
+        )
+        self.artists["path_halo"] = path_halo
+        self.artists["path_line"] = path_line
+        self.artists["manual_points"] = manual_points
 
         button_specs = [
             ("primary", "新增 / 重画", self.primary_action),
@@ -1071,8 +1904,32 @@ class TailResultEditor:
             self.on_close,
         )
 
+    @staticmethod
+    def _display_boundary_rgba(
+        mask: np.ndarray,
+        *,
+        color: Tuple[float, float, float],
+        alpha: float = 1.0,
+        fill: Optional[Tuple[float, float, float, float]] = None,
+    ) -> np.ndarray:
+        boolean = np.asarray(mask, dtype=bool)
+        rgba = np.zeros(boolean.shape + (4,), dtype=np.float32)
+        if fill is not None:
+            rgba[boolean] = fill
+        if not np.any(boolean):
+            return rgba
+        boundary = TailResultEditor._mask_boundary(boolean)
+        halo = cv2.dilate(
+            boundary.astype(np.uint8),
+            np.ones((3, 3), dtype=np.uint8),
+            iterations=1,
+        ) > 0
+        rgba[halo] = (0.0, 0.0, 0.0, min(0.85, alpha))
+        rgba[boundary] = (*color, alpha)
+        return rgba
+
     @property
-    def selected_record(self) -> EditorRecord | None:
+    def selected_record(self) -> Optional[EditorRecord]:
         if self.selected_index is None:
             return None
         return self.records[self.selected_index]
@@ -1089,35 +1946,60 @@ class TailResultEditor:
             return np.zeros((0, 2), dtype=np.float32)
         return record.selected_points_xy
 
-    def _status_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
+    def _status_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
         for record in self.records:
             counts[record.current_status] = (
                 counts.get(record.current_status, 0) + 1
             )
         return counts
 
-    def _accepted_records(self) -> list[EditorRecord]:
+    def _accepted_records(self) -> List[EditorRecord]:
         return [record for record in self.records if self._has_result(record)]
 
     def _build_result_owner(self) -> None:
-        max_label = int(self.fragment_labels.max())
-        lut = np.zeros(max_label + 1, dtype=np.uint16)
-        for record in self._accepted_records():
-            for fragment_id in record.selected_fragment_ids:
-                if fragment_id <= 0 or fragment_id > max_label:
-                    continue
-                if lut[fragment_id] == 0:
-                    lut[fragment_id] = np.uint16(record.head_id)
-        self.result_owner_lut = lut
-        self.result_owner_image = lut[self.fragment_labels]
-        self.display_result_owner_image = cv2.resize(
-            self.result_owner_image,
-            (self.display_width, self.display_height),
-            interpolation=cv2.INTER_NEAREST,
-        ).astype(np.uint16)
+        """Build interaction cache at display resolution; full labels are deferred to save."""
+        accepted_records = self._accepted_records()
+        display_records = []
+        for record in accepted_records:
+            display_record = deepcopy(record)
+            display_record.selected_points_xy = (
+                np.asarray(record.selected_points_xy, dtype=np.float32)
+                * float(self.display_scale)
+            )
+            display_records.append(display_record)
 
-        # 已识别结果使用白色粗轮廓，避免与绿色荧光混淆。
+        if display_records:
+            display_radius = max(
+                1,
+                int(round(self.manual_fragment_radius_px * self.display_scale)),
+            )
+            display_region_labels, _ = build_path_aware_region_labels(
+                self.display_fragment_labels,
+                display_records,
+                manual_corridor_radius_px=display_radius,
+                manual_signal_support=self.display_manual_region_support,
+            )
+        else:
+            display_region_labels = np.zeros(
+                self.display_fragment_labels.shape,
+                dtype=np.uint16,
+            )
+
+        self.display_result_owner_image = display_region_labels.astype(
+            np.uint16,
+            copy=False,
+        )
+        # Full-resolution labels are generated only when saving/exporting.
+        self.result_owner_image = np.zeros(
+            self.fragment_labels.shape,
+            dtype=np.uint16,
+        )
+        self.result_owner_lut = np.zeros(
+            int(self.fragment_labels.max()) + 1,
+            dtype=np.uint16,
+        )
+
         boundary = self._mask_boundary(self.display_result_owner_image > 0)
         halo = cv2.dilate(
             boundary.astype(np.uint8),
@@ -1132,9 +2014,9 @@ class TailResultEditor:
         rgba[boundary] = (1.0, 1.0, 1.0, 1.0)
         self.display_accepted_rgba = rgba
 
-        path_points: list[np.ndarray] = []
-        path_head_ids: list[np.ndarray] = []
-        for record in self._accepted_records():
+        path_points: List[np.ndarray] = []
+        path_head_ids: List[np.ndarray] = []
+        for record in accepted_records:
             path = record.selected_points_xy
             if len(path) < 2:
                 continue
@@ -1172,10 +2054,28 @@ class TailResultEditor:
         )
         return binary > eroded
 
+    @staticmethod
+    def _label_boundary(labels: np.ndarray) -> np.ndarray:
+        array = np.asarray(labels)
+        boundary = np.zeros(array.shape, dtype=bool)
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            shifted = np.roll(array, shift=(dy, dx), axis=(0, 1))
+            different = (array > 0) & (shifted != array)
+            if dy == -1:
+                different[-1, :] = False
+            elif dy == 1:
+                different[0, :] = False
+            if dx == -1:
+                different[:, -1] = False
+            elif dx == 1:
+                different[:, 0] = False
+            boundary |= different
+        return boundary
+
     def _draw_rgba_boundary(
         self,
         mask: np.ndarray,
-        color: tuple[float, float, float],
+        color: Tuple[float, float, float],
         alpha: float,
         zorder: int,
     ) -> None:
@@ -1195,7 +2095,7 @@ class TailResultEditor:
     def _draw_display_boundary(
         self,
         mask: np.ndarray,
-        color: tuple[float, float, float],
+        color: Tuple[float, float, float],
         alpha: float,
         zorder: int,
     ) -> None:
@@ -1248,128 +2148,87 @@ class TailResultEditor:
         )
 
     def redraw(self) -> None:
+        """Update existing Matplotlib artists instead of rebuilding the whole axes."""
         self._ensure_result_cache()
-        self.axis.clear()
-        self.axis.imshow(
-            self.display_merge_rgb,
-            extent=self.display_extent,
-            interpolation="nearest",
-            zorder=1,
+
+        self.artists["fragments"].set_visible(bool(self.show_fragments))
+        self.artists["accepted"].set_data(self.display_accepted_rgba)
+
+        empty_rgba = np.zeros(
+            (self.display_height, self.display_width, 4),
+            dtype=np.float32,
         )
-        self.axis.set_xlim(0, self.image_width)
-        self.axis.set_ylim(self.image_height, 0)
-        self.axis.set_axis_off()
-
-        if self.show_fragments:
-            self.axis.imshow(
-                self.display_fragment_rgba,
-                extent=self.display_extent,
-                interpolation="nearest",
-                zorder=3,
-            )
-
-        # 静态已有结果只绘制一层缓存白色轮廓，不再逐条重画中心线。
-        self.axis.imshow(
-            self.display_accepted_rgba,
-            extent=self.display_extent,
-            interpolation="nearest",
-            zorder=5,
-        )
-
         selected = self.selected_record
+        selected_tail_rgba = empty_rgba
+        selected_path = None
         if selected is not None and self._has_result(selected) and self.mode == "idle":
             selected_mask = self.display_result_owner_image == selected.head_id
-            self._draw_display_boundary(
+            selected_tail_rgba = self._display_boundary_rgba(
                 selected_mask,
                 color=(1.0, 0.9, 0.0),
                 alpha=1.0,
-                zorder=8,
             )
-            self._plot_path(
-                selected.selected_points_xy,
-                color="#ffe600",
-                linewidth=2.3,
-                zorder=9,
-            )
+            selected_path = selected.selected_points_xy
+        self.artists["selected_tail"].set_data(selected_tail_rgba)
+        self.artists["selected_tail"].set_visible(bool(np.any(selected_tail_rgba[..., 3])))
 
-        if self.manual_preview_fragment_ids:
-            values = np.asarray(self.manual_preview_fragment_ids, dtype=np.uint32)
-            preview_mask = np.isin(self.display_fragment_labels, values)
-            preview_rgba = np.zeros(
-                (self.display_height, self.display_width, 4),
-                dtype=np.float32,
-            )
-            preview_rgba[preview_mask] = (1.0, 0.88, 0.0, 0.38)
-            self.axis.imshow(
-                preview_rgba,
-                extent=self.display_extent,
-                interpolation="nearest",
-                zorder=10,
-            )
-            self._draw_display_boundary(
-                preview_mask,
+        preview_rgba = empty_rgba
+        if (
+            self.manual_preview_region_mask is not None
+            and np.any(self.manual_preview_region_mask)
+        ):
+            preview_rgba = self._display_boundary_rgba(
+                self.manual_preview_region_mask,
                 color=(1.0, 0.9, 0.0),
                 alpha=1.0,
-                zorder=11,
+                fill=(1.0, 0.88, 0.0, 0.38),
             )
+        self.artists["preview"].set_data(preview_rgba)
+        self.artists["preview"].set_visible(bool(np.any(preview_rgba[..., 3])))
 
+        conflict_rgba = empty_rgba
         if self.manual_conflict_fragment_ids:
             values = np.asarray(self.manual_conflict_fragment_ids, dtype=np.uint32)
             conflict_mask = np.isin(self.display_fragment_labels, values)
-            conflict_rgba = np.zeros(
-                (self.display_height, self.display_width, 4),
-                dtype=np.float32,
-            )
+            conflict_rgba = np.zeros_like(empty_rgba)
             conflict_rgba[conflict_mask] = (1.0, 0.0, 0.0, 0.52)
-            self.axis.imshow(
-                conflict_rgba,
-                extent=self.display_extent,
-                interpolation="nearest",
-                zorder=12,
-            )
-
-        if self.manual_preview is not None:
-            self._plot_path(
-                self.manual_preview,
-                color="#ffe600",
-                linewidth=2.8,
-                zorder=13,
-            )
-
-        if self.manual_points:
-            manual_array = np.asarray(self.manual_points, dtype=np.float32)
-            self.axis.plot(
-                manual_array[:, 0],
-                manual_array[:, 1],
-                "o",
-                color="#ffe600",
-                markeredgecolor="#000000",
-                markeredgewidth=0.8,
-                markersize=5.8,
-                zorder=14,
-            )
+        self.artists["conflict"].set_data(conflict_rgba)
+        self.artists["conflict"].set_visible(bool(np.any(conflict_rgba[..., 3])))
 
         focus_index = (
             self.manual_target_index
             if self.manual_target_index is not None
             else self.selected_index
         )
+        selected_head_rgba = empty_rgba
         if focus_index is not None:
             record = self.records[focus_index]
-            self.axis.scatter(
-                [record.center_x],
-                [record.center_y],
-                s=115,
-                facecolors="none",
-                edgecolors="#ffe600",
-                linewidths=2.3,
-                zorder=16,
+            selected_head_mask = self.display_head_labels == int(record.head_id)
+            selected_head_rgba = self._display_boundary_rgba(
+                selected_head_mask,
+                color=(1.0, 0.9, 0.0),
+                alpha=1.0,
             )
+        self.artists["selected_head"].set_data(selected_head_rgba)
+        self.artists["selected_head"].set_visible(bool(np.any(selected_head_rgba[..., 3])))
 
-        self.axis.set_title(
-            "精子尾部结果校准  |  白色＝已有结果  黄色＝当前选择/新增预览",
-            fontsize=12,
-        )
+        path = self.manual_preview if self.manual_preview is not None else selected_path
+        if path is not None and len(path) >= 2:
+            self.artists["path_halo"].set_data(path[:, 0], path[:, 1])
+            self.artists["path_line"].set_data(path[:, 0], path[:, 1])
+            self.artists["path_halo"].set_visible(True)
+            self.artists["path_line"].set_visible(True)
+        else:
+            self.artists["path_halo"].set_visible(False)
+            self.artists["path_line"].set_visible(False)
+
+        if self.manual_points:
+            points = np.asarray(self.manual_points, dtype=np.float32)
+            self.artists["manual_points"].set_data(points[:, 0], points[:, 1])
+            self.artists["manual_points"].set_visible(True)
+        else:
+            self.artists["manual_points"].set_visible(False)
+
         self._update_button_labels()
         self._update_status_text()
         self.figure.canvas.draw_idle()
@@ -1408,7 +2267,7 @@ class TailResultEditor:
             else:
                 instruction = (
                     f"Head {target.head_id}：黄色路径会在每次点击后自动更新；"
-                    "路线不对就撤销最后一点，再点击更靠近真实尾部的中间点；"
+                    "软件只保留沿黄色路径的一条碎片链；路线不对就撤销最后一点，再点击更靠近真实尾部的中间点；"
                     "正确后点击确认。"
                 )
         elif selected is None:
@@ -1481,6 +2340,7 @@ class TailResultEditor:
         self.manual_segments = []
         self.manual_preview = None
         self.manual_preview_fragment_ids = []
+        self.manual_preview_region_mask = None
         self.manual_conflict_fragment_ids = []
 
     def _select_head_id(self, head_id: int) -> None:
@@ -1490,17 +2350,40 @@ class TailResultEditor:
                 self.message = ""
                 return
 
-    def _select_at_point(self, point: tuple[float, float]) -> str:
-        """返回 result / head / none；已有结果优先于头部。"""
+    def _select_at_point(self, point: Tuple[float, float]) -> str:
+        """返回 result / head / none；HeadFinalLabels实体和真实轮廓优先。"""
         x, y = point
         xi = int(round(x))
         yi = int(round(y))
         height, width = self.fragment_labels.shape
         self._ensure_result_cache()
 
+        point_array = np.asarray(point, dtype=np.float32)
+
+        # 点击HeadFinalLabels实体区域时，优先选择该真实Head ID。
+        if 0 <= xi < width and 0 <= yi < height:
+            clicked_head_id = int(self.head_labels[yi, xi])
+            if clicked_head_id > 0:
+                self._select_head_id(clicked_head_id)
+                return "head"
+
+        # 点击真实头部轮廓附近也优先选择对应Head。
+        if self.head_boundary_tree is not None and len(self.head_boundary_ids):
+            boundary_distance, boundary_index = self.head_boundary_tree.query(
+                point_array,
+                k=1,
+            )
+            if float(boundary_distance) <= 8.0:
+                self._select_head_id(
+                    int(self.head_boundary_ids[int(boundary_index)])
+                )
+                return "head"
+
+        head_distance, head_index = self.head_tree.query(point_array, k=1)
+
         if self.path_tree is not None and len(self.path_tree_head_ids):
             distance, path_index = self.path_tree.query(
-                np.asarray(point, dtype=np.float32),
+                point_array,
                 k=1,
             )
             if float(distance) <= 22.0:
@@ -1510,16 +2393,15 @@ class TailResultEditor:
                 return "result"
 
         if 0 <= xi < width and 0 <= yi < height:
-            owner = int(self.result_owner_image[yi, xi])
+            display_x = int(np.clip(round(x * self.display_scale), 0, self.display_width - 1))
+            display_y = int(np.clip(round(y * self.display_scale), 0, self.display_height - 1))
+            owner = int(self.display_result_owner_image[display_y, display_x])
             if owner > 0:
                 self._select_head_id(owner)
                 return "result"
 
-        distance, head_index = self.head_tree.query(
-            np.asarray(point, dtype=np.float32),
-            k=1,
-        )
-        if float(distance) <= 45.0:
+        # 头部外围仍保留较宽的容错点击范围。
+        if float(head_distance) <= 45.0:
             self.selected_index = int(head_index)
             self.message = ""
             return "head"
@@ -1536,6 +2418,7 @@ class TailResultEditor:
         self.manual_segments = []
         self.manual_preview = None
         self.manual_preview_fragment_ids = []
+        self.manual_preview_region_mask = None
         self.manual_conflict_fragment_ids = []
         self.show_fragments = True
         target = self.records[index]
@@ -1557,7 +2440,7 @@ class TailResultEditor:
             self.confirm_preview()
         self.redraw()
 
-    def _append_manual_point(self, point: tuple[float, float]) -> None:
+    def _append_manual_point(self, point: Tuple[float, float]) -> None:
         current = np.asarray(point, dtype=np.float32)
         if self.manual_points:
             previous = np.asarray(self.manual_points[-1], dtype=np.float32)
@@ -1568,6 +2451,7 @@ class TailResultEditor:
             self.manual_points.append(point)
             self.manual_preview = None
             self.manual_preview_fragment_ids = []
+            self.manual_preview_region_mask = None
             self.manual_conflict_fragment_ids = []
             self.message = "已设置尾部起点，请继续点击下一处尾部位置。"
             return
@@ -1594,6 +2478,7 @@ class TailResultEditor:
         if not self.manual_segments:
             self.manual_preview = None
             self.manual_preview_fragment_ids = []
+            self.manual_preview_region_mask = None
             self.manual_conflict_fragment_ids = []
             return
 
@@ -1601,43 +2486,107 @@ class TailResultEditor:
         if not nonempty:
             self.manual_preview = None
             self.manual_preview_fragment_ids = []
+            self.manual_preview_region_mask = None
             self.manual_conflict_fragment_ids = []
             return
 
         route = deduplicate_points(np.vstack(nonempty))
         route = smooth_polyline(route, sigma=0.8)
         target = self.records[self.manual_target_index]  # type: ignore[index]
-        candidate_ids = fragment_ids_near_path(
+
+        self._ensure_result_cache()
+        nearby_ids = fragment_ids_near_path(
             self.fragment_labels,
             route,
             radius_px=self.manual_fragment_radius_px,
         )
 
-        self._ensure_result_cache()
-        allowed: list[int] = []
-        conflicts: list[int] = []
-        for fragment_id in candidate_ids:
-            owner = (
-                int(self.result_owner_lut[fragment_id])
-                if 0 <= fragment_id < len(self.result_owner_lut)
-                else 0
-            )
-            if owner not in {0, target.head_id}:
-                conflicts.append(fragment_id)
+        # 已占用碎片不能一律排除：真实尾部可以在二维图像上短距离交叉。
+        # 只有与既有中心线长距离、近似同方向重合时才阻断；
+        # 大夹角且接近范围很短时，允许两条中心线共享该原子碎片。
+        owner_records_by_fragment: Dict[int, List[EditorRecord]] = {}
+        for existing in self._accepted_records():
+            if int(existing.head_id) == int(target.head_id):
+                continue
+            for value in set(existing.selected_fragment_ids):
+                fragment_id = int(value)
+                if fragment_id > 0:
+                    owner_records_by_fragment.setdefault(fragment_id, []).append(existing)
+
+        blocked_fragment_ids: Set[int] = set()
+        shared_crossing_fragment_ids: List[int] = []
+        crossing_details: List[Dict[str, Any]] = []
+        proximity = max(3.0, float(self.manual_fragment_radius_px) + 1.0)
+        maximum_crossing_span = max(18.0, 4.4 * float(self.manual_fragment_radius_px))
+        for fragment_id in nearby_ids:
+            owners = owner_records_by_fragment.get(int(fragment_id), [])
+            if not owners:
+                continue
+            relations = [
+                classify_path_interaction(
+                    route,
+                    existing.selected_points_xy,
+                    proximity_px=proximity,
+                    minimum_crossing_angle_deg=28.0,
+                    maximum_crossing_span_px=maximum_crossing_span,
+                )
+                for existing in owners
+                if len(existing.selected_points_xy) >= 2
+            ]
+            if relations and all(
+                bool(item.get("is_transverse_crossing", False))
+                for item in relations
+            ):
+                shared_crossing_fragment_ids.append(int(fragment_id))
+                crossing_details.extend(relations)
             else:
-                allowed.append(fragment_id)
+                blocked_fragment_ids.add(int(fragment_id))
+
+        selected_chain_ids, chain_stats = select_single_smooth_fragment_chain(
+            self.fragment_labels,
+            route,
+            radius_px=self.manual_fragment_radius_px,
+            blocked_fragment_ids=blocked_fragment_ids,
+        )
+
+        conflicts = sorted(blocked_fragment_ids)
 
         self.manual_preview = route
-        self.manual_preview_fragment_ids = allowed
+        self.manual_preview_fragment_ids = selected_chain_ids
+        display_route = route.astype(np.float32, copy=True)
+        display_route[:, 0] *= float(self.display_scale)
+        display_route[:, 1] *= float(self.display_scale)
+        display_radius = max(
+            1,
+            int(round(self.manual_fragment_radius_px * self.display_scale)),
+        )
+        self.manual_preview_region_mask = path_constrained_manual_region_mask(
+            self.display_fragment_labels,
+            selected_chain_ids,
+            display_route,
+            radius_px=display_radius,
+            manual_signal_support=self.display_manual_region_support,
+        )
         self.manual_conflict_fragment_ids = conflicts
         self.message = (
-            f"路径已自动更新：{len(self.manual_points)}个点击点，"
-            f"选中{len(allowed)}个碎片。"
+            f"路径已自动更新：{len(self.manual_points)}个点击点；"
+            f"附近{int(chain_stats['nearby_fragment_count'])}个碎片中，"
+            f"只保留单条平滑链的{len(selected_chain_ids)}个碎片。"
         )
+        removed_count = int(chain_stats["removed_short_run_count"])
+        if removed_count:
+            self.message += f" 已剔除{removed_count}段短暂旁支跳转。"
+        if shared_crossing_fragment_ids:
+            self.message += (
+                f" 允许{len(shared_crossing_fragment_ids)}个短距离交叉碎片共享，"
+                "保存时按两条中心线分配交叉区域。"
+            )
         if conflicts:
-            self.message += f" {len(conflicts)}个冲突碎片已排除。"
-        if not allowed:
-            self.message += " 当前未选中碎片，请撤销后增加更靠近尾部的引导点。"
+            self.message += (
+                f" {len(conflicts)}个与其他尾部长距离同向重合的碎片已排除。"
+            )
+        if not selected_chain_ids:
+            self.message += " 当前未形成可用单链，请撤销后增加更靠近真实尾部的引导点。"
 
     def finish_manual(self) -> None:
         if self.mode != "drawing":
@@ -1721,6 +2670,7 @@ class TailResultEditor:
                 self.manual_segments = []
                 self.manual_preview = None
                 self.manual_preview_fragment_ids = []
+                self.manual_preview_region_mask = None
                 self.manual_conflict_fragment_ids = []
                 self.message = "已撤销起点，请重新点击尾部起点。"
             else:
@@ -1819,22 +2769,11 @@ class TailResultEditor:
     def _output_record(
         self,
         record: EditorRecord,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         path = self._selected_path(record)
         metrics = sample_probability(self.probability, path)
+        # Exact full-resolution count is injected by save_all from final labels.
         region_pixel_count = 0
-        if record.selected_fragment_ids:
-            region_pixel_count = int(
-                np.count_nonzero(
-                    np.isin(
-                        self.fragment_labels,
-                        np.asarray(
-                            record.selected_fragment_ids,
-                            dtype=np.uint32,
-                        ),
-                    )
-                )
-            )
         return {
             "head_id": record.head_id,
             "center_x": record.center_x,
@@ -1857,10 +2796,12 @@ class TailResultEditor:
             "edit_note": record.edit_note,
         }
 
-    def _render_export_overlay(self) -> np.ndarray:
+    def _render_export_overlay(
+        self,
+        region_labels: np.ndarray,
+    ) -> np.ndarray:
         overlay = self.merge_rgb.copy()
-        self._ensure_result_cache()
-        mask = self.result_owner_image > 0
+        mask = np.asarray(region_labels) > 0
         boundary = self._mask_boundary(mask)
         overlay[boundary] = np.asarray([255, 255, 255], dtype=np.uint8)
 
@@ -1889,7 +2830,27 @@ class TailResultEditor:
 
     def save_all(self, _event: Any = None) -> None:
         self._autosave_state()
-        rows = [self._output_record(record) for record in self.records]
+
+        # 先生成最终区域标签，再按该TIFF的实际像素数写JSON/CSV。
+        # V2.7以后人工路径会补充“碎片标签为0但存在真实绿色信号”的
+        # 窄带像素，旧写法先统计record mask、后生成最终标签，会导致
+        # region_pixel_count与edited_tail_regions_head_id_uint16.tif不一致。
+        region_labels, conflict_rows = build_path_aware_region_labels(
+            self.fragment_labels,
+            self._accepted_records(),
+            manual_corridor_radius_px=self.manual_fragment_radius_px,
+            manual_signal_support=self.manual_region_support,
+        )
+
+        rows = []
+        for record in self.records:
+            row = self._output_record(record)
+            row["region_pixel_count"] = (
+                int(np.count_nonzero(region_labels == int(record.head_id)))
+                if self._has_result(record)
+                else 0
+            )
+            rows.append(row)
 
         payload = {
             "version": VERSION,
@@ -1932,7 +2893,7 @@ class TailResultEditor:
             writer.writeheader()
             writer.writerows(rows)
 
-        overlay = self._render_export_overlay()
+        overlay = self._render_export_overlay(region_labels)
         Image.fromarray(overlay).save(
             self.output_dir / "edited_tail_overlay.png"
         )
@@ -1968,11 +2929,6 @@ class TailResultEditor:
             self.output_dir / "edited_tail_head_id_labels_uint16.tif"
         )
 
-        region_labels, conflict_rows = build_path_aware_region_labels(
-            self.fragment_labels,
-            self._accepted_records(),
-        )
-
         Image.fromarray(region_labels).save(
             self.output_dir / "edited_tail_regions_head_id_uint16.tif"
         )
@@ -2004,7 +2960,7 @@ class TailResultEditor:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="精子尾部整图所见即所得校准工具V2.2"
+        description="精子尾部整图所见即所得校准工具V2.6"
     )
     parser.add_argument(
         "--merge",
@@ -2019,7 +2975,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fragments",
         required=True,
-        help="RunOmnipose高召回对象转图像uint16碎片标签图",
+        help="尾部原子碎片标签图；支持TailDraft适配器生成的图边级碎片",
+    )
+    parser.add_argument(
+        "--head-labels",
+        required=True,
+        help="头部人工校准后的HeadFinalLabels.tif，用于真实轮廓显示和点击",
     )
     parser.add_argument(
         "--green",
@@ -2078,6 +3039,7 @@ def main() -> int:
     merge_path = resolve_required(args.merge)
     probability_path = resolve_required(args.probability)
     fragments_path = resolve_required(args.fragments)
+    head_labels_path = resolve_required(args.head_labels)
     green_path = resolve_required(args.green)
     entries_path = resolve_required(args.entries)
     paths_path = resolve_required(args.paths)
@@ -2091,6 +3053,10 @@ def main() -> int:
     fragment_labels = normalize_fragment_labels(
         read_image(fragments_path)
     )
+    head_labels = read_image(head_labels_path)
+    if head_labels.ndim == 3:
+        head_labels = head_labels[..., 0]
+    head_labels = np.rint(head_labels).astype(np.uint16, copy=False)
     green_image = read_image(green_path)
     entries_payload = load_json(entries_path)
     path_payload = load_json(paths_path)
@@ -2105,6 +3071,11 @@ def main() -> int:
         raise ValueError(
             "尾部碎片图与Merge图尺寸不一致："
             f"{fragment_labels.shape} != {merge_rgb.shape[:2]}"
+        )
+    if head_labels.shape != merge_rgb.shape[:2]:
+        raise ValueError(
+            "HeadFinalLabels与Merge图尺寸不一致："
+            f"{head_labels.shape} != {merge_rgb.shape[:2]}"
         )
     if (
         green_image is not None
@@ -2128,7 +3099,10 @@ def main() -> int:
     if entry_count == 0:
         raise ValueError("入口结果中没有头部。")
     if global_count == 0:
-        raise ValueError("全局分配结果为空。")
+        print(
+            "提示：当前没有初始TailDraft结果，"
+            "仍可在编辑器中为有尾部荧光的头部手动新增。"
+        )
 
     if args.validate_only:
         print("INPUT_VALIDATE_OK")
@@ -2138,6 +3112,7 @@ def main() -> int:
         merge_rgb=merge_rgb,
         probability=probability,
         fragment_labels=fragment_labels,
+        head_labels=head_labels,
         green_image=green_image,
         entries_payload=entries_payload,
         path_payload=path_payload,

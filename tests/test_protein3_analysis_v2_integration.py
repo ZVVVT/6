@@ -20,6 +20,13 @@ from core.analysis_v2.task_state import TaskStateStore
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANALYSIS_WINDOW = PROJECT_ROOT / "app" / "analysis_window.py"
 TAIL_WORKER = PROJECT_ROOT / "app" / "analysis_v2" / "tail_analysis_workers.py"
+TAIL_ONECLICK = PROJECT_ROOT / "tools" / "analysis_v2" / "tail_joint_oneclick_v2.py"
+TAIL_EDITOR_LAUNCHER = (
+    PROJECT_ROOT
+    / "tools"
+    / "analysis_v2"
+    / "tail_joint_draft_editor_launcher_mvp.py"
+)
 
 
 class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
@@ -43,22 +50,68 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
         callback = source[
             source.index("def _on_head_calibration_completed"):
-            source.index("def _on_head_calibration_closed")
+            source.index("def _start_tail_path_worker")
+        ]
+        deferred_start = source[
+            source.index("def _maybe_start_tail_path_after_field_prepare"):
+            source.index("def _on_head_calibration_completed")
+        ]
+        worker_start = source[
+            source.index("def _start_tail_path_worker"):
+            source.index("def _on_tail_path_finished")
         ]
         self.assertIn('context.get("workflow") == "protein3_tail"', callback)
-        self.assertIn("_start_tail_path_worker(project_root, task_root)", callback)
+        self.assertIn("self._tail_head_calibration_finished = True", callback)
+        self.assertIn("self._tail_path_start_pending = True", callback)
+        self.assertIn("self._start_next_tail_field_prepare()", callback)
+        self.assertIn("self._maybe_start_tail_path_after_field_prepare()", callback)
         self.assertLess(
             callback.index('context.get("workflow") == "protein3_tail"'),
             callback.index("HeadMeasurementWorker("),
         )
+        self.assertIn("first_ready", deferred_start)
+        self.assertIn("no_prepare_work_left", deferred_start)
+        self.assertIn("self._start_tail_path_worker(project_root, task_root)", deferred_start)
+        self.assertIn("worker = TailPathWorker(", worker_start)
+        self.assertIn("project_root=project_root", worker_start)
+        self.assertIn("task_root=task_root", worker_start)
+        self.assertIn("worker.start()", worker_start)
 
-    def test_tail_worker_is_mvimageid_python_subprocess(self):
+    def test_tail_worker_runs_joint_oneclick_then_promote_measure(self):
         source = TAIL_WORKER.read_text(encoding="utf-8")
-        self.assertIn("subprocess.run(", source)
+        run_source = source[source.index("    def run(self) -> None:"):]
+        oneclick = run_source.index('"tail_joint_oneclick_v2.py"')
+        promotion = run_source.index('"tail_joint_promote_measure_v2.py"')
+        first_command = run_source.index("self._run_streaming_command(", promotion)
+        second_command = run_source.index("self._run_streaming_command(", first_command + 1)
+
+        self.assertLess(oneclick, promotion)
+        self.assertLess(promotion, first_command)
+        self.assertLess(first_command, second_command)
         self.assertIn("str(self.python_executable)", source)
-        self.assertIn("tail_path_worker.py", source)
+        promotion_command = run_source[second_command:]
+        self.assertIn("str(promotion_script)", promotion_command)
+        self.assertIn('"--promote-only"', promotion_command)
         self.assertNotIn("import cv2", source)
         self.assertNotIn("TailPathService", source)
+
+    def test_legacy_tail_stages_are_not_in_formal_call_chain(self):
+        formal_sources = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ANALYSIS_WINDOW,
+                TAIL_WORKER,
+                TAIL_ONECLICK,
+                TAIL_EDITOR_LAUNCHER,
+            )
+        )
+        for retired_script in (
+            "tail_path_worker.py",
+            "tail_graph_stage2_1_head_entry_match_v1_1_baseline.py",
+            "tail_graph_stage2_2_beam_path_v1_2_fullfix.py",
+            "tail_graph_stage2_3_global_unique_v1_1.py",
+        ):
+            self.assertNotIn(retired_script, formal_sources)
 
     def test_formal_code_has_no_test_path_dependencies(self):
         paths = [
@@ -66,7 +119,8 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
             TAIL_WORKER,
             PROJECT_ROOT / "app" / "analysis_v2" / "tail_calibration_window.py",
             PROJECT_ROOT / "core" / "analysis_v2" / "tail_calibration_service.py",
-            PROJECT_ROOT / "tools" / "analysis_v2" / "tail_path_worker.py",
+            TAIL_ONECLICK,
+            TAIL_EDITOR_LAUNCHER,
         ]
         text = "\n".join(path.read_text(encoding="utf-8") for path in paths).lower()
         self.assertNotIn("experiments", text)

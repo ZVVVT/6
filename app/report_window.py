@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from core.config_manager import ConfigManager
 from core.report_generator import ReportGenerator
+from core.result_adjustment_service import ResultAdjustmentService
 
 try:
     from app.theme import DEFAULT_THEME_KEY, get_theme
@@ -62,6 +63,7 @@ class ReportWindow(QWidget):
         self.database = database
         self.config = ConfigManager()
         self.config.ensure_default_config()
+        self.result_adjustment_service = ResultAdjustmentService(self.database, self.config)
         self.current_case = None
         self.current_report_path = ""
         self.theme = get_theme(DEFAULT_THEME_KEY)
@@ -678,14 +680,27 @@ class ReportWindow(QWidget):
             is_done = bool(row.get("has_result"))
             if is_done:
                 done_count += 1
+                protein_key = self.resolve_protein_key(row.get("protein_name", ""))
+                actual_part = str(row.get("protein_part", "") or "").strip().lower()
+                adjusted = self.result_adjustment_service.adjust_result(
+                    case_id=case_id,
+                    protein_key=protein_key,
+                    protein_part=actual_part,
+                    raw_mean_intensity=row.get("mean_intensity"),
+                    raw_expression_rate=row.get("expression_rate"),
+                )
                 values = [
                     row.get("protein_name", ""),
-                    row.get("protein_part", ""),
+                    actual_part,
                     row.get("total_fields", 0),
                     row.get("total_sperm_count", 0),
                     row.get("positive_count", 0),
-                    self._fmt_rate(row.get("expression_rate", 0)),
-                    self._fmt_int(row.get("mean_intensity", 0)),
+                    self.result_adjustment_service.format_expression_rate(
+                        adjusted.get("adjusted_expression_rate")
+                    ),
+                    self.result_adjustment_service.format_intensity(
+                        adjusted.get("adjusted_mean_intensity")
+                    ),
                     "已完成",
                     row.get("created_at", ""),
                 ]
@@ -806,9 +821,15 @@ class ReportWindow(QWidget):
             if not protein_name:
                 continue
             protein_key = self.resolve_protein_key(protein_name)
-            if protein_key:
+            existing = analysis_map.get(protein_key) if protein_key else None
+            try:
+                is_newer = existing is None or int(row.get("id", 0) or 0) > int(existing.get("id", 0) or 0)
+            except Exception:
+                is_newer = existing is None
+            if protein_key and is_newer:
                 analysis_map[protein_key] = row
-            analysis_map[protein_name] = row
+            if protein_name and (protein_name not in analysis_map or is_newer):
+                analysis_map[protein_name] = row
 
         display_rows = []
         try:

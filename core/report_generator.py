@@ -21,6 +21,7 @@ from datetime import datetime
 from PIL import Image as PILImage
 
 from core.config_manager import ConfigManager
+from core.result_adjustment_service import ResultAdjustmentService
 
 
 # ---------------------------------------------------------
@@ -79,6 +80,8 @@ class ReportGenerator:
 
         self.config = ConfigManager()
         self.config.ensure_default_config()
+        self.result_adjustment_service = ResultAdjustmentService(self.database, self.config)
+        self._current_case_id = None
 
         if report_dir:
             self.report_dir = Path(report_dir)
@@ -145,6 +148,7 @@ class ReportGenerator:
 
         analysis_rows = self.database.get_protein_analysis_by_case(case_id)
         analysis_rows = self._sort_analysis_rows_by_config(analysis_rows)
+        self._current_case_id = case_id
 
         case_no = str(case_data.get("case_no", f"case_{case_id}"))
         safe_case_no = self._safe_filename(case_no)
@@ -320,14 +324,14 @@ class ReportGenerator:
                 intensity_text = self._fmt_with_arrow(
                     slot.get("intensity"),
                     slot.get("intensity_min"),
-                    nd=0,
+                    nd=self.config.get_result_display_decimals(),
                     unit="",
                 )
 
                 rate_text = self._fmt_with_arrow(
                     slot.get("rate"),
                     slot.get("rate_min"),
-                    nd=2,
+                    nd=self.config.get_result_display_decimals(),
                     unit="%",
                 )
 
@@ -520,8 +524,16 @@ class ReportGenerator:
             intensity_min = self._get_protein_intensity_min(key)
             rate_min = self._get_protein_rate_min(key)
 
-            intensity = self._to_float(row.get("mean_intensity", 0))
-            rate = self._to_float(row.get("expression_rate", 0))
+            actual_part = str(row.get("protein_part", item.get("part", "")) or "").strip().lower()
+            adjusted = self.result_adjustment_service.adjust_result(
+                case_id=self._current_case_id,
+                protein_key=key,
+                protein_part=actual_part,
+                raw_mean_intensity=row.get("mean_intensity"),
+                raw_expression_rate=row.get("expression_rate"),
+            )
+            intensity = self._to_float(adjusted.get("adjusted_mean_intensity"))
+            rate = self._to_float(adjusted.get("adjusted_expression_rate"))
 
             slots.append({
                 "key": key,
@@ -589,10 +601,16 @@ class ReportGenerator:
 
             protein_key = self._normalize_protein_key(protein_name)
 
-            if protein_key:
-                analysis_map[protein_key] = row
+            existing = analysis_map.get(protein_key) if protein_key else None
+            try:
+                is_newer = existing is None or int(row.get("id", 0) or 0) > int(existing.get("id", 0) or 0)
+            except Exception:
+                is_newer = existing is None
 
-            analysis_map[protein_name] = row
+            if protein_key and is_newer:
+                analysis_map[protein_key] = row
+            if protein_name and (protein_name not in analysis_map or is_newer):
+                analysis_map[protein_name] = row
 
         return analysis_map
 

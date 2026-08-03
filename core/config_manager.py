@@ -1,4 +1,5 @@
 import configparser
+import math
 import sys
 from pathlib import Path
 
@@ -48,9 +49,72 @@ class ConfigManager:
     def get_float(self, section: str, key: str, default: float = 0.0) -> float:
         value = self.get(section, key, "")
         try:
-            return float(value)
+            number = float(value)
         except Exception:
             return default
+        return number if math.isfinite(number) else default
+
+    def get_bool(self, section: str, key: str, default: bool = False) -> bool:
+        value = self.get(section, key, "").strip().lower()
+        if value in {"1", "true", "yes", "on", "是", "启用"}:
+            return True
+        if value in {"0", "false", "no", "off", "否", "禁用"}:
+            return False
+        return bool(default)
+
+    def get_int(self, section: str, key: str, default: int = 0) -> int:
+        value = self.get(section, key, "")
+        try:
+            return int(float(value))
+        except Exception:
+            return int(default)
+
+    # ------------------------------------------------------------------
+    # 最终结果校正
+    # ------------------------------------------------------------------
+    def is_result_adjustment_enabled(self) -> bool:
+        return self.get_bool("ResultAdjustment", "enabled", True)
+
+    def is_use_case_tail_rate_for_head_intensity(self) -> bool:
+        return self.get_bool(
+            "ResultAdjustment",
+            "use_case_tail_rate_for_head_intensity",
+            True,
+        )
+
+    def get_default_tail_rate_ratio(self) -> float:
+        value = self.get_float(
+            "ResultAdjustment",
+            "default_tail_rate_ratio",
+            1.0,
+        )
+        if not math.isfinite(value) or value < 0.0 or value > 1.0:
+            return 1.0
+        return value
+
+    def get_fluorescence_result_factor(self) -> float:
+        value = self.get_float(
+            "ResultAdjustment",
+            "fluorescence_result_factor",
+            1.0,
+        )
+        if not math.isfinite(value) or value <= 0.0:
+            return 1.0
+        return value
+
+    def get_expression_rate_result_factor(self) -> float:
+        value = self.get_float(
+            "ResultAdjustment",
+            "expression_rate_result_factor",
+            1.0,
+        )
+        if not math.isfinite(value) or value <= 0.0:
+            return 1.0
+        return value
+
+    def get_result_display_decimals(self) -> int:
+        value = self.get_int("ResultAdjustment", "display_decimals", 1)
+        return max(0, min(6, value))
 
     # ------------------------------------------------------------------
     # 软件品牌信息
@@ -390,6 +454,14 @@ class ConfigManager:
                 "protein3": "82.88",
                 "protein4": "82.88",
                 "protein5": "82.88",
+            },
+            "ResultAdjustment": {
+                "enabled": "true",
+                "use_case_tail_rate_for_head_intensity": "true",
+                "default_tail_rate_ratio": "1.0",
+                "fluorescence_result_factor": "1.0",
+                "expression_rate_result_factor": "1.0",
+                "display_decimals": "1",
             },
             "Report": {
                 "logo_path": r"assets\logo.png",

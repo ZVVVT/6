@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import cv2
 import numpy as np
@@ -32,7 +33,14 @@ class TailPathService:
             python_executable or sys.executable
         ).resolve()
 
-    def _run(self, script_name: str, arguments: List[str], cwd: Path) -> None:
+    def _run(
+        self,
+        script_name: str,
+        arguments: List[str],
+        cwd: Path,
+        field_id: str,
+        stage_name: str,
+    ) -> float:
         script_path = self.source_dir / script_name
         if not script_path.is_file():
             raise FileNotFoundError("尾部历史算法不存在：{}".format(script_path))
@@ -44,6 +52,16 @@ class TailPathService:
         environment["XDG_CACHE_HOME"] = str(cache_dir)
         environment["POOCH_HOME"] = str(cache_dir)
         environment["LOCALAPPDATA"] = str(cache_dir)
+
+        print(
+            "[TAIL_PATH_TIMING] START field={} stage={} script={}".format(
+                field_id,
+                stage_name,
+                script_name,
+            ),
+            flush=True,
+        )
+        started = time.perf_counter()
         completed = subprocess.run(
             [str(self.python_executable), str(script_path)]
             + [str(value) for value in arguments],
@@ -53,14 +71,31 @@ class TailPathService:
             stderr=subprocess.STDOUT,
             universal_newlines=True,
         )
+        elapsed = time.perf_counter() - started
+
+        print(
+            (
+                "[TAIL_PATH_TIMING] DONE field={} stage={} "
+                "elapsed_seconds={:.6f} return_code={}"
+            ).format(
+                field_id,
+                stage_name,
+                elapsed,
+                completed.returncode,
+            ),
+            flush=True,
+        )
+
         if completed.returncode:
             raise RuntimeError(
-                "{} 执行失败（{}）：\n{}".format(
+                "{} 执行失败（{}，耗时 {:.2f} 秒）：\n{}".format(
                     script_name,
                     completed.returncode,
+                    elapsed,
                     completed.stdout,
                 )
             )
+        return elapsed
 
     @staticmethod
     def _connected_fragment_labels(mask_path: Path, output_path: Path) -> None:
@@ -77,7 +112,8 @@ class TailPathService:
         green_path: Path,
         merge_path: Path,
         head_labels_path: Path,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
+        field_started = time.perf_counter()
         field_root = self.task_root / "segmentation" / "tail" / field_id
         field_root.mkdir(parents=True, exist_ok=True)
 
@@ -89,7 +125,9 @@ class TailPathService:
         stage2_3 = field_root / "stage2_3"
         editor_dir = self.task_root / "calibration" / "tail" / field_id
 
-        self._run(
+        stage_seconds: Dict[str, float] = {}
+
+        stage_seconds["stage1"] = self._run(
             "tail_graph_stage1_extract.py",
             [
                 "--green", green_path,
@@ -98,8 +136,10 @@ class TailPathService:
                 "--output-dir", stage1,
             ],
             field_root,
+            field_id,
+            "Stage 1",
         )
-        self._run(
+        stage_seconds["stage1_1"] = self._run(
             "tail_graph_stage1_1_topology_clean.py",
             [
                 "--stage1-dir", stage1,
@@ -108,8 +148,10 @@ class TailPathService:
                 "--output-dir", stage1_1,
             ],
             field_root,
+            field_id,
+            "Stage 1.1",
         )
-        self._run(
+        stage_seconds["stage1_2"] = self._run(
             "tail_graph_stage1_2_build_graph.py",
             [
                 "--stage1-1-dir", stage1_1,
@@ -118,8 +160,10 @@ class TailPathService:
                 "--output-dir", stage1_2,
             ],
             field_root,
+            field_id,
+            "Stage 1.2",
         )
-        self._run(
+        stage_seconds["stage2_1"] = self._run(
             "tail_graph_stage2_1_head_entry_match_v1_1_baseline.py",
             [
                 "--graph", stage1_2 / "tail_graph_stage1_2.json",
@@ -129,8 +173,10 @@ class TailPathService:
                 "--output-dir", stage2_1,
             ],
             field_root,
+            field_id,
+            "Stage 2.1",
         )
-        self._run(
+        stage_seconds["stage2_2"] = self._run(
             "tail_graph_stage2_2_beam_path_v1_2_fullfix.py",
             [
                 "--graph", stage1_2 / "tail_graph_stage1_2.json",
@@ -140,8 +186,10 @@ class TailPathService:
                 "--output-dir", stage2_2,
             ],
             field_root,
+            field_id,
+            "Stage 2.2",
         )
-        self._run(
+        stage_seconds["stage2_3"] = self._run(
             "tail_graph_stage2_3_global_unique_v1_1.py",
             [
                 "--paths", stage2_2 / "path_results.json",
@@ -150,14 +198,33 @@ class TailPathService:
                 "--output-dir", stage2_3,
             ],
             field_root,
+            field_id,
+            "Stage 2.3",
         )
 
         fragments_path = field_root / "{}_TailFragmentsLabels.tif".format(field_id)
+        fragments_started = time.perf_counter()
         self._connected_fragment_labels(
             stage1 / "balanced_mask_uint8.tif",
             fragments_path,
         )
+        fragment_labels_seconds = time.perf_counter() - fragments_started
+
         editor_dir.mkdir(parents=True, exist_ok=True)
+        field_total_seconds = time.perf_counter() - field_started
+
+        print(
+            (
+                "[TAIL_PATH_TIMING] FIELD_DONE field={} total_seconds={:.6f} "
+                "fragment_labels_seconds={:.6f}"
+            ).format(
+                field_id,
+                field_total_seconds,
+                fragment_labels_seconds,
+            ),
+            flush=True,
+        )
+
         return {
             "field_id": field_id,
             "green": str(Path(green_path).resolve()),
@@ -175,9 +242,15 @@ class TailPathService:
             "editor_script": str(
                 (self.source_dir / "tail_result_editor_v2_2.py").resolve()
             ),
+            "timing": {
+                "stage_seconds": stage_seconds,
+                "fragment_labels_seconds": fragment_labels_seconds,
+                "total_seconds": field_total_seconds,
+            },
         }
 
-    def run_all_fields(self) -> List[Dict[str, str]]:
+    def run_all_fields(self) -> List[Dict[str, Any]]:
+        batch_started = time.perf_counter()
         worker_input_path = self.task_root / "worker_input.json"
         if not worker_input_path.is_file():
             raise FileNotFoundError("未找到头部 worker_input.json。")
@@ -202,7 +275,14 @@ class TailPathService:
         if missing_labels:
             raise FileNotFoundError("未找到 HeadFinalLabels。")
 
-        results = []
+        print(
+            "[TAIL_PATH_TIMING] BATCH_START field_count={}".format(
+                len(final_labels)
+            ),
+            flush=True,
+        )
+
+        results: List[Dict[str, Any]] = []
         for head_path in final_labels:
             field_id = head_path.name[: -len("_HeadFinalLabels.tif")]
             green_matches = sorted(
@@ -223,4 +303,16 @@ class TailPathService:
                     head_path,
                 )
             )
+
+        batch_total_seconds = time.perf_counter() - batch_started
+        print(
+            (
+                "[TAIL_PATH_TIMING] BATCH_DONE field_count={} "
+                "total_seconds={:.6f}"
+            ).format(
+                len(results),
+                batch_total_seconds,
+            ),
+            flush=True,
+        )
         return results

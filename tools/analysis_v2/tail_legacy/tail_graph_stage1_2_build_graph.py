@@ -27,6 +27,7 @@ import math
 import time
 from collections import deque
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 try:
     import cv2
@@ -45,7 +46,7 @@ def read_image(path: Path) -> np.ndarray:
 
 
 def resolve_required(
-    supplied: str | None,
+    supplied: Optional[str],
     default_path: Path,
 ) -> Path:
     candidate = (
@@ -196,9 +197,9 @@ def effective_neighbours(
     mask: np.ndarray,
     y: int,
     x: int,
-) -> list[tuple[int, int]]:
+) -> List[Tuple[int, int]]:
     height, width = mask.shape
-    result: list[tuple[int, int]] = []
+    result: List[Tuple[int, int]] = []
 
     for dy, dx in (
         (-1, 0),
@@ -253,9 +254,9 @@ def effective_neighbours(
 def build_node_regions(
     skeleton: np.ndarray,
     junction_merge_radius: int,
-) -> tuple[
+) -> Tuple[
     np.ndarray,
-    list[dict],
+    List[dict],
     np.ndarray,
     np.ndarray,
 ]:
@@ -305,7 +306,7 @@ def build_node_regions(
         skeleton.shape,
         dtype=np.int32,
     )
-    nodes: list[dict] = []
+    nodes: List[dict] = []
 
     for region in regionprops(
         raw_labels
@@ -366,25 +367,25 @@ def build_node_regions(
 
 def bfs_distances(
     component_mask: np.ndarray,
-    start: tuple[int, int],
-) -> tuple[
-    dict[tuple[int, int], float],
-    dict[
-        tuple[int, int],
-        tuple[int, int] | None,
+    start: Tuple[int, int],
+) -> Tuple[
+    Dict[Tuple[int, int], float],
+    Dict[
+        Tuple[int, int],
+        Optional[Tuple[int, int]],
     ],
 ]:
     distances = {
         start: 0.0
     }
-    parents: dict[
-        tuple[int, int],
-        tuple[int, int] | None,
+    parents: Dict[
+        Tuple[int, int],
+        Optional[Tuple[int, int]],
     ] = {
         start: None
     }
     queue: deque[
-        tuple[int, int]
+        Tuple[int, int]
     ] = deque([start])
 
     while queue:
@@ -428,12 +429,12 @@ def bfs_distances(
 
 
 def reconstruct_path(
-    parents: dict[
-        tuple[int, int],
-        tuple[int, int] | None,
+    parents: Dict[
+        Tuple[int, int],
+        Optional[Tuple[int, int]],
     ],
-    end: tuple[int, int],
-) -> list[tuple[int, int]]:
+    end: Tuple[int, int],
+) -> List[Tuple[int, int]]:
     path = [end]
     current = end
 
@@ -447,12 +448,12 @@ def reconstruct_path(
 
 def farthest_point(
     component_mask: np.ndarray,
-    start: tuple[int, int],
-) -> tuple[
-    tuple[int, int],
-    dict[
-        tuple[int, int],
-        tuple[int, int] | None,
+    start: Tuple[int, int],
+) -> Tuple[
+    Tuple[int, int],
+    Dict[
+        Tuple[int, int],
+        Optional[Tuple[int, int]],
     ],
 ]:
     distances, parents = bfs_distances(
@@ -468,7 +469,7 @@ def farthest_point(
 
 def component_diameter_path(
     component_mask: np.ndarray,
-) -> list[tuple[int, int]]:
+) -> List[Tuple[int, int]]:
     ys, xs = np.nonzero(
         component_mask
     )
@@ -496,7 +497,7 @@ def component_diameter_path(
 def nearest_component_pixel(
     coords_yx: np.ndarray,
     target_xy: np.ndarray,
-) -> tuple[int, int]:
+) -> Tuple[int, int]:
     differences = np.column_stack(
         [
             coords_yx[:, 1],
@@ -524,9 +525,9 @@ def nearest_component_pixel(
 
 def path_between_pixels(
     component_mask: np.ndarray,
-    start: tuple[int, int],
-    end: tuple[int, int],
-) -> list[tuple[int, int]]:
+    start: Tuple[int, int],
+    end: Tuple[int, int],
+) -> List[Tuple[int, int]]:
     _, parents = bfs_distances(
         component_mask,
         start,
@@ -560,7 +561,7 @@ def path_length_xy(
 def tangent_at_start(
     points_xy: np.ndarray,
     distance_px: float = 12.0,
-) -> tuple[float, float]:
+) -> Tuple[float, float]:
     if len(points_xy) < 2:
         return 0.0, 0.0
 
@@ -598,7 +599,7 @@ def tangent_at_start(
 
 
 def add_virtual_node(
-    nodes: list[dict],
+    nodes: List[dict],
     y: int,
     x: int,
     kind: str,
@@ -621,11 +622,11 @@ def add_virtual_node(
 def build_edges(
     skeleton: np.ndarray,
     node_labels: np.ndarray,
-    nodes: list[dict],
+    nodes: List[dict],
     probability: np.ndarray,
     minimum_edge_pixels: int,
-) -> tuple[
-    list[dict],
+) -> Tuple[
+    List[dict],
     dict,
 ]:
     node_mask = node_labels > 0
@@ -638,7 +639,7 @@ def build_edges(
         edge_interior,
         connectivity=2,
     )
-    edges: list[dict] = []
+    edges: List[dict] = []
 
     simple_count = 0
     virtual_count = 0
@@ -654,6 +655,10 @@ def build_edges(
         for node in nodes
     }
 
+    image_height, image_width = (
+        edge_component_labels.shape
+    )
+
     for region in regionprops(
         edge_component_labels
     ):
@@ -666,10 +671,39 @@ def build_edges(
             discarded_short_count += 1
             continue
 
+        # 旧实现会为每个小组件重复创建一张全图大小的布尔掩模，
+        # 并在全图上执行膨胀、拓扑度计算和 BFS。这里保留完全相同
+        # 的算法，只把运算限制在该组件的局部边界框内。
+        min_y, min_x, max_y, max_x = (
+            int(value)
+            for value in region.bbox
+        )
+        padding = 1
+        y0 = max(0, min_y - padding)
+        x0 = max(0, min_x - padding)
+        y1 = min(
+            image_height,
+            max_y + padding,
+        )
+        x1 = min(
+            image_width,
+            max_x + padding,
+        )
+
+        local_component_labels = (
+            edge_component_labels[
+                y0:y1,
+                x0:x1,
+            ]
+        )
         component_mask = (
-            edge_component_labels
+            local_component_labels
             == int(region.label)
         )
+        local_node_labels = node_labels[
+            y0:y1,
+            x0:x1,
+        ]
 
         dilated = cv2.dilate(
             component_mask.astype(
@@ -685,9 +719,9 @@ def build_edges(
         contact_node_ids = sorted(
             int(value)
             for value in np.unique(
-                node_labels[
+                local_node_labels[
                     dilated
-                    & (node_labels > 0)
+                    & (local_node_labels > 0)
                 ]
             )
             if int(value) > 0
@@ -704,7 +738,7 @@ def build_edges(
         if branch_pixel_count > 0:
             branched_interior_count += 1
 
-        quality_flags: list[str] = []
+        quality_flags: List[str] = []
 
         if len(contact_node_ids) == 2:
             start_node_id = (
@@ -713,17 +747,25 @@ def build_edges(
             end_node_id = (
                 contact_node_ids[1]
             )
-            start_pixel = nearest_component_pixel(
+            start_pixel_global = nearest_component_pixel(
                 coords,
                 node_centres[
                     start_node_id
                 ],
             )
-            end_pixel = nearest_component_pixel(
+            end_pixel_global = nearest_component_pixel(
                 coords,
                 node_centres[
                     end_node_id
                 ],
+            )
+            start_pixel = (
+                start_pixel_global[0] - y0,
+                start_pixel_global[1] - x0,
+            )
+            end_pixel = (
+                end_pixel_global[0] - y0,
+                end_pixel_global[1] - x0,
             )
             ordered_yx = path_between_pixels(
                 component_mask,
@@ -736,11 +778,15 @@ def build_edges(
             start_node_id = (
                 contact_node_ids[0]
             )
-            start_pixel = nearest_component_pixel(
+            start_pixel_global = nearest_component_pixel(
                 coords,
                 node_centres[
                     start_node_id
                 ],
+            )
+            start_pixel = (
+                start_pixel_global[0] - y0,
+                start_pixel_global[1] - x0,
             )
             distances, parents = bfs_distances(
                 component_mask,
@@ -754,18 +800,22 @@ def build_edges(
                 parents,
                 end_pixel,
             )
+            end_pixel_global = (
+                end_pixel[0] + y0,
+                end_pixel[1] + x0,
+            )
             end_node_id = add_virtual_node(
                 nodes,
-                end_pixel[0],
-                end_pixel[1],
+                end_pixel_global[0],
+                end_pixel_global[1],
                 "virtual_terminal",
             )
             node_centres[
                 end_node_id
             ] = np.asarray(
                 [
-                    float(end_pixel[1]),
-                    float(end_pixel[0]),
+                    float(end_pixel_global[1]),
+                    float(end_pixel_global[0]),
                 ],
                 dtype=np.float32,
             )
@@ -784,25 +834,33 @@ def build_edges(
 
             start_pixel = ordered_yx[0]
             end_pixel = ordered_yx[-1]
+            start_pixel_global = (
+                start_pixel[0] + y0,
+                start_pixel[1] + x0,
+            )
+            end_pixel_global = (
+                end_pixel[0] + y0,
+                end_pixel[1] + x0,
+            )
 
             start_node_id = add_virtual_node(
                 nodes,
-                start_pixel[0],
-                start_pixel[1],
+                start_pixel_global[0],
+                start_pixel_global[1],
                 "virtual_terminal",
             )
             end_node_id = add_virtual_node(
                 nodes,
-                end_pixel[0],
-                end_pixel[1],
+                end_pixel_global[0],
+                end_pixel_global[1],
                 "virtual_terminal",
             )
             node_centres[
                 start_node_id
             ] = np.asarray(
                 [
-                    float(start_pixel[1]),
-                    float(start_pixel[0]),
+                    float(start_pixel_global[1]),
+                    float(start_pixel_global[0]),
                 ],
                 dtype=np.float32,
             )
@@ -810,8 +868,8 @@ def build_edges(
                 end_node_id
             ] = np.asarray(
                 [
-                    float(end_pixel[1]),
-                    float(end_pixel[0]),
+                    float(end_pixel_global[1]),
+                    float(end_pixel_global[0]),
                 ],
                 dtype=np.float32,
             )
@@ -862,17 +920,25 @@ def build_edges(
                 contact_pairs,
                 key=lambda item: item[0],
             )
-            start_pixel = nearest_component_pixel(
+            start_pixel_global = nearest_component_pixel(
                 coords,
                 node_centres[
                     start_node_id
                 ],
             )
-            end_pixel = nearest_component_pixel(
+            end_pixel_global = nearest_component_pixel(
                 coords,
                 node_centres[
                     end_node_id
                 ],
+            )
+            start_pixel = (
+                start_pixel_global[0] - y0,
+                start_pixel_global[1] - x0,
+            )
+            end_pixel = (
+                end_pixel_global[0] - y0,
+                end_pixel_global[1] - x0,
             )
             ordered_yx = path_between_pixels(
                 component_mask,
@@ -893,6 +959,8 @@ def build_edges(
             ordered_yx,
             dtype=np.int32,
         )
+        points_yx[:, 0] += y0
+        points_yx[:, 1] += x0
         points_xy = np.column_stack(
             [
                 points_yx[:, 1],
@@ -1049,12 +1117,11 @@ def build_edges(
 
     return edges, stats
 
-
 def make_structure_overlay(
     merge_rgb: np.ndarray,
     skeleton: np.ndarray,
-    nodes: list[dict],
-    edges: list[dict],
+    nodes: List[dict],
+    edges: List[dict],
     show_edge_ids: bool,
 ) -> np.ndarray:
     overlay = merge_rgb.copy()
@@ -1133,7 +1200,7 @@ def make_structure_overlay(
 
 def make_quality_overlay(
     merge_rgb: np.ndarray,
-    edges: list[dict],
+    edges: List[dict],
 ) -> np.ndarray:
     overlay = merge_rgb.copy()
 
@@ -1171,8 +1238,8 @@ def make_quality_overlay(
 
 def write_csv(
     path: Path,
-    rows: list[dict],
-    fieldnames: list[str],
+    rows: List[dict],
+    fieldnames: List[str],
 ) -> None:
     with path.open(
         "w",

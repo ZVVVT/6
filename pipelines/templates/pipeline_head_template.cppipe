@@ -177,13 +177,26 @@ OverlayOutlines(叠加轮廓线):[module_num:10|svn_version:'Unknown'|variable_r
     选择轮廓颜色:cyan
     选择要显示的对象:R_objects
 
-ExpandOrShrinkObjects(扩展或收缩对象):[module_num:11|svn_version:'Unknown'|variable_revision_number:2|show_window:False|notes:['对位-绿色荧光G_objects']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
-    选择输入对象:R_objects
-    命名输出对象:G_objects
-    选择要执行的操作:Expand objects by a specified number of pixels
-    扩张或收缩的像素数:1
-    是否填补对象内的孔洞，以便对象收缩为单个点？:No
-    用于扩张或收缩的测量值:None
+FilterObjects(过滤对象):[module_num:11|svn_version:'Unknown'|variable_revision_number:10|show_window:False|notes:['不扩张：保留R_objects原始轮廓并原样输出为G_objects']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
+    选择要过滤的对象:R_objects
+    为输出对象命名:G_objects
+    选择过滤模式:Measurements
+    选择过滤方法:Limits
+    选择包含被过滤对象的对象:None
+    选择规则或分类器文件的位置:Elsewhere...|
+    规则或分类器文件名:rules.txt
+    类别编号:1
+    Measurement count:1
+    Additional object count:0
+    将重叠的子对象分配给:Both parents
+    将被移除的对象保留为独立集合？:No
+    为被筛选移除的对象命名:RemovedObjects
+    选择用于筛选的测量值:Number_Object_Number
+    是否使用最小测量值进行筛选？:Yes
+    最小值:1
+    是否使用最大测量值进行筛选？:No
+    最大值:1.0
+    允许模糊特征匹配？:No
 
 OverlayOutlines(叠加轮廓线):[module_num:12|svn_version:'Unknown'|variable_revision_number:4|show_window:False|notes:['叠加轮廓-绿色荧光']|batch_state:array([], dtype=uint8)|enabled:True|wants_pause:False]
     是否在空白图像上显示轮廓?:No

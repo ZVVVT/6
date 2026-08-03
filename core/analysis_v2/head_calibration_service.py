@@ -65,6 +65,7 @@ class HeadCalibrationService:
         self.logger = StageLogger(logs_dir=self.logs_dir, task_id=self.task_id)
         self.fields = self._discover_fields()
         self._image_cache = {}  # type: Dict[str, Dict[str, np.ndarray]]
+        self._completed_field_results = {}  # type: Dict[str, Dict[str, Any]]
         self.logger.info("head_calibration", "人工头部校准工具已打开")
         self.logger.event(
             "head_calibration_opened",
@@ -547,9 +548,35 @@ class HeadCalibrationService:
             "state": state_payload,
         }
 
+    def complete_field(self, field_id: str) -> Dict[str, Any]:
+        """Finalize one field so tail preparation can start immediately.
+
+        The result is cached in memory to avoid rewriting a completed field when
+        the final all-field completion step runs.
+        """
+        field_id = str(field_id or "").strip()
+        if not field_id:
+            raise ValueError("field_id 不能为空")
+        cached = self._completed_field_results.get(field_id)
+        if cached is not None:
+            return dict(cached)
+        field = self.load_field(field_id)
+        result = self._finish_field(field)
+        self._completed_field_results[field_id] = dict(result)
+        self.logger.event(
+            "head_calibration_field_completed",
+            "head_calibration",
+            "succeeded",
+            extra={
+                "field_id": field_id,
+                "object_count": int(result.get("object_count", 0)),
+            },
+        )
+        return dict(result)
+
     def complete(self) -> Dict[str, Any]:
         try:
-            results = [self._finish_field(self.load_field(field.field_id)) for field in self.fields]
+            results = [self.complete_field(field.field_id) for field in self.fields]
             self.state_store.update(
                 "head_calibrated",
                 "head_calibration",

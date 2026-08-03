@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.config_manager import ConfigManager
+from core.result_adjustment_service import ResultAdjustmentService
 from app.batch_analysis_dialog import BatchAnalysisDialog
 from app.theme import DEFAULT_THEME_KEY, get_theme
 from app.ui_components import apply_shadow
@@ -34,6 +35,7 @@ class CaseDetailWindow(QWidget):
         self.database = database
         self.config = ConfigManager()
         self.config.ensure_default_config()
+        self.result_adjustment_service = ResultAdjustmentService(self.database, self.config)
         self.current_case = None
         self.theme = get_theme(DEFAULT_THEME_KEY)
         self.init_ui()
@@ -765,15 +767,27 @@ class CaseDetailWindow(QWidget):
 
             if analysis:
                 completed_count += 1
+                actual_part = str(analysis.get("protein_part", part) or part).strip().lower()
+                adjusted = self.result_adjustment_service.adjust_result(
+                    case_id=case_id,
+                    protein_key=key,
+                    protein_part=actual_part,
+                    raw_mean_intensity=analysis.get("mean_intensity"),
+                    raw_expression_rate=analysis.get("expression_rate"),
+                )
                 values = [
                     name,
-                    part,
+                    actual_part,
                     "已完成",
                     analysis.get("total_fields", 0),
                     analysis.get("total_sperm_count", 0),
                     analysis.get("positive_count", 0),
-                    self.fmt_rate(analysis.get("expression_rate", 0)),
-                    self.fmt_int(analysis.get("mean_intensity", 0)),
+                    self.result_adjustment_service.format_expression_rate(
+                        adjusted.get("adjusted_expression_rate")
+                    ),
+                    self.result_adjustment_service.format_intensity(
+                        adjusted.get("adjusted_mean_intensity")
+                    ),
                     analysis.get("created_at", ""),
                     analysis.get("output_folder", ""),
                 ]

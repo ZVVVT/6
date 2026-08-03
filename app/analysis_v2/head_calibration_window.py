@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -22,12 +22,14 @@ from .image_canvas import ImageCanvas
 
 
 class HeadCalibrationWindow(QMainWindow):
+    field_calibration_completed = Signal(str, object)
     calibration_completed = Signal(object)
     calibration_closed = Signal(bool)
 
     def __init__(
         self,
         task_root: Path,
+        progressive_tail: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -49,10 +51,18 @@ class HeadCalibrationWindow(QMainWindow):
             )
 
         first_field_id = field_ids[0]
+        self._field_ids = list(field_ids)
+        self._progressive_tail = bool(progressive_tail)
+        self._completed_fields = set()
 
         self.current_field_id = ""
+        first_channels = self.service.available_channels(
+            first_field_id
+        )
         self.current_channel = (
-            self.service.default_channel(
+            "TRITC"
+            if "TRITC" in first_channels
+            else self.service.default_channel(
                 first_field_id
             )
         )
@@ -66,19 +76,27 @@ class HeadCalibrationWindow(QMainWindow):
 
         self.controls = HeadCalibrationControls(
             field_ids,
-            self.service.available_channels(
-                first_field_id
-            ),
+            first_channels,
+        )
+
+        self.controls.set_progressive_mode(
+            self._progressive_tail
         )
 
         self.controls.set_channels(
-            self.service.available_channels(
-                first_field_id
-            ),
+            first_channels,
             self.current_channel,
         )
 
         self.canvas = ImageCanvas()
+
+        # 窗口尺寸变化时延迟重新适应，避免拖动窗口过程中高频重复计算。
+        self._resize_fit_timer = QTimer(self)
+        self._resize_fit_timer.setSingleShot(True)
+        self._resize_fit_timer.setInterval(80)
+        self._resize_fit_timer.timeout.connect(
+            self.canvas.fit_to_window
+        )
 
         layout.addWidget(self.controls)
         layout.addWidget(self.canvas, 1)
@@ -89,10 +107,34 @@ class HeadCalibrationWindow(QMainWindow):
         self._connect_signals()
         self._install_shortcuts()
 
+        # 首次加载发生在窗口真正显示之前，此时画布尺寸尚未最终确定。
+        # 先载入图像，等 showEvent 后再执行一次适应窗口，避免首张图偏小。
+        self._initial_fit_pending = True
         self._load_field(
             first_field_id,
-            fit=True,
+            fit=False,
         )
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+
+        if self._initial_fit_pending:
+            self._initial_fit_pending = False
+            QTimer.singleShot(
+                0,
+                self.canvas.fit_to_window,
+            )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+
+        # 始终让当前图像跟随窗口可用区域自适应缩放。
+        # 使用短延迟合并连续 resize 事件，避免拖动窗口时反复重绘。
+        if (
+            hasattr(self, "_resize_fit_timer")
+            and self.current_field_id
+        ):
+            self._resize_fit_timer.start()
 
     def _connect_signals(self) -> None:
         self.controls.previousRequested.connect(lambda: self._move_field(-1))
@@ -181,6 +223,12 @@ class HeadCalibrationWindow(QMainWindow):
                 False
             )
 
+            if self._progressive_tail:
+                self.controls.set_progressive_position(
+                    self._field_ids.index(field_id),
+                    len(self._field_ids),
+                )
+
             self._select_mode()
             self._update_status()
 
@@ -217,6 +265,12 @@ class HeadCalibrationWindow(QMainWindow):
             return False
 
     def _field_combo_changed(self, field_id: str) -> None:
+        if self._progressive_tail:
+            if field_id != self.current_field_id:
+                self.controls.field_combo.blockSignals(True)
+                self.controls.field_combo.setCurrentText(self.current_field_id)
+                self.controls.field_combo.blockSignals(False)
+            return
         if not field_id or field_id == self.current_field_id or self._switching_field:
             return
         previous = self.current_field_id
@@ -228,11 +282,62 @@ class HeadCalibrationWindow(QMainWindow):
         self._load_field(field_id, fit=True)
 
     def _move_field(self, offset: int) -> None:
+        if self._progressive_tail:
+            if int(offset) > 0:
+                self._complete_current_field_and_advance()
+            return
         field_ids = self.service.field_ids()
         index = field_ids.index(self.current_field_id)
         target = max(0, min(len(field_ids) - 1, index + offset))
         if target != index:
             self.controls.field_combo.setCurrentIndex(target)
+
+    def _finalize_current_field(self) -> object:
+        field_id = self.current_field_id
+        if not field_id:
+            raise RuntimeError("当前没有可完成的视野。")
+        if field_id in self._completed_fields:
+            return {}
+        if not self._save_current():
+            raise RuntimeError("当前视野保存失败。")
+        self.statusBar().showMessage(
+            "正在完成视野 {} 并启动后台尾部准备…".format(field_id)
+        )
+        result = self.service.complete_field(field_id)
+        self._completed_fields.add(field_id)
+        self.field_calibration_completed.emit(field_id, result)
+        return result
+
+    def _complete_current_field_and_advance(self) -> None:
+        if not self._progressive_tail:
+            return
+        index = self._field_ids.index(self.current_field_id)
+        if index >= len(self._field_ids) - 1:
+            return
+        answer = QMessageBox.question(
+            self,
+            "完成当前视野",
+            "确认完成视野 {}？\n\n"
+            "完成后该视野头部将锁定，并立即在后台准备对应尾部；"
+            "随后进入下一视野头部校准。".format(self.current_field_id),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            completed_field = self.current_field_id
+            self._finalize_current_field()
+            next_field = self._field_ids[index + 1]
+            self._load_field(next_field, fit=True)
+            self.statusBar().showMessage(
+                "视野 {} 已完成，后台正在准备尾部；现在校准 {}。".format(
+                    completed_field,
+                    next_field,
+                )
+            )
+        except BaseException as exception:
+            self._show_error("完成当前视野失败", exception)
 
     def _channel_changed(self, channel: str) -> None:
         self.current_channel = channel
@@ -339,15 +444,33 @@ class HeadCalibrationWindow(QMainWindow):
         )
 
     def _complete(self) -> None:
+        if self._progressive_tail:
+            index = self._field_ids.index(self.current_field_id)
+            if index != len(self._field_ids) - 1:
+                QMessageBox.information(
+                    self,
+                    "请按顺序完成视野",
+                    "请先点击“完成当前视野并进入下一视野”。",
+                )
+                return
+            prompt = (
+                "确认完成最后视野 {}，并结束全部头部校准？\n\n"
+                "该视野完成后会立即在后台准备尾部，头部窗口会关闭。"
+            ).format(self.current_field_id)
+        else:
+            prompt = "确认完成全部视野头部校准并生成最终标签？"
+
         answer = QMessageBox.question(
             self,
             "完成头部校准",
-            "确认完成全部视野头部校准并生成最终标签？",
+            prompt,
         )
         if answer != QMessageBox.Yes:
             return
         try:
-            if not self._save_current():
+            if self._progressive_tail:
+                self._finalize_current_field()
+            elif not self._save_current():
                 return
             self.statusBar().showMessage("正在生成最终校准结果…")
             result = self.service.complete()

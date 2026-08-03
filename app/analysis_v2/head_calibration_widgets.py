@@ -112,3 +112,25 @@ class HeadCalibrationControls(QWidget):
     def set_history_enabled(self, can_undo: bool, can_redo: bool) -> None:
         self.undo_button.setEnabled(can_undo)
         self.redo_button.setEnabled(can_redo)
+
+    def set_progressive_mode(self, enabled: bool) -> None:
+        """Configure the controls for sequential per-field completion."""
+        enabled = bool(enabled)
+        self.previous_button.setVisible(not enabled)
+        self.field_combo.setEnabled(not enabled)
+        if enabled:
+            self.complete_button.setText("完成最后视野和头部校准")
+
+    def set_progressive_position(self, index: int, total: int) -> None:
+        """Update button state for a 0-based progressive field position."""
+        index = max(0, int(index))
+        total = max(1, int(total))
+        is_last = index >= total - 1
+        if is_last:
+            self.next_button.setText("已是最后视野")
+            self.next_button.setEnabled(False)
+            self.complete_button.setEnabled(True)
+        else:
+            self.next_button.setText("完成当前视野并进入下一视野")
+            self.next_button.setEnabled(True)
+            self.complete_button.setEnabled(False)

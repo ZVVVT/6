@@ -13,6 +13,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from PIL import Image
+
 from core.result_parser import ResultParser
 
 from .environment_snapshot import EnvironmentSnapshotWriter
@@ -277,6 +279,70 @@ def _reset_directory(path: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
 
 
+def _prepare_measurement_channel_image(
+    source: Path,
+    destination: Path,
+) -> None:
+    """为 MvImageID 准备真实 TIFF 通道图像。
+
+    已是 TIFF 的正式显微图保持原文件字节不变；PNG 等其他格式必须
+    重新编码为无压缩 TIFF，禁止仅修改扩展名。带透明通道或调色板的
+    图像统一转换为 RGB，避免旧版 Bio-Formats/JAI 读取失败。
+    """
+    source_path = Path(source).resolve()
+    destination_path = Path(destination).resolve()
+
+    if source_path.suffix.casefold() in {".tif", ".tiff"}:
+        shutil.copy2(str(source_path), str(destination_path))
+        return
+
+    try:
+        with Image.open(source_path) as image:
+            image.load()
+            source_mode = str(image.mode or "")
+
+            if source_mode in {"P", "PA", "RGBA", "LA"}:
+                prepared = image.convert("RGB")
+            elif source_mode == "1":
+                prepared = image.convert("L")
+            elif source_mode in {"L", "RGB", "I", "F", "I;16", "I;16L", "I;16B"}:
+                prepared = image.copy()
+            else:
+                prepared = image.convert("RGB")
+
+            try:
+                prepared.save(
+                    destination_path,
+                    format="TIFF",
+                    compression="raw",
+                )
+            finally:
+                prepared.close()
+    except Exception as exception:
+        raise ValueError(
+            "无法将测量通道图像转换为标准 TIFF：{} -> {}；原因：{}".format(
+                source_path,
+                destination_path,
+                exception,
+            )
+        ) from exception
+
+    try:
+        with Image.open(destination_path) as verification:
+            if str(verification.format or "").upper() != "TIFF":
+                raise ValueError(
+                    "生成文件不是 TIFF，而是 {}。".format(verification.format)
+                )
+            verification.verify()
+    except Exception as exception:
+        raise ValueError(
+            "标准 TIFF 写入后校验失败：{}；原因：{}".format(
+                destination_path,
+                exception,
+            )
+        ) from exception
+
+
 def prepare_standardized_tail_input(
     fields: Sequence[Dict[str, Any]],
     input_dir: Path,
@@ -310,7 +376,10 @@ def prepare_standardized_tail_input(
             source = sources[key]
             if not source.is_file():
                 raise FileNotFoundError("测量源文件不存在：{}".format(source))
-            shutil.copy2(str(source), str(destination))
+            if key in {"g", "r"}:
+                _prepare_measurement_channel_image(source, destination)
+            else:
+                shutil.copy2(str(source), str(destination))
 
         records.append({
             "field_id": field_id,

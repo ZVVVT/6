@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.result_parser import ResultParser
+from core.config_manager import ConfigManager
+from core.result_adjustment_service import ResultAdjustmentService
 
 
 class ResultViewer(QWidget):
@@ -32,8 +34,21 @@ class ResultViewer(QWidget):
     3. 默认不显示文件列表，文件扫描只用于自动找 Overlay 图片。
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, database=None, config=None, parent=None):
         super().__init__(parent)
+
+        self.database = database
+        self.config = config or ConfigManager()
+        self.config.ensure_default_config()
+        self.adjustment_service = (
+            ResultAdjustmentService(self.database, self.config)
+            if self.database is not None
+            else None
+        )
+        self.case_id = None
+        self.protein_key = ""
+        self.protein_part = ""
+        self.adjustment_message = ""
 
         self.output_dir = None
         self.files = []
@@ -388,6 +403,12 @@ class ResultViewer(QWidget):
     # 对外接口
     # -------------------------
 
+    def set_result_context(self, case_id=None, protein_key: str = "", protein_part: str = ""):
+        """设置当前病例和蛋白上下文，用于动态结果校正。"""
+        self.case_id = case_id
+        self.protein_key = str(protein_key or "").strip()
+        self.protein_part = str(protein_part or "").strip().lower()
+
     def set_output_dir(self, output_dir: str):
         self.output_dir = Path(output_dir)
         self.output_dir_label.setText(f"输出目录：{self.output_dir}")
@@ -434,7 +455,7 @@ class ResultViewer(QWidget):
             self.clear_results(f"输出目录不存在：\n{self.output_dir}")
             return
 
-        parser = ResultParser(str(self.output_dir))
+        parser = ResultParser(str(self.output_dir), protein_part=self.protein_part)
 
         self.refresh_summary(parser)
         self.refresh_file_list(parser)
@@ -443,6 +464,21 @@ class ResultViewer(QWidget):
     # -------------------------
     # 汇总结果
     # -------------------------
+
+    def _adjust_item(self, item: dict) -> dict:
+        if not self.adjustment_service:
+            return {
+                "adjusted_mean_intensity": item.get("mean_intensity"),
+                "adjusted_expression_rate": item.get("expression_rate"),
+                "message": "",
+            }
+        return self.adjustment_service.adjust_result(
+            case_id=self.case_id,
+            protein_key=self.protein_key,
+            protein_part=self.protein_part,
+            raw_mean_intensity=item.get("mean_intensity"),
+            raw_expression_rate=item.get("expression_rate"),
+        )
 
     def refresh_summary(self, parser: ResultParser):
         summary_result = parser.parse_image_summary()
@@ -465,12 +501,13 @@ class ResultViewer(QWidget):
         self.summary_table.setRowCount(len(rows) + 1)
 
         for row_index, item in enumerate(rows):
+            adjusted = self._adjust_item(item)
             values = [
                 item.get("image_number", ""),
                 item.get("sperm_count", 0),
                 item.get("positive_count", 0),
-                self.format_rate_for_display(item.get("expression_rate", 0)),
-                self.format_int_for_display(item.get("mean_intensity", 0)),
+                self.format_rate_for_display(adjusted.get("adjusted_expression_rate")),
+                self.format_int_for_display(adjusted.get("adjusted_mean_intensity")),
             ]
 
             for col_index, value in enumerate(values):
@@ -479,12 +516,14 @@ class ResultViewer(QWidget):
                 self.summary_table.setItem(row_index, col_index, table_item)
 
         total_row = len(rows)
+        total_adjusted = self._adjust_item(total)
+        self.adjustment_message = str(total_adjusted.get("message", "") or "")
         total_values = [
             "合计",
             total.get("sperm_count", 0),
             total.get("positive_count", 0),
-            self.format_rate_for_display(total.get("expression_rate", 0)),
-            self.format_int_for_display(total.get("mean_intensity", 0)),
+            self.format_rate_for_display(total_adjusted.get("adjusted_expression_rate")),
+            self.format_int_for_display(total_adjusted.get("adjusted_mean_intensity")),
         ]
 
         for col_index, value in enumerate(total_values):
@@ -1045,48 +1084,58 @@ class ResultViewer(QWidget):
 
         return None
 
-    @staticmethod
-    def format_int_for_display(value):
+    def format_int_for_display(self, value):
+        if self.adjustment_service:
+            return self.adjustment_service.format_intensity(value)
         try:
-            return str(int(round(float(value))))
+            decimals = self.config.get_result_display_decimals()
+            return f"{float(value):.{decimals}f}"
         except Exception:
-            return str(value)
+            return "--"
 
-    @staticmethod
-    def format_rate_for_display(value):
+    def format_rate_for_display(self, value):
+        if self.adjustment_service:
+            return self.adjustment_service.format_expression_rate(value)
         try:
-            return f"{float(value):.2f}%"
+            decimals = self.config.get_result_display_decimals()
+            return f"{float(value):.{decimals}f}%"
         except Exception:
-            return f"{value}%" if value not in [None, ""] else "0.00%"
+            return "--"
 
     def update_summary_label(self):
         total = self.summary_total or {}
         current_row = self.get_current_summary_row()
 
         if current_row:
+            current_adjusted = self._adjust_item(current_row)
             current_text = (
                 f"当前视野：{self.current_field_no}\n"
                 f"精子数：{current_row.get('sperm_count', 0)}\n"
                 f"共定位数：{current_row.get('positive_count', 0)}\n"
-                f"标定率：{self.format_rate_for_display(current_row.get('expression_rate', 0))}\n"
-                f"荧光强度：{self.format_int_for_display(current_row.get('mean_intensity', 0))}"
+                f"标定率：{self.format_rate_for_display(current_adjusted.get('adjusted_expression_rate'))}\n"
+                f"荧光强度：{self.format_int_for_display(current_adjusted.get('adjusted_mean_intensity'))}"
             )
         else:
             current_text = f"当前视野：{self.current_field_no or '-'}\n暂无当前视野统计。"
 
         if total:
+            total_adjusted = self._adjust_item(total)
+            self.adjustment_message = str(total_adjusted.get("message", "") or "")
             total_text = (
                 f"\n\n合计：\n"
                 f"视野数：{total.get('field_count', 0)}\n"
                 f"精子总数：{total.get('sperm_count', 0)}\n"
                 f"共定位数：{total.get('positive_count', 0)}\n"
-                f"标定率：{self.format_rate_for_display(total.get('expression_rate', 0))}\n"
-                f"荧光强度：{self.format_int_for_display(total.get('mean_intensity', 0))}"
+                f"标定率：{self.format_rate_for_display(total_adjusted.get('adjusted_expression_rate'))}\n"
+                f"荧光强度：{self.format_int_for_display(total_adjusted.get('adjusted_mean_intensity'))}"
             )
         else:
             total_text = ""
 
-        self.summary_label.setText(current_text + total_text)
+        adjustment_text = ""
+        if self.adjustment_message:
+            adjustment_text = f"\n\n结果校正：{self.adjustment_message}"
+        self.summary_label.setText(current_text + total_text + adjustment_text)
 
     def get_mode_display_name(self, mode: str):
         if mode == "colocalized":

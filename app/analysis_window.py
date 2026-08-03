@@ -30,6 +30,7 @@ from app.analysis_v2.head_calibration_window import (
     HeadCalibrationWindow,
 )
 from app.analysis_v2.tail_analysis_workers import (
+    TailFieldPrepareWorker,
     TailMeasurementWorker,
     TailPathWorker,
 )
@@ -43,7 +44,12 @@ from core.analysis_v2.head_input_adapter import (
 from core.analysis_v2.head_result_publisher import (
     stage_head_measurement_output,
 )
+from core.analysis_v2.tail_result_publisher import (
+    stage_tail_measurement_output,
+)
 from core.analysis_v2.tail_calibration_service import mark_tail_stage
+from core.analysis_v2.task_state import TaskStateStore
+from core.analysis_v2.tail_calibration_service import task_paths_from_root
 from core.image_channel_matcher import ImageChannelMatcher
 from core.result_parser import ResultParser
 from core.protein_analysis_service import ProteinAnalysisService
@@ -104,6 +110,12 @@ class AnalysisWindow(QWidget):
         self.head_measurement_worker = None
         self.head_calibration_window = None
         self.tail_path_worker = None
+        self.tail_field_prepare_worker = None
+        self.tail_field_prepare_queue = []
+        self.tail_field_prepare_results = {}
+        self.tail_field_order = []
+        self._tail_head_calibration_finished = False
+        self._tail_path_start_pending = False
         self.tail_measurement_worker = None
         self.tail_calibration_controller = None
         self.current_analysis_v2_task_root = None
@@ -216,7 +228,7 @@ class AnalysisWindow(QWidget):
         # -------------------------
         # 图像核查工作区：页面主体
         # -------------------------
-        self.result_viewer = ResultViewer()
+        self.result_viewer = ResultViewer(database=self.database, config=self.config)
         self.result_viewer.setMinimumHeight(600)
         self.tune_result_viewer_side_panel_width()
         main_layout.addWidget(self.result_viewer, 10)
@@ -752,9 +764,9 @@ class AnalysisWindow(QWidget):
 
         self.protein_part_label.setText(f"表达部位：{protein_part}")
 
-        if protein_key == "protein3":
+        if protein_key == "protein3" and protein_part == "tail":
             self.pipeline_label.setText(
-                "Pipeline：Analysis V2：头部校准 → 尾部路径 → 尾部校准"
+                "Pipeline：Analysis V2：头部校准 → 联合尾部候选 → 人工校准 → 校准后测量"
             )
         elif str(protein_part).strip().lower() == "head":
             self.pipeline_label.setText(
@@ -1090,6 +1102,12 @@ class AnalysisWindow(QWidget):
         self.current_raw_image_folder = raw_folder
         self.current_output_dir = output_folder
 
+        self.result_viewer.set_result_context(
+            case_id=self.current_case.get("id"),
+            protein_key=protein_key,
+            protein_part=self.config.get_protein_part(protein_key),
+        )
+
         if raw_folder.exists():
             self.imported_images = self.load_images_from_raw_folder(raw_folder, protein_key)
             self.refresh_table(self.imported_images)
@@ -1375,6 +1393,7 @@ class AnalysisWindow(QWidget):
             or self._worker_is_running(self.head_segmentation_worker)
             or self._worker_is_running(self.head_measurement_worker)
             or self._worker_is_running(self.tail_path_worker)
+            or self._worker_is_running(self.tail_field_prepare_worker)
             or self._worker_is_running(self.tail_measurement_worker)
             or self.tail_calibration_controller is not None
             or calibration_open
@@ -1426,6 +1445,10 @@ class AnalysisWindow(QWidget):
         self.current_analysis_v2_context = None
         self._analysis_v2_finish_pending = False
         self._analysis_v2_select_next_pending = False
+        self.tail_field_prepare_queue = []
+        self.tail_field_prepare_results = {}
+        self._tail_head_calibration_finished = False
+        self._tail_path_start_pending = False
 
     def _finish_analysis_v2_ui(
         self,
@@ -1703,13 +1726,26 @@ class AnalysisWindow(QWidget):
             )
             self.current_analysis_v2_context = context
 
+            is_tail_workflow = (
+                str(context.get("workflow", "") or "") == "protein3_tail"
+            )
+            self.tail_field_prepare_queue = []
+            self.tail_field_prepare_results = {}
+            self.tail_field_order = []
+            self._tail_head_calibration_finished = False
+            self._tail_path_start_pending = False
+
             window = HeadCalibrationWindow(
                 task_root=task_root,
+                progressive_tail=is_tail_workflow,
                 parent=self,
             )
             window.setAttribute(
                 Qt.WA_DeleteOnClose,
                 True,
+            )
+            window.field_calibration_completed.connect(
+                self._on_head_field_calibration_completed
             )
             window.calibration_completed.connect(
                 self._on_head_calibration_completed
@@ -1723,6 +1759,11 @@ class AnalysisWindow(QWidget):
             self.append_log(
                 "Analysis V2：头部识别完成，已打开人工校准窗口。"
             )
+            if is_tail_workflow:
+                self.append_log(
+                    "Analysis V2：已启用逐视野流水线；完成一个头部视野后，"
+                    "系统立即在后台准备该视野尾部。"
+                )
 
             window.show()
             window.raise_()
@@ -1746,6 +1787,188 @@ class AnalysisWindow(QWidget):
 
         if self._analysis_v2_finish_pending:
             self._finish_analysis_v2_ui()
+
+    def _on_head_field_calibration_completed(
+        self,
+        field_id: str,
+        result: object,
+    ) -> None:
+        """Queue one field for tail preparation as soon as its head is final."""
+        window = self.sender()
+        if window is not self.head_calibration_window:
+            self.append_log(
+                "Analysis V2：忽略过期的单视野头部完成信号。"
+            )
+            return
+        field_id = str(field_id or "").strip()
+        if not field_id:
+            self.append_log(
+                "Analysis V2：单视野头部完成信号缺少视野编号。"
+            )
+            return
+        context = dict(self.current_analysis_v2_context or {})
+        if context.get("workflow") != "protein3_tail":
+            return
+        if (
+            field_id not in self.tail_field_prepare_queue
+            and field_id not in self.tail_field_prepare_results
+            and not (
+                self.tail_field_prepare_worker is not None
+                and str(getattr(self.tail_field_prepare_worker, "field_id", ""))
+                == field_id
+            )
+        ):
+            self.tail_field_prepare_queue.append(field_id)
+        self.append_log(
+            "Analysis V2：视野 {} 头部已锁定，已加入尾部后台准备队列。".format(
+                field_id
+            )
+        )
+        self._start_next_tail_field_prepare()
+
+    def _start_next_tail_field_prepare(self) -> None:
+        if self._worker_is_running(self.tail_field_prepare_worker):
+            return
+        if not self.tail_field_prepare_queue:
+            self._maybe_start_tail_path_after_field_prepare()
+            return
+        context = dict(self.current_analysis_v2_context or {})
+        if context.get("workflow") != "protein3_tail":
+            self.tail_field_prepare_queue = []
+            return
+        task_root = Path(self.current_analysis_v2_task_root).resolve()
+        project_root = Path(
+            str(context.get("project_root", "") or "")
+        ).resolve()
+        field_id = str(self.tail_field_prepare_queue.pop(0))
+        worker = TailFieldPrepareWorker(
+            project_root=project_root,
+            task_root=task_root,
+            python_executable=Path(self.config.get_python_exe()),
+            field_id=field_id,
+            display_max_dim=1400,
+            parent=self,
+        )
+        worker.log_signal.connect(self.append_log)
+        worker.finished_signal.connect(
+            self._on_tail_field_prepare_finished
+        )
+        worker.finished.connect(
+            self._on_tail_field_prepare_thread_finished
+        )
+        worker.finished.connect(worker.deleteLater)
+        self.tail_field_prepare_worker = worker
+        self.append_log(
+            "Analysis V2：后台开始准备视野 {} 尾部；头部窗口可继续操作。".format(
+                field_id
+            )
+        )
+        worker.start()
+
+    def _on_tail_field_prepare_finished(
+        self,
+        success: bool,
+        field_id: str,
+        result: object,
+        error_message: str,
+    ) -> None:
+        field_id = str(field_id or "").strip()
+        payload = dict(result) if isinstance(result, dict) else {}
+        if bool(payload.get("cancelled")):
+            self.append_log(
+                "Analysis V2：视野 {} 尾部后台准备已取消。".format(
+                    field_id or "当前"
+                )
+            )
+            return
+        self.tail_field_prepare_results[field_id] = {
+            "success": bool(success),
+            "payload": payload,
+            "error": str(error_message or ""),
+        }
+        if success:
+            elapsed = float(payload.get("elapsed_seconds", 0.0) or 0.0)
+            self.append_log(
+                "Analysis V2：视野 {} 尾部后台准备完成，耗时 {:.1f}s。".format(
+                    field_id,
+                    elapsed,
+                )
+            )
+        else:
+            self.append_log(
+                "Analysis V2：视野 {} 尾部后台准备失败；全部头部完成后将自动重试。".format(
+                    field_id
+                )
+            )
+            if error_message:
+                self.append_log(str(error_message)[-4000:])
+
+    def _on_tail_field_prepare_thread_finished(self) -> None:
+        worker = self.sender()
+        if self.tail_field_prepare_worker is worker:
+            self.tail_field_prepare_worker = None
+        self._start_next_tail_field_prepare()
+        self._maybe_start_tail_path_after_field_prepare()
+
+    def _maybe_start_tail_path_after_field_prepare(self) -> None:
+        """Start manual tail flow as soon as field 1 is ready.
+
+        Field 2/3 preparation remains in the existing background queue.  The
+        manual worker waits only for the field it is about to open, so it no
+        longer blocks on all three automatic preparations.
+        """
+        if not self._tail_head_calibration_finished:
+            return
+        if not self._tail_path_start_pending:
+            return
+        if self._worker_is_running(self.tail_path_worker):
+            return
+
+        context = dict(self.current_analysis_v2_context or {})
+        if context.get("workflow") != "protein3_tail":
+            return
+
+        ordered_fields = [
+            str(value or "").strip()
+            for value in list(self.tail_field_order or [])
+            if str(value or "").strip()
+        ]
+        if not ordered_fields:
+            return
+
+        first_field_id = ordered_fields[0]
+        first_result = dict(
+            self.tail_field_prepare_results.get(first_field_id) or {}
+        )
+        first_ready = bool(first_result.get("success"))
+
+        # 正常路径：尾部1已完成草稿和编辑器适配，立即进入人工窗口。
+        # 回退路径：队列已经结束但尾部1预处理失败，让 manual-stream
+        # 自己安全补算当前视野，避免流程永久卡住。
+        no_prepare_work_left = (
+            not self._worker_is_running(self.tail_field_prepare_worker)
+            and not self.tail_field_prepare_queue
+        )
+        if not first_ready and not no_prepare_work_left:
+            return
+
+        task_root = Path(self.current_analysis_v2_task_root).resolve()
+        project_root = Path(
+            str(context.get("project_root", "") or "")
+        ).resolve()
+        self._tail_path_start_pending = False
+
+        if first_ready:
+            self.append_log(
+                "Analysis V2：尾部1已准备完成，立即打开尾部人工窗口；"
+                "尾部2和尾部3继续在后台准备。"
+            )
+        else:
+            self.append_log(
+                "Analysis V2：尾部1后台准备未成功，进入安全补算模式；"
+                "只补算当前需要的视野。"
+            )
+        self._start_tail_path_worker(project_root, task_root)
 
     def _on_head_calibration_completed(
         self,
@@ -1812,7 +2035,36 @@ class AnalysisWindow(QWidget):
                 )
 
             if context.get("workflow") == "protein3_tail":
-                self._start_tail_path_worker(project_root, task_root)
+                completed_fields = []
+                for item in list(
+                    dict(result or {}).get("fields") or []
+                ):
+                    if not isinstance(item, dict):
+                        continue
+                    field_id = str(item.get("field_id", "") or "").strip()
+                    if field_id and field_id not in completed_fields:
+                        completed_fields.append(field_id)
+                active_field = str(
+                    getattr(self.tail_field_prepare_worker, "field_id", "") or ""
+                ).strip()
+                for field_id in completed_fields:
+                    if (
+                        field_id not in self.tail_field_prepare_results
+                        and field_id not in self.tail_field_prepare_queue
+                        and field_id != active_field
+                    ):
+                        self.tail_field_prepare_queue.append(field_id)
+                self.tail_field_order = list(completed_fields)
+                self._tail_head_calibration_finished = True
+                self._tail_path_start_pending = True
+                self.btn_run_analysis.setText("正在准备尾部1...")
+                self.append_log(
+                    "Analysis V2：全部头部校准完成；头部窗口立即关闭。"
+                    "尾部1一旦准备好就立即打开人工窗口，"
+                    "不会等待尾部2和尾部3。"
+                )
+                self._start_next_tail_field_prepare()
+                self._maybe_start_tail_path_after_field_prepare()
                 return
 
             worker = HeadMeasurementWorker(
@@ -1879,7 +2131,7 @@ class AnalysisWindow(QWidget):
         mark_tail_stage(
             task_root,
             "tail_segmenting",
-            "正在执行尾部 Stage 1～2.3",
+            "正在执行联合尾部候选、人工校准和原子提升",
         )
         worker = TailPathWorker(
             project_root=project_root,
@@ -1892,9 +2144,10 @@ class AnalysisWindow(QWidget):
         worker.finished.connect(self._on_tail_path_thread_finished)
         worker.finished.connect(worker.deleteLater)
         self.tail_path_worker = worker
-        self.btn_run_analysis.setText("正在处理尾部路径...")
+        self.btn_run_analysis.setText("正在校准尾部...")
         self.append_log(
-            "Analysis V2：头部校准完成，Q96P56 转入尾部 Stage 1～2.3。"
+            "Analysis V2：开始实时尾部人工流水线；"
+            "当前视野就绪即打开，后续视野继续后台准备。"
         )
         worker.start()
 
@@ -1908,12 +2161,70 @@ class AnalysisWindow(QWidget):
             self._analysis_v2_finish_pending = True
             self._show_analysis_v2_error(
                 "尾部自动处理失败",
-                "尾部 Stage 1～2.3 未完成；任务目录和头部校准结果已保留。",
+                "联合尾部流程未完成；任务目录、自动候选和已保存的人工结果均保留，可再次运行续接。",
                 str(error_message or "尾部自动处理失败。"),
             )
             return
         try:
             payload = dict(result) if isinstance(result, dict) else {}
+            if bool(payload.get("cancelled")):
+                task_root = str(
+                    payload.get("task_root")
+                    or self.current_analysis_v2_task_root
+                    or ""
+                )
+                cancelled_field = str(
+                    payload.get("cancelled_field") or "当前视野"
+                ).strip()
+                message = str(
+                    payload.get("message")
+                    or "用户关闭人工尾部校准窗口且未保存。"
+                ).strip()
+
+                # 先设置完成标志并停止后续预准备，再显示模态提示框。
+                # 否则 QThread.finished 可能在 QMessageBox 的嵌套事件循环中
+                # 提前到达，此时完成标志尚未设置，界面将永久停留在
+                # “正在校准尾部”状态。
+                self._analysis_v2_finish_pending = True
+                self.tail_field_prepare_queue = []
+                self._tail_head_calibration_finished = False
+                self._tail_path_start_pending = False
+
+                prepare_worker = self.tail_field_prepare_worker
+                if self._worker_is_running(prepare_worker):
+                    try:
+                        prepare_worker.request_cancel()
+                        self.append_log(
+                            "Analysis V2：正在停止剩余尾部后台准备任务。"
+                        )
+                    except (AttributeError, RuntimeError) as exception:
+                        self.append_log(
+                            "Analysis V2：剩余尾部后台任务将在当前步骤结束后停止：{}".format(
+                                exception
+                            )
+                        )
+
+                self.append_log(
+                    "Analysis V2：尾部人工校准已取消：{}；任务目录：{}".format(
+                        message, task_root
+                    )
+                )
+                QMessageBox.information(
+                    self,
+                    "尾部校准已取消",
+                    (
+                        "{} 未保存，本次尾部分析已停止。\n\n"
+                        "自动候选、任务目录以及此前已经保存的人工结果均已保留；"
+                        "重新运行该蛋白可继续处理。\n\n任务目录：{}"
+                    ).format(cancelled_field, task_root),
+                )
+
+                # 若线程 finished 信号已在上面的模态框中提前处理，
+                # _finish_analysis_v2_ui() 已经执行，pending 会被清除；
+                # 否则这里主动收尾，确保按钮、病例切换和页面切换立即解锁。
+                if self._analysis_v2_finish_pending:
+                    self._finish_analysis_v2_ui()
+                return
             fields = list(payload.get("fields") or [])
             context = dict(self.current_analysis_v2_context or {})
             expected_count = int(context.get("field_count", 0) or 0)
@@ -1924,6 +2235,19 @@ class AnalysisWindow(QWidget):
                     )
                 )
             task_root = Path(self.current_analysis_v2_task_root).resolve()
+
+            if bool(payload.get("joint_workflow_completed")):
+                if not bool(payload.get("manual_calibration_completed")):
+                    raise RuntimeError("联合尾部流程未确认人工校准完成。")
+                if not bool(payload.get("ready_for_measurement")):
+                    raise RuntimeError("联合尾部正式标签尚未准备好，不能测量。")
+                self.append_log(
+                    "Analysis V2：联合尾部候选、人工校准和三视野原子提升完成。"
+                )
+                self._on_tail_calibration_completed(payload)
+                return
+
+            # 兼容旧任务：只有旧 TailPathWorker 结果才进入旧编辑器控制器。
             mark_tail_stage(task_root, "tail_segmented", "全部视野尾部自动路径完成")
             mark_tail_stage(
                 task_root,
@@ -2042,6 +2366,99 @@ class AnalysisWindow(QWidget):
             )
             self._finish_analysis_v2_ui()
 
+    def _save_tail_analysis_v2_to_database(
+        self,
+        context,
+        output_dir: Path,
+        summary_result,
+    ) -> str:
+        """Atomically replace protein3 summary and field rows."""
+        context = dict(context or {})
+        summary_result = dict(summary_result or {})
+
+        case_id = context.get("case_id")
+        protein_name = str(
+            context.get("protein_name", "") or ""
+        ).strip()
+        image_folder = str(
+            context.get("raw_image_folder", "") or ""
+        )
+        output_folder = str(Path(output_dir).resolve())
+
+        if not case_id:
+            raise RuntimeError(
+                "当前 Analysis V2 上下文缺少数据库病例 ID。"
+            )
+        if not protein_name:
+            raise RuntimeError(
+                "当前 Analysis V2 上下文缺少蛋白名称。"
+            )
+        if not hasattr(
+            self.database,
+            "replace_protein_analysis_with_fields",
+        ):
+            raise RuntimeError(
+                "数据库组件缺少原子结果保存接口。"
+            )
+        if not summary_result.get("success"):
+            raise RuntimeError(
+                summary_result.get(
+                    "message",
+                    "尾部结果解析失败。",
+                )
+            )
+        if (
+            summary_result.get("calculation_mode")
+            != "head_equivalent"
+        ):
+            raise RuntimeError(
+                "尾部数据库保存拒绝非 head_equivalent 结果。"
+            )
+
+        total = dict(summary_result.get("total") or {})
+        rows = list(summary_result.get("rows") or [])
+        image_csv = str(
+            summary_result.get("image_csv", "") or ""
+        )
+
+        field_results = []
+        for item in rows:
+            field_results.append({
+                "field_no": str(
+                    item.get("image_number", "") or ""
+                ),
+                "sperm_count": item.get("sperm_count", 0),
+                "positive_count": item.get("positive_count", 0),
+                "mean_intensity": item.get("mean_intensity", 0),
+                "expression_rate": item.get("expression_rate", 0),
+                "overlay_image_path": "",
+                "csv_path": image_csv,
+            })
+
+        self.database.replace_protein_analysis_with_fields(
+            case_id=case_id,
+            protein_name=protein_name,
+            protein_part="tail",
+            image_folder=image_folder,
+            output_folder=output_folder,
+            total_fields=total.get("field_count", 0),
+            total_sperm_count=total.get("sperm_count", 0),
+            positive_count=total.get("positive_count", 0),
+            mean_intensity=total.get("mean_intensity", 0),
+            expression_rate=total.get("expression_rate", 0),
+            field_results=field_results,
+            status="完成",
+        )
+
+        return (
+            f"{protein_name} 结果已保存到数据库："
+            f"视野数 {total.get('field_count', 0)}，"
+            f"精子总数 {total.get('sperm_count', 0)}，"
+            f"有效尾部数 {total.get('positive_count', 0)}，"
+            f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
+            f"C 荧光强度 {total.get('mean_intensity_raw', total.get('mean_intensity', 0))}。"
+        )
+
     def _on_tail_measurement_finished(
         self,
         success: bool,
@@ -2049,7 +2466,7 @@ class AnalysisWindow(QWidget):
         result: object,
         error_message: str,
     ) -> None:
-        """Keep validated output in candidate_output; publishing is next step."""
+        """Safely publish validated tail output, save DB, and refresh UI."""
         payload = dict(result) if isinstance(result, dict) else {}
 
         if not success:
@@ -2065,12 +2482,15 @@ class AnalysisWindow(QWidget):
             )
             return
 
+        publication = None
+        transaction_committed = False
+
         try:
             context = dict(self.current_analysis_v2_context or {})
             matches, reason = self._analysis_context_matches_current(context)
             if not matches:
                 raise RuntimeError(
-                    "{} 为避免关联错误病例，本次结果未进入发布阶段。".format(
+                    "{} 为避免写入错误病例，本次结果未发布。".format(
                         reason
                     )
                 )
@@ -2078,9 +2498,12 @@ class AnalysisWindow(QWidget):
             measurement = dict(payload.get("measurement_result") or {})
             validation = dict(measurement.get("validation") or {})
             parsed_result = dict(validation.get("result_parser") or {})
-            total = dict(parsed_result.get("total") or {})
-            candidate_dir = str(
+
+            source_text = str(
                 payload.get("candidate_output_dir", "") or ""
+            ).strip()
+            target_text = str(
+                context.get("target_output_dir", "") or ""
             ).strip()
 
             if not parsed_result.get("success"):
@@ -2089,63 +2512,154 @@ class AnalysisWindow(QWidget):
                 )
             if parsed_result.get("calculation_mode") != "head_equivalent":
                 raise RuntimeError("尾部测量未使用 head_equivalent 公式。")
-            if not candidate_dir or not Path(candidate_dir).is_dir():
-                raise FileNotFoundError(
-                    "尾部 candidate_output 不存在：{}".format(candidate_dir)
+            if not source_text:
+                raise RuntimeError(
+                    "尾部测量结果缺少 candidate_output_dir。"
                 )
+            if not target_text:
+                raise RuntimeError(
+                    "Analysis V2 上下文缺少正式输出目录。"
+                )
+
+            source_dir = Path(source_text).resolve()
+            target_dir = Path(target_text).resolve()
+            expected_field_count = int(
+                context.get("field_count", 0) or 0
+            )
+
+            self.append_log(
+                "Analysis V2：尾部测量通过严格校验，正在安全发布正式结果。"
+            )
+
+            publication = stage_tail_measurement_output(
+                source_dir=source_dir,
+                target_dir=target_dir,
+                expected_field_count=expected_field_count,
+            )
+
+            save_message = self._save_tail_analysis_v2_to_database(
+                context=context,
+                output_dir=target_dir,
+                summary_result=publication.summary,
+            )
+
+            cleanup_warning = publication.commit()
+            publication = None
+            transaction_committed = True
 
             context["tail_measurement_payload"] = payload
             context["tail_measurement_elapsed_seconds"] = float(elapsed or 0.0)
             self.current_analysis_v2_context = context
 
-            self.append_log(
-                "Analysis V2：尾部测量已通过严格校验；"
-                "视野 {}，精子 {}，有效尾部 {}，荧光强度 {}，标定率 {}%。".format(
-                    total.get("field_count", 0),
-                    total.get("sperm_count", 0),
-                    total.get("positive_count", 0),
-                    total.get("mean_intensity_raw", 0),
-                    total.get("expression_rate", 0),
+            task_root = Path(self.current_analysis_v2_task_root).resolve()
+            try:
+                TaskStateStore.from_task_paths(
+                    task_paths_from_root(task_root)
+                ).update(
+                    "completed",
+                    "tail_publication",
+                    "尾部正式结果和数据库保存完成",
                 )
-            )
-            self.append_log(
-                "Analysis V2：候选结果保留于 {}；尚未覆盖 cp_output 或数据库。".format(
-                    candidate_dir
+            except BaseException as state_exception:
+                self.append_log(
+                    "Analysis V2：正式结果已保存，但任务状态更新失败：{}".format(
+                        state_exception
+                    )
                 )
-            )
 
+            self.current_output_dir = target_dir
+            raw_folder_text = str(
+                context.get("raw_image_folder", "") or ""
+            ).strip()
+            if raw_folder_text:
+                self.current_raw_image_folder = Path(raw_folder_text)
+
+            self.result_viewer.set_output_dir(str(target_dir))
+            self.result_viewer.refresh_results()
+            self.append_log(save_message)
+            self.append_log(
+                "Analysis V2 正式输出：{}".format(target_dir)
+            )
+            if cleanup_warning:
+                self.append_log(cleanup_warning)
+
+            self.refresh_protein_status()
+            self.refresh_current_protein_workspace()
+
+            started = float(
+                context.get("started_perf_counter", 0) or 0
+            )
+            total_elapsed = (
+                time.perf_counter() - started
+                if started > 0
+                else float(elapsed or 0.0)
+            )
+            # publication 已提交并释放，使用严格验证的解析结果显示。
+            total = dict(parsed_result.get("total") or {})
+
+            self._analysis_v2_select_next_pending = True
             self._analysis_v2_finish_pending = True
             if not self._worker_is_running(self.tail_measurement_worker):
-                self._finish_analysis_v2_ui()
+                self._finish_analysis_v2_ui(select_next=True)
 
             QMessageBox.information(
                 self,
-                "尾部测量完成",
-                "Analysis V2 尾部测量和严格校验完成。\n"
-                "本阶段尚未覆盖正式结果或数据库。\n\n"
+                "尾部分析完成",
+                "Analysis V2 尾部分析完成。\n"
+                "总用时（含人工校准）：{:.2f} 秒\n\n"
                 "视野数：{}\n"
                 "精子总数：{}\n"
                 "有效尾部数：{}\n"
                 "C 荧光强度：{}\n"
                 "标定率：{}%\n\n"
-                "候选输出：\n{}".format(
+                "正式输出：\n{}\n\n{}".format(
+                    total_elapsed,
                     total.get("field_count", 0),
                     total.get("sperm_count", 0),
                     total.get("positive_count", 0),
-                    total.get("mean_intensity_raw", 0),
+                    total.get(
+                        "mean_intensity_raw",
+                        total.get("mean_intensity", 0),
+                    ),
                     total.get("expression_rate", 0),
-                    candidate_dir,
+                    target_dir,
+                    save_message,
                 ),
             )
 
         except BaseException as exception:
-            self._analysis_v2_finish_pending = True
             task_root_text = str(self.current_analysis_v2_task_root or "")
+            self._analysis_v2_finish_pending = True
+
+            if transaction_committed:
+                self._show_analysis_v2_error(
+                    "结果已保存但界面刷新失败",
+                    "新尾部文件和数据库记录已经保存成功，但结果界面刷新失败。重新进入蛋白分析页即可重新加载结果。",
+                    "{}\n\nAnalysis V2 任务目录：{}".format(
+                        exception,
+                        task_root_text,
+                    ),
+                )
+                return
+
+            rollback_detail = ""
+            if publication is not None:
+                try:
+                    publication.rollback()
+                except BaseException as rollback_exception:
+                    rollback_detail = (
+                        "\n\n文件回滚异常：{}".format(
+                            rollback_exception
+                        )
+                    )
+
             self._show_analysis_v2_error(
-                "尾部测量结果校验失败",
-                "候选结果未进入发布阶段，旧正式结果没有被修改。",
-                "{}\n\n任务目录：{}".format(
-                    exception, task_root_text
+                "尾部结果发布失败",
+                "新结果未能完成发布，系统已尽力恢复旧文件和旧数据库记录。",
+                "{}{}\n\nAnalysis V2 任务目录：{}".format(
+                    exception,
+                    rollback_detail,
+                    task_root_text,
                 ),
             )
 

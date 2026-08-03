@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QDoubleSpinBox,
     QScrollArea,
+    QCheckBox,
 )
 
 from core.config_manager import ConfigManager, get_application_root
@@ -156,6 +157,7 @@ class SettingsWindow(QWidget):
         self.init_workspace_tab()
         self.init_image_rule_tab()
         self.init_protein_tab()
+        self.init_result_adjustment_tab()
         self.init_about_tab()
 
         self.global_button_bar = QWidget()
@@ -935,6 +937,78 @@ class SettingsWindow(QWidget):
 
         self.tabs.addTab(tab, "蛋白配置")
 
+    def init_result_adjustment_tab(self):
+        """最终结果校正设置。
+
+        注意：蛋白 head/tail 仍只在“蛋白配置”页设置。
+        本页不修改分析路由、Pipeline、数据库原始结果或测量公式。
+        """
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        tips = QLabel(
+            "说明：尾部标定率属于当前病例内部校正，只作用于头部荧光强度；"
+            "荧光强度整体系数和标定率整体系数只作用于最终展示与报告。"
+            "原始数据库、CSV、TIFF 和测量结果不会被改写。"
+        )
+        tips.setWordWrap(True)
+        tips.setStyleSheet("color: #5E6B7A; padding: 2px 0 6px 0;")
+        layout.addWidget(tips)
+
+        group = QGroupBox("结果校正")
+        form = QFormLayout(group)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(14)
+
+        self.result_adjustment_enabled_check = QCheckBox("启用最终结果校正")
+        self.use_case_tail_rate_check = QCheckBox("头部荧光强度乘当前病例唯一尾部的原始标定率")
+
+        self.default_tail_rate_ratio_edit = PipelineParamLineEdit(0.0, 1.0, 4)
+        self.fluorescence_result_factor_edit = PipelineParamLineEdit(0.0001, 1000.0, 4)
+        self.expression_rate_result_factor_edit = PipelineParamLineEdit(0.0001, 1000.0, 4)
+        self.result_display_decimals_edit = PipelineParamLineEdit(0, 6, 0)
+
+        self.default_tail_rate_ratio_edit.setToolTip(
+            "当前病例没有唯一有效尾部结果时使用。默认 1.0 表示头部荧光强度保持不变。"
+        )
+        self.fluorescence_result_factor_edit.setToolTip(
+            "作用于所有蛋白的最终荧光强度。默认 1.0。"
+            "全部乘法完成后，最终荧光强度限制在等效 8-bit 的 0～255。"
+        )
+        self.expression_rate_result_factor_edit.setToolTip(
+            "作用于所有蛋白的最终标定率。不会反向影响头部荧光强度使用的尾部内部比例。"
+            "校正后的最终标定率限制在 0%～100%。"
+        )
+        self.result_display_decimals_edit.setToolTip(
+            "仅控制页面和 PDF 显示的小数位，不改变内部计算精度。"
+        )
+
+        form.addRow("功能状态：", self.result_adjustment_enabled_check)
+        form.addRow("病例内部校正：", self.use_case_tail_rate_check)
+        form.addRow("无尾部时默认比例：", self.default_tail_rate_ratio_edit)
+        form.addRow("荧光强度整体系数：", self.fluorescence_result_factor_edit)
+        form.addRow("标定率整体系数：", self.expression_rate_result_factor_edit)
+        form.addRow("最终显示小数位：", self.result_display_decimals_edit)
+
+        warning = QLabel(
+            "规则：当前病例最新有效结果中无尾部时使用默认比例；存在一个尾部时使用其原始标定率÷100；"
+            "存在多个尾部时为避免误用自动回退默认比例。"
+            "校正后的最终荧光强度限制在 0～255，最终标定率限制在 0%～100%；"
+            "过大的整体系数可能使结果达到上限。"
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet(
+            "background:#FFF8E8; border:1px solid #F4D79A; border-radius:6px; "
+            "color:#8A5A00; padding:8px;"
+        )
+
+        layout.addWidget(group)
+        layout.addWidget(warning)
+        layout.addStretch()
+        self.tabs.addTab(tab, "结果校正")
+
     def init_about_tab(self):
         """初始化“关于”页，只读显示软件版本信息。"""
         tab = QWidget()
@@ -949,7 +1023,7 @@ class SettingsWindow(QWidget):
 
         software_name_label = QLabel("人类精子蛋白质量分析软件")
         release_version_label = QLabel("V1.0")
-        full_version_label = QLabel("V1.0.0.20260709")
+        full_version_label = QLabel("V1.0.0.20260416")
 
         for label in (
             software_name_label,
@@ -1256,6 +1330,24 @@ class SettingsWindow(QWidget):
         self.image_ext_edit.setText(self.config.get("ImageRule", "image_ext", ".tif"))
 
         self.load_protein_table()
+        self.result_adjustment_enabled_check.setChecked(
+            self.config.is_result_adjustment_enabled()
+        )
+        self.use_case_tail_rate_check.setChecked(
+            self.config.is_use_case_tail_rate_for_head_intensity()
+        )
+        self.default_tail_rate_ratio_edit.setValue(
+            self.config.get_default_tail_rate_ratio()
+        )
+        self.fluorescence_result_factor_edit.setValue(
+            self.config.get_fluorescence_result_factor()
+        )
+        self.expression_rate_result_factor_edit.setValue(
+            self.config.get_expression_rate_result_factor()
+        )
+        self.result_display_decimals_edit.setValue(
+            self.config.get_result_display_decimals()
+        )
         self.load_pipeline_params()
         self.append_log("配置已重新加载。")
 
@@ -1296,6 +1388,38 @@ class SettingsWindow(QWidget):
         self.config.set("ImageRule", "dic_suffix", self.dic_suffix_edit.text().strip())
         self.config.set("ImageRule", "merge_suffix", self.merge_suffix_edit.text().strip())
         self.config.set("ImageRule", "image_ext", self.image_ext_edit.text().strip())
+
+        try:
+            default_tail_ratio = self.default_tail_rate_ratio_edit.value()
+            fluorescence_factor = self.fluorescence_result_factor_edit.value()
+            expression_rate_factor = self.expression_rate_result_factor_edit.value()
+            display_decimals = int(self.result_display_decimals_edit.value())
+        except ValueError as e:
+            QMessageBox.warning(self, "结果校正配置错误", str(e))
+            return
+
+        self.config.set(
+            "ResultAdjustment",
+            "enabled",
+            "true" if self.result_adjustment_enabled_check.isChecked() else "false",
+        )
+        self.config.set(
+            "ResultAdjustment",
+            "use_case_tail_rate_for_head_intensity",
+            "true" if self.use_case_tail_rate_check.isChecked() else "false",
+        )
+        self.config.set(
+            "ResultAdjustment", "default_tail_rate_ratio", str(default_tail_ratio)
+        )
+        self.config.set(
+            "ResultAdjustment", "fluorescence_result_factor", str(fluorescence_factor)
+        )
+        self.config.set(
+            "ResultAdjustment", "expression_rate_result_factor", str(expression_rate_factor)
+        )
+        self.config.set(
+            "ResultAdjustment", "display_decimals", str(display_decimals)
+        )
 
         ok, message = self.save_protein_table_to_config()
         if not ok:

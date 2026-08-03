@@ -413,17 +413,26 @@ class MainWindow(QMainWindow):
             )
 
     def set_case_related_buttons_enabled(self, enabled: bool):
-        allowed = bool(enabled) and not self._analysis_navigation_locked
-        self.btn_detail.setEnabled(allowed)
-        self.btn_analysis.setEnabled(allowed)
-        self.btn_reports.setEnabled(allowed)
+        has_case = bool(enabled)
+        navigation_allowed = (
+            has_case
+            and not self._analysis_navigation_locked
+        )
 
+        # 分析期间锁定其他页面，避免切换病例或把结果写入错误病例。
+        self.btn_detail.setEnabled(navigation_allowed)
+        self.btn_reports.setEnabled(navigation_allowed)
         self.btn_cases.setEnabled(
             not self._analysis_navigation_locked
         )
         self.btn_settings.setEnabled(
             not self._analysis_navigation_locked
         )
+
+        # 当前正在显示的“蛋白分析”按钮始终保持启用，
+        # 避免 Qt 套用 disabled 样式后图标消失、文字居中和按钮变形。
+        # 页面切换安全仍由 switch_page() 中的锁定判断负责。
+        self.btn_analysis.setEnabled(has_case)
 
         if hasattr(self, "menu_buttons"):
             self.refresh_side_button_icons()

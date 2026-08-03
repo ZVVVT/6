@@ -8,8 +8,17 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from tools.analysis_v2.tail_legacy.tail_result_editor_v2_2 import (
+from tools.analysis_v2.tail_legacy.tail_result_editor_v2_3_draft_mvp import (
     build_path_aware_region_labels,
+)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+EDITOR_LAUNCHER = (
+    PROJECT_ROOT
+    / "tools"
+    / "analysis_v2"
+    / "tail_joint_draft_editor_launcher_mvp.py"
 )
 
 
@@ -18,10 +27,16 @@ def make_record(head_id, fragment_ids, points_xy):
         head_id=head_id,
         selected_fragment_ids=list(fragment_ids),
         selected_points_xy=np.asarray(points_xy, dtype=np.float32),
+        selected_source="manual",
     )
 
 
 class PathAwareTailRegionTests(unittest.TestCase):
+    def test_formal_launcher_targets_v2_3_editor(self):
+        source = EDITOR_LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn('"tail_result_editor_v2_3_draft_mvp.py"', source)
+        self.assertNotIn('"tail_result_editor_v2_2.py"', source)
+
     def test_unique_fragment_remains_pixel_identical(self):
         fragments = np.zeros((12, 14), dtype=np.uint32)
         fragments[2:10, 3:12] = 7
@@ -55,13 +70,29 @@ class PathAwareTailRegionTests(unittest.TestCase):
         self.assertGreater(int(np.count_nonzero(head_22)), 0)
         self.assertFalse(np.any(head_21 & head_22))
         self.assertFalse(np.any((labels > 0) & (fragments != 5)))
-        self.assertEqual(conflicts, [])
+        self.assertEqual(
+            conflicts,
+            [
+                {
+                    "fragment_id": 5,
+                    "claimant_count": 2,
+                    "overlap_pixel_count": 73,
+                    "ambiguous_pixel_count": 11,
+                }
+            ],
+        )
+        self.assertEqual(int(np.count_nonzero(head_21)), 55)
+        self.assertEqual(int(np.count_nonzero(head_22)), 55)
+        self.assertEqual(
+            int(np.count_nonzero((fragments == 5) & (labels == 0))),
+            conflicts[0]["ambiguous_pixel_count"],
+        )
 
-    def test_restored_state_paths_are_split_on_save(self):
+    def test_v2_3_restored_state_paths_are_split_on_save(self):
         fragments = np.zeros((15, 15), dtype=np.uint32)
         fragments[2:13, 2:13] = 9
         state = {
-            "version": "tail_result_editor_v2_2",
+            "version": "tail_result_editor_v2_3_draft_mvp",
             "records": [
                 {
                     "head_id": 31,
@@ -77,7 +108,9 @@ class PathAwareTailRegionTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as temporary_directory:
-            state_path = Path(temporary_directory) / "editor_state_v2_2.json"
+            state_path = (
+                Path(temporary_directory) / "editor_state_v2_3_draft_mvp.json"
+            )
             state_path.write_text(
                 json.dumps(state),
                 encoding="utf-8",
@@ -107,7 +140,23 @@ class PathAwareTailRegionTests(unittest.TestCase):
             int(np.count_nonzero(labels == 32)),
             int(np.count_nonzero(fragments == 9)),
         )
-        self.assertEqual(conflicts, [])
+        self.assertEqual(
+            conflicts,
+            [
+                {
+                    "fragment_id": 9,
+                    "claimant_count": 2,
+                    "overlap_pixel_count": 73,
+                    "ambiguous_pixel_count": 11,
+                }
+            ],
+        )
+        self.assertEqual(int(np.count_nonzero(labels == 31)), 55)
+        self.assertEqual(int(np.count_nonzero(labels == 32)), 55)
+        self.assertEqual(
+            int(np.count_nonzero((fragments == 9) & (labels == 0))),
+            conflicts[0]["ambiguous_pixel_count"],
+        )
 
 
 if __name__ == "__main__":
