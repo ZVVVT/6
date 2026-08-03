@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -37,6 +38,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+WINDOWS_CREATION_FLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if os.name == "nt"
+    else 0
+)
 
 VERSION = "tail_joint_oneclick_v2_5_graceful_manual_cancel"
 
@@ -568,6 +575,7 @@ def run_command(
         stderr=subprocess.STDOUT,
         universal_newlines=True,
         bufsize=1,
+        creationflags=WINDOWS_CREATION_FLAGS,
     )
     assert process.stdout is not None
     for line in process.stdout:

@@ -13,6 +13,13 @@ from core.analysis_v2.tail_measurement_service import TailMeasurementService
 from core.config_manager import ConfigManager
 
 
+WINDOWS_CREATION_FLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if os.name == "nt"
+    else 0
+)
+
+
 class TailPathWorker(QThread):
     """Run the validated joint-tail workflow and prepare formal calibration labels.
 
@@ -96,6 +103,7 @@ class TailPathWorker(QThread):
             errors="replace",
             bufsize=1,
             env=environment,
+            creationflags=WINDOWS_CREATION_FLAGS,
         )
         if process.stdout is None:
             raise RuntimeError("{} 未能创建标准输出管道。".format(label))
@@ -527,6 +535,7 @@ class TailFieldPrepareWorker(QThread):
                     errors="replace",
                     bufsize=1,
                     env=environment,
+                    creationflags=WINDOWS_CREATION_FLAGS,
                 )
                 self._process = process
                 if self._cancel_requested or self.isInterruptionRequested():

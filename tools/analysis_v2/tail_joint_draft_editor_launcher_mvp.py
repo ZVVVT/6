@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -33,6 +34,13 @@ try:
 except ImportError as exc:
     print("缺少依赖：", exc)
     raise SystemExit(1) from exc
+
+
+WINDOWS_CREATION_FLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if os.name == "nt"
+    else 0
+)
 
 
 SCHEMA_VERSION = "tail_joint_draft_editor_adapter_mvp_v2_reuse"
@@ -494,7 +502,11 @@ def main() -> int:
             command = [str(Path(sys.executable).resolve())] + editor_arguments
             if args.validate_editor_input:
                 command.append("--validate-only")
-            completed = subprocess.run(command, cwd=str(editor_output_dir))
+            completed = subprocess.run(
+                command,
+                cwd=str(editor_output_dir),
+                creationflags=WINDOWS_CREATION_FLAGS,
+            )
             if completed.returncode:
                 raise RuntimeError(
                     f"TailDraft编辑器退出码：{completed.returncode}"
@@ -607,6 +619,7 @@ def main() -> int:
     completed = subprocess.run(
         command,
         cwd=str(editor_output_dir),
+        creationflags=WINDOWS_CREATION_FLAGS,
     )
     if completed.returncode:
         raise RuntimeError(
