@@ -363,6 +363,9 @@ for name in modules:
 
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'assets') -Destination $OutputRoot -Recurse
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'pipelines') -Destination $OutputRoot -Recurse
+    # 外置 core 仅供 MvImageID 的独立 Python 子进程导入。来源必须与
+    # pipelines/tools 一样是 git archive 生成的同一份干净源码。
+    Copy-Item -LiteralPath (Join-Path $SourceRoot 'core') -Destination $OutputRoot -Recurse
 
     foreach ($item in $ToolsWhitelist) {
         Copy-RequiredFile $item $SourceRoot $OutputRoot
@@ -454,6 +457,95 @@ print("config.ini 检查通过")
         throw '成品 config.ini 解析检查失败。'
     }
 
+    $RequiredExternalRuntimePaths = @(
+        'core',
+        'core\analysis_v2\tail_measurement_service.py',
+        'tools\analysis_v2\tail_joint_promote_measure_v2.py'
+    )
+    foreach ($relative in $RequiredExternalRuntimePaths) {
+        if (-not (Test-Path -LiteralPath (Join-Path $OutputRoot $relative))) {
+            throw "成品缺少 MvImageID Python 运行时路径：$relative"
+        }
+    }
+
+    $ForbiddenCoreFiles = Get-ChildItem -LiteralPath (Join-Path $OutputRoot 'core') `
+        -Recurse -Force |
+        Where-Object {
+            $_.Name -eq '__pycache__' -or
+            $_.Extension -eq '.pyc'
+        }
+    if ($ForbiddenCoreFiles) {
+        throw "外置 core 含缓存文件：$($ForbiddenCoreFiles.FullName -join ', ')"
+    }
+
+    $ExternalRuntimeCheck = @'
+import configparser
+import importlib
+import sys
+from pathlib import Path
+
+product_root = Path(sys.argv[1]).resolve()
+config_path = product_root / "config.ini"
+parser = configparser.ConfigParser()
+if not parser.read(str(config_path), encoding="utf-8"):
+    raise SystemExit("无法读取成品 config.ini：{}".format(config_path))
+
+sys.path.insert(0, str(product_root))
+from core.analysis_v2.tail_measurement_service import TailMeasurementService
+
+module = importlib.import_module(
+    "tools.analysis_v2.tail_joint_promote_measure_v2"
+)
+resolved_root = module.find_project_root(
+    product_root / "tools" / "analysis_v2" /
+    "tail_joint_promote_measure_v2.py",
+    str(product_root),
+)
+if resolved_root != product_root:
+    raise SystemExit(
+        "find_project_root 返回异常：{} != {}".format(
+            resolved_root, product_root
+        )
+    )
+print("MvImageID Python 外置 core/tools 导入检查通过：{}".format(product_root))
+'@
+    $ExternalRuntimeCheckPath = Join-Path $BuildRoot 'verify_external_runtime.py'
+    [System.IO.File]::WriteAllText(
+        $ExternalRuntimeCheckPath,
+        $ExternalRuntimeCheck,
+        $Utf8NoBom
+    )
+
+    $RuntimeConfigParser = @'
+import configparser
+import sys
+
+parser = configparser.ConfigParser()
+if not parser.read(sys.argv[1], encoding="utf-8"):
+    raise SystemExit("无法读取成品 config.ini")
+value = parser.get("MvImageID", "python_exe", fallback="").strip()
+if not value:
+    raise SystemExit("config.ini 缺少 [MvImageID] python_exe")
+print(value)
+'@
+    $RuntimeConfigParserPath = Join-Path $BuildRoot 'read_mvimageid_python.py'
+    [System.IO.File]::WriteAllText(
+        $RuntimeConfigParserPath,
+        $RuntimeConfigParser,
+        $Utf8NoBom
+    )
+    $MvImageIDPython = (& $BuildPython $RuntimeConfigParserPath $ConfigPath).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($MvImageIDPython)) {
+        throw '无法从成品 config.ini 读取 MvImageID Python。'
+    }
+    if (-not (Test-Path -LiteralPath $MvImageIDPython -PathType Leaf)) {
+        throw "成品 config.ini 配置的 MvImageID Python 不存在：$MvImageIDPython"
+    }
+    & $MvImageIDPython $ExternalRuntimeCheckPath $OutputRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw 'MvImageID Python 无法导入成品外置 core/tools。'
+    }
+
     foreach ($emptyDir in @('data', 'reports', 'workspace')) {
         New-Item -ItemType Directory -Path (Join-Path $OutputRoot $emptyDir) |
             Out-Null
@@ -487,6 +579,7 @@ print("config.ini 检查通过")
         'SpermProteinAnalyzer.exe',
         '_internal',
         'assets',
+        'core',
         'pipelines',
         'tools\analysis_v2',
         'config.ini',
