@@ -1,0 +1,474 @@
+﻿[CmdletBinding()]
+param(
+    [ValidatePattern('^\d{8}$')]
+    [string]$BuildDate = '20260803',
+    [string]$BuildRoot = '',
+    [string]$OutputRoot = '',
+    [string]$PythonExe = ''
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+
+if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
+    $BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
+}
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = "F:\sperm_protein_analyzer_Test_$BuildDate"
+}
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir '..\..')).TrimEnd('\')
+$BuildRoot = [System.IO.Path]::GetFullPath($BuildRoot).TrimEnd('\')
+$OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
+
+function Test-IsSameOrChild([string]$Path, [string]$Parent) {
+    $pathFull = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $parentFull = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\')
+    return (
+        $pathFull.Equals($parentFull, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $pathFull.StartsWith(
+            $parentFull + '\',
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    )
+}
+
+function Assert-SafeTarget([string]$Path, [string]$Kind) {
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $root = [System.IO.Path]::GetPathRoot($full).TrimEnd('\')
+
+    if ($full.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Kind 不能是磁盘根目录：$full"
+    }
+    if (Test-IsSameOrChild $full $RepoRoot) {
+        throw "$Kind 不能位于主源码目录内：$full"
+    }
+
+    $ProtectedRoots = @(
+        'F:\sperm_protein_analyzer_pack_20260709',
+        'F:\sperm_protein_analyzer_Test_20260709',
+        'F:\MvImageID',
+        'F:\v1'
+    )
+    foreach ($protected in $ProtectedRoots) {
+        if (Test-IsSameOrChild $full $protected) {
+            throw "$Kind 指向受保护目录：$full"
+        }
+    }
+
+    if ($full -match '(?i)\\sperm_protein_analyzer_cleanup_quarantine[^\\]*(?:\\|$)' -or
+        $full -match '(?i)\\py38_fix_backups_[^\\]*(?:\\|$)') {
+        throw "$Kind 指向隔离或项目外备份目录：$full"
+    }
+}
+
+function Invoke-Git([string[]]$Arguments) {
+    & git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git 命令失败：git $($Arguments -join ' ')"
+    }
+}
+
+function Copy-RequiredFile(
+    [string]$RelativePath,
+    [string]$SourceRoot,
+    [string]$DestinationRoot
+) {
+    $source = Join-Path $SourceRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "正式 tools 白名单文件缺失：$RelativePath"
+    }
+
+    $destination = Join-Path $DestinationRoot $RelativePath
+    $parent = Split-Path -Parent $destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination
+}
+
+Assert-SafeTarget $BuildRoot '构建目录'
+Assert-SafeTarget $OutputRoot '成品目录'
+
+if ($BuildRoot.Equals($OutputRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw '构建目录与成品目录不能相同。'
+}
+if ((Test-IsSameOrChild $BuildRoot $OutputRoot) -or
+    (Test-IsSameOrChild $OutputRoot $BuildRoot)) {
+    throw '构建目录与成品目录不能互相包含。'
+}
+if (Test-Path -LiteralPath $BuildRoot) {
+    throw "构建目录已存在，拒绝覆盖：$BuildRoot"
+}
+if (Test-Path -LiteralPath $OutputRoot) {
+    throw "成品目录已存在，拒绝覆盖：$OutputRoot"
+}
+
+if ([string]::IsNullOrWhiteSpace($PythonExe)) {
+    $PythonExe = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+}
+$PythonExe = [System.IO.Path]::GetFullPath($PythonExe)
+
+if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
+    throw "未找到 Python 解释器：$PythonExe"
+}
+
+$PythonVersion = (& $PythonExe -c "import platform; print(platform.python_version())").Trim()
+if ($LASTEXITCODE -ne 0 -or $PythonVersion -ne '3.8.3') {
+    throw "需要 Python 3.8.3，当前检测结果：$PythonVersion"
+}
+
+$Status = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot status --porcelain=v1)
+if ($LASTEXITCODE -ne 0) {
+    throw '无法检查 Git 工作区状态。'
+}
+if ($Status) {
+    throw 'Git 工作区不是 clean，停止打包。'
+}
+
+$Branch = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot branch --show-current).Trim()
+$Commit = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot rev-parse HEAD).Trim()
+
+$ToolsWhitelist = @(
+    'tools\analysis_v2\direct_cellpose_worker.py',
+    'tools\analysis_v2\tail_joint_chain_candidate_mvp.py',
+    'tools\analysis_v2\tail_joint_draft_editor_launcher_mvp.py',
+    'tools\analysis_v2\tail_joint_draft_export_mvp.py',
+    'tools\analysis_v2\tail_joint_final_candidate_export_mvp.py',
+    'tools\analysis_v2\tail_joint_oneclick_v2.py',
+    'tools\analysis_v2\tail_joint_promote_measure_v2.py',
+    'tools\analysis_v2\tail_joint_promotion_staging_mvp.py',
+    'tools\analysis_v2\tail_joint_refine_candidate_mvp.py',
+    'tools\analysis_v2\tail_joint_region_preview_mvp.py',
+    'tools\analysis_v2\tail_joint_start_candidate_mvp.py',
+    'tools\analysis_v2\tail_legacy\tail_graph_stage1_extract.py',
+    'tools\analysis_v2\tail_legacy\tail_graph_stage1_1_topology_clean.py',
+    'tools\analysis_v2\tail_legacy\tail_graph_stage1_2_build_graph.py',
+    'tools\analysis_v2\tail_legacy\tail_result_editor_v2_3_draft_mvp.py'
+)
+
+foreach ($item in $ToolsWhitelist) {
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $item) -PathType Leaf)) {
+        throw "当前工作树中的正式 tools 白名单文件缺失：$item"
+    }
+}
+
+New-Item -ItemType Directory -Path $BuildRoot | Out-Null
+$TranscriptPath = Join-Path $BuildRoot 'build.log'
+$TranscriptStarted = $false
+$BuildSucceeded = $false
+
+try {
+    Start-Transcript -LiteralPath $TranscriptPath | Out-Null
+    $TranscriptStarted = $true
+
+    $SourceRoot = Join-Path $BuildRoot 'source'
+    $ArchivePath = Join-Path $BuildRoot 'source.zip'
+    New-Item -ItemType Directory -Path $SourceRoot | Out-Null
+
+    $ArchiveArgs = @(
+        'archive',
+        '--format=zip',
+        "--output=$ArchivePath",
+        'HEAD',
+        '--',
+        '.',
+        ':(exclude)data/**',
+        ':(exclude)reports/**',
+        ':(exclude)workspace/**',
+        ':(exclude)**/__pycache__/**',
+        ':(exclude)**/*.pyc',
+        ':(exclude)**/*.cppipe1'
+    )
+    Invoke-Git $ArchiveArgs
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $SourceRoot
+
+    $RequiredPackagingFiles = @(
+        'packaging\windows\SpermProteinAnalyzer.spec',
+        'packaging\windows\requirements-build.txt',
+        'config.ini',
+        'pipeline_params.ini',
+        'main.py'
+    )
+    foreach ($relative in $RequiredPackagingFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot $relative) -PathType Leaf)) {
+            throw "Git 导出副本缺少必要文件：$relative"
+        }
+    }
+    foreach ($item in $ToolsWhitelist) {
+        if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot $item) -PathType Leaf)) {
+            throw "Git HEAD 导出副本缺少正式 tools 文件：$item"
+        }
+    }
+
+    $VenvRoot = Join-Path $BuildRoot '.venv_build'
+    & $PythonExe -m venv $VenvRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw '创建独立构建环境失败。'
+    }
+
+    $BuildPython = Join-Path $VenvRoot 'Scripts\python.exe'
+    $BuildPythonVersion = (& $BuildPython -c "import platform; print(platform.python_version())").Trim()
+    if ($LASTEXITCODE -ne 0 -or $BuildPythonVersion -ne '3.8.3') {
+        throw "独立构建环境版本异常：$BuildPythonVersion"
+    }
+
+    & $BuildPython -m pip install --disable-pip-version-check 'pip==24.3.1'
+    if ($LASTEXITCODE -ne 0) {
+        throw '升级独立构建环境 pip 失败。'
+    }
+
+    $Requirements = Join-Path $SourceRoot 'packaging\windows\requirements-build.txt'
+    & $BuildPython -m pip install `
+        --disable-pip-version-check `
+        --only-binary=:all: `
+        --requirement $Requirements
+    if ($LASTEXITCODE -ne 0) {
+        throw '安装构建依赖失败。'
+    }
+
+    & $BuildPython -m pip check
+    if ($LASTEXITCODE -ne 0) {
+        throw '构建环境依赖一致性检查失败。'
+    }
+
+    $ImportSmoke = @'
+import importlib
+
+modules = [
+    "PyInstaller",
+    "PySide6",
+    "numpy",
+    "pandas",
+    "openpyxl",
+    "PIL",
+    "reportlab",
+    "cv2",
+    "tifffile",
+]
+
+for name in modules:
+    module = importlib.import_module(name)
+    version = getattr(module, "__version__", "unknown")
+    print(f"{name}={version}")
+'@
+    & $BuildPython -c $ImportSmoke
+    if ($LASTEXITCODE -ne 0) {
+        throw '构建环境关键模块导入检查失败。'
+    }
+
+    $EnvironmentFile = Join-Path $BuildRoot 'build_environment.txt'
+    & $BuildPython -m pip freeze |
+        Set-Content -LiteralPath $EnvironmentFile -Encoding UTF8
+
+    $DistRoot = Join-Path $BuildRoot 'dist'
+    $WorkRoot = Join-Path $BuildRoot 'pyinstaller-work'
+    $SpecPath = Join-Path $SourceRoot 'packaging\windows\SpermProteinAnalyzer.spec'
+
+    Push-Location $SourceRoot
+    try {
+        & $BuildPython -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --distpath $DistRoot `
+            --workpath $WorkRoot `
+            $SpecPath
+
+        if ($LASTEXITCODE -ne 0) {
+            throw 'PyInstaller 构建失败。'
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $OnedirRoot = Join-Path $DistRoot 'SpermProteinAnalyzer'
+    $ExePath = Join-Path $OnedirRoot 'SpermProteinAnalyzer.exe'
+    $InternalPath = Join-Path $OnedirRoot '_internal'
+
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+        throw '未生成 SpermProteinAnalyzer.exe。'
+    }
+    if (-not (Test-Path -LiteralPath $InternalPath -PathType Container)) {
+        throw '未生成 _internal 目录。'
+    }
+
+    New-Item -ItemType Directory -Path $OutputRoot | Out-Null
+
+    Get-ChildItem -LiteralPath $OnedirRoot -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $OutputRoot -Recurse
+    }
+
+    Copy-Item -LiteralPath (Join-Path $SourceRoot 'assets') -Destination $OutputRoot -Recurse
+    Copy-Item -LiteralPath (Join-Path $SourceRoot 'pipelines') -Destination $OutputRoot -Recurse
+
+    foreach ($item in $ToolsWhitelist) {
+        Copy-RequiredFile $item $SourceRoot $OutputRoot
+    }
+
+    Copy-Item -LiteralPath (Join-Path $SourceRoot 'config.ini') -Destination $OutputRoot
+    Copy-Item -LiteralPath (Join-Path $SourceRoot 'pipeline_params.ini') -Destination $OutputRoot
+
+    $ConfigPath = Join-Path $OutputRoot 'config.ini'
+    $ConfigText = [System.IO.File]::ReadAllText($ConfigPath)
+
+    if ($ConfigText -notmatch '(?m)^\[AnalysisV2\]\s*$') {
+        throw 'config.ini 缺少 [AnalysisV2]，拒绝生成不完整配置。'
+    }
+
+    $AnalysisV2Match = [regex]::Match(
+        $ConfigText,
+        '(?ms)^\[AnalysisV2\]\s*\r?\n.*?(?=^\[|\z)'
+    )
+    if (-not $AnalysisV2Match.Success) {
+        throw '无法解析 config.ini 的 [AnalysisV2]。'
+    }
+
+    $AnalysisV2Section = $AnalysisV2Match.Value
+    if ($AnalysisV2Section -match '(?m)^enabled\s*=') {
+        $AnalysisV2Section = [regex]::Replace(
+            $AnalysisV2Section,
+            '(?m)^(enabled\s*=\s*)[^\r\n]*',
+            '${1}true'
+        )
+    }
+    else {
+        $AnalysisV2Section = $AnalysisV2Section -replace `
+            '(^\[AnalysisV2\]\s*\r?\n)', `
+            "`$1enabled = true`r`n"
+    }
+
+    $ConfigText = (
+        $ConfigText.Substring(0, $AnalysisV2Match.Index) +
+        $AnalysisV2Section +
+        $ConfigText.Substring(
+            $AnalysisV2Match.Index + $AnalysisV2Match.Length
+        )
+    )
+
+    $RequiredConfigValues = @(
+        'source_project_dir = F:\MvImageID',
+        'plugins_directory = F:\MvImageID\C-plugins\active_plugins',
+        'python_exe = F:\MvImageID\.venv\Scripts\python.exe',
+        'module_name = MvImageID'
+    )
+    foreach ($value in $RequiredConfigValues) {
+        if ($ConfigText -notmatch [regex]::Escape($value)) {
+            throw "config.ini 缺少必要配置：$value"
+        }
+    }
+
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($ConfigPath, $ConfigText, $Utf8NoBom)
+
+    $ConfigBytes = [System.IO.File]::ReadAllBytes($ConfigPath)
+    if ($ConfigBytes.Length -ge 3 -and
+        $ConfigBytes[0] -eq 0xEF -and
+        $ConfigBytes[1] -eq 0xBB -and
+        $ConfigBytes[2] -eq 0xBF) {
+        throw 'config.ini 仍含 UTF-8 BOM。'
+    }
+
+    $ConfigCheck = @'
+import configparser
+import sys
+
+parser = configparser.ConfigParser()
+loaded = parser.read(sys.argv[1], encoding="utf-8")
+if not loaded:
+    raise SystemExit("config.ini 无法读取")
+if not parser.getboolean("AnalysisV2", "enabled"):
+    raise SystemExit("AnalysisV2 未启用")
+print("config.ini 检查通过")
+'@
+    & $BuildPython -c $ConfigCheck $ConfigPath
+    if ($LASTEXITCODE -ne 0) {
+        throw '成品 config.ini 解析检查失败。'
+    }
+
+    foreach ($emptyDir in @('data', 'reports', 'workspace')) {
+        New-Item -ItemType Directory -Path (Join-Path $OutputRoot $emptyDir) |
+            Out-Null
+    }
+
+    foreach ($emptyDir in @('data', 'reports', 'workspace')) {
+        $target = Join-Path $OutputRoot $emptyDir
+        if (Get-ChildItem -LiteralPath $target -Force) {
+            throw "$emptyDir 目录不是空目录。"
+        }
+    }
+
+    $PipelineBackups = Get-ChildItem -LiteralPath $OutputRoot -Recurse -File |
+        Where-Object { $_.Name -like '*.cppipe1' }
+    if ($PipelineBackups) {
+        throw "成品误含 cppipe1 备份：$($PipelineBackups.FullName -join ', ')"
+    }
+
+    foreach ($item in $ToolsWhitelist) {
+        if (-not (Test-Path -LiteralPath (Join-Path $OutputRoot $item) -PathType Leaf)) {
+            throw "成品缺少正式 tools 文件：$item"
+        }
+    }
+
+    $ExcludedTool = Join-Path $OutputRoot 'tools\analysis_v2\tail_corner_guard_replay_v1.py'
+    if (Test-Path -LiteralPath $ExcludedTool) {
+        throw '成品误含排除的 tail_corner_guard_replay_v1.py。'
+    }
+
+    $RequiredOutputPaths = @(
+        'SpermProteinAnalyzer.exe',
+        '_internal',
+        'assets',
+        'pipelines',
+        'tools\analysis_v2',
+        'config.ini',
+        'pipeline_params.ini',
+        'data',
+        'reports',
+        'workspace'
+    )
+    foreach ($relative in $RequiredOutputPaths) {
+        if (-not (Test-Path -LiteralPath (Join-Path $OutputRoot $relative))) {
+            throw "成品缺少必要路径：$relative"
+        }
+    }
+
+    $CommitText = "branch=$Branch`r`ncommit=$Commit`r`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $OutputRoot 'git_source_commit.txt'),
+        $CommitText,
+        $Utf8NoBom
+    )
+
+    Copy-Item -LiteralPath $EnvironmentFile `
+        -Destination (Join-Path $OutputRoot 'build_environment.txt')
+
+    $ManifestLines = Get-ChildItem -LiteralPath $OutputRoot -Recurse -File |
+        Sort-Object FullName |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($OutputRoot.Length).TrimStart('\')
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            "$hash  $relative"
+        }
+
+    [System.IO.File]::WriteAllLines(
+        (Join-Path $OutputRoot 'build_manifest.txt'),
+        $ManifestLines,
+        $Utf8NoBom
+    )
+
+    $BuildSucceeded = $true
+}
+finally {
+    if ($TranscriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        }
+        catch {
+            Write-Warning "停止构建日志记录失败：$($_.Exception.Message)"
+        }
+    }
+}
+
+if ($BuildSucceeded) {
+    Write-Host "构建完成：$OutputRoot"
+}
