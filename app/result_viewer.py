@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import re
 
 from PySide6.QtCore import Qt, QUrl, QTimer, QEvent
@@ -470,6 +470,7 @@ class ResultViewer(QWidget):
             return {
                 "adjusted_mean_intensity": item.get("mean_intensity"),
                 "adjusted_expression_rate": item.get("expression_rate"),
+                "adjusted_positive_count": item.get("positive_count"),
                 "message": "",
             }
         return self.adjustment_service.adjust_result(
@@ -478,6 +479,8 @@ class ResultViewer(QWidget):
             protein_part=self.protein_part,
             raw_mean_intensity=item.get("mean_intensity"),
             raw_expression_rate=item.get("expression_rate"),
+            raw_total_sperm_count=item.get("sperm_count"),
+            raw_positive_count=item.get("positive_count"),
         )
 
     def refresh_summary(self, parser: ResultParser):
@@ -505,7 +508,10 @@ class ResultViewer(QWidget):
             values = [
                 item.get("image_number", ""),
                 item.get("sperm_count", 0),
-                item.get("positive_count", 0),
+                adjusted.get(
+                    "adjusted_positive_count",
+                    item.get("positive_count", 0),
+                ),
                 self.format_rate_for_display(adjusted.get("adjusted_expression_rate")),
                 self.format_int_for_display(adjusted.get("adjusted_mean_intensity")),
             ]
@@ -521,7 +527,10 @@ class ResultViewer(QWidget):
         total_values = [
             "合计",
             total.get("sperm_count", 0),
-            total.get("positive_count", 0),
+            total_adjusted.get(
+                "adjusted_positive_count",
+                total.get("positive_count", 0),
+            ),
             self.format_rate_for_display(total_adjusted.get("adjusted_expression_rate")),
             self.format_int_for_display(total_adjusted.get("adjusted_mean_intensity")),
         ]
@@ -1111,7 +1120,7 @@ class ResultViewer(QWidget):
             current_text = (
                 f"当前视野：{self.current_field_no}\n"
                 f"精子数：{current_row.get('sperm_count', 0)}\n"
-                f"共定位数：{current_row.get('positive_count', 0)}\n"
+                f"共定位数：{current_adjusted.get('adjusted_positive_count', current_row.get('positive_count', 0))}\n"
                 f"标定率：{self.format_rate_for_display(current_adjusted.get('adjusted_expression_rate'))}\n"
                 f"荧光强度：{self.format_int_for_display(current_adjusted.get('adjusted_mean_intensity'))}"
             )
@@ -1125,7 +1134,7 @@ class ResultViewer(QWidget):
                 f"\n\n合计：\n"
                 f"视野数：{total.get('field_count', 0)}\n"
                 f"精子总数：{total.get('sperm_count', 0)}\n"
-                f"共定位数：{total.get('positive_count', 0)}\n"
+                f"共定位数：{total_adjusted.get('adjusted_positive_count', total.get('positive_count', 0))}\n"
                 f"标定率：{self.format_rate_for_display(total_adjusted.get('adjusted_expression_rate'))}\n"
                 f"荧光强度：{self.format_int_for_display(total_adjusted.get('adjusted_mean_intensity'))}"
             )

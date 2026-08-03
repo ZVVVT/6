@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import re
 
 from PySide6.QtCore import Qt, Signal, QUrl, QSize
@@ -774,6 +774,8 @@ class CaseDetailWindow(QWidget):
                     protein_part=actual_part,
                     raw_mean_intensity=analysis.get("mean_intensity"),
                     raw_expression_rate=analysis.get("expression_rate"),
+                    raw_total_sperm_count=analysis.get("total_sperm_count"),
+                    raw_positive_count=analysis.get("positive_count"),
                 )
                 values = [
                     name,
@@ -781,7 +783,10 @@ class CaseDetailWindow(QWidget):
                     "已完成",
                     analysis.get("total_fields", 0),
                     analysis.get("total_sperm_count", 0),
-                    analysis.get("positive_count", 0),
+                    adjusted.get(
+                        "adjusted_positive_count",
+                        analysis.get("positive_count", 0),
+                    ),
                     self.result_adjustment_service.format_expression_rate(
                         adjusted.get("adjusted_expression_rate")
                     ),

@@ -1,4 +1,4 @@
-import shutil
+﻿import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -951,6 +951,7 @@ class SettingsWindow(QWidget):
         tips = QLabel(
             "说明：尾部标定率属于当前病例内部校正，只作用于头部荧光强度；"
             "荧光强度整体系数和标定率整体系数只作用于最终展示与报告。"
+            "可选让共定位数跟随校正后的标定率同步；"
             "原始数据库、CSV、TIFF 和测量结果不会被改写。"
         )
         tips.setWordWrap(True)
@@ -964,6 +965,7 @@ class SettingsWindow(QWidget):
 
         self.result_adjustment_enabled_check = QCheckBox("启用最终结果校正")
         self.use_case_tail_rate_check = QCheckBox("头部荧光强度乘当前病例唯一尾部的原始标定率")
+        self.sync_positive_count_check = QCheckBox("共定位数跟随校正后的标定率同步")
 
         self.default_tail_rate_ratio_edit = PipelineParamLineEdit(0.0, 1.0, 4)
         self.fluorescence_result_factor_edit = PipelineParamLineEdit(0.0001, 1000.0, 4)
@@ -981,6 +983,11 @@ class SettingsWindow(QWidget):
             "作用于所有蛋白的最终标定率。不会反向影响头部荧光强度使用的尾部内部比例。"
             "校正后的最终标定率限制在 0%～100%。"
         )
+        self.sync_positive_count_check.setToolTip(
+            "勾选后，页面中的共定位数按“精子总数 × 校正后标定率 ÷ 100”"
+            "四舍五入并限制在 0～精子总数；不勾选时继续显示原始共定位数。"
+            "数据库、CSV 和原始分析结果不会被修改。"
+        )
         self.result_display_decimals_edit.setToolTip(
             "仅控制页面和 PDF 显示的小数位，不改变内部计算精度。"
         )
@@ -990,12 +997,14 @@ class SettingsWindow(QWidget):
         form.addRow("无尾部时默认比例：", self.default_tail_rate_ratio_edit)
         form.addRow("荧光强度整体系数：", self.fluorescence_result_factor_edit)
         form.addRow("标定率整体系数：", self.expression_rate_result_factor_edit)
+        form.addRow("共定位数同步：", self.sync_positive_count_check)
         form.addRow("最终显示小数位：", self.result_display_decimals_edit)
 
         warning = QLabel(
             "规则：当前病例最新有效结果中无尾部时使用默认比例；存在一个尾部时使用其原始标定率÷100；"
             "存在多个尾部时为避免误用自动回退默认比例。"
             "校正后的最终荧光强度限制在 0～255，最终标定率限制在 0%～100%；"
+            "勾选共定位数同步时，共定位数仅按校正后的标定率重新计算用于展示，原始数据不变；"
             "过大的整体系数可能使结果达到上限。"
         )
         warning.setWordWrap(True)
@@ -1345,6 +1354,9 @@ class SettingsWindow(QWidget):
         self.expression_rate_result_factor_edit.setValue(
             self.config.get_expression_rate_result_factor()
         )
+        self.sync_positive_count_check.setChecked(
+            self.config.is_sync_positive_count_with_expression_rate()
+        )
         self.result_display_decimals_edit.setValue(
             self.config.get_result_display_decimals()
         )
@@ -1416,6 +1428,11 @@ class SettingsWindow(QWidget):
         )
         self.config.set(
             "ResultAdjustment", "expression_rate_result_factor", str(expression_rate_factor)
+        )
+        self.config.set(
+            "ResultAdjustment",
+            "sync_positive_count_with_expression_rate",
+            "true" if self.sync_positive_count_check.isChecked() else "false",
         )
         self.config.set(
             "ResultAdjustment", "display_decimals", str(display_decimals)

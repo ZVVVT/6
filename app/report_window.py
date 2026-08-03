@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
@@ -688,13 +688,18 @@ class ReportWindow(QWidget):
                     protein_part=actual_part,
                     raw_mean_intensity=row.get("mean_intensity"),
                     raw_expression_rate=row.get("expression_rate"),
+                    raw_total_sperm_count=row.get("total_sperm_count"),
+                    raw_positive_count=row.get("positive_count"),
                 )
                 values = [
                     row.get("protein_name", ""),
                     actual_part,
                     row.get("total_fields", 0),
                     row.get("total_sperm_count", 0),
-                    row.get("positive_count", 0),
+                    adjusted.get(
+                        "adjusted_positive_count",
+                        row.get("positive_count", 0),
+                    ),
                     self.result_adjustment_service.format_expression_rate(
                         adjusted.get("adjusted_expression_rate")
                     ),

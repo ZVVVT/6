@@ -1,4 +1,4 @@
-import configparser
+﻿import configparser
 import math
 import sys
 from pathlib import Path
@@ -111,6 +111,13 @@ class ConfigManager:
         if not math.isfinite(value) or value <= 0.0:
             return 1.0
         return value
+
+    def is_sync_positive_count_with_expression_rate(self) -> bool:
+        return self.get_bool(
+            "ResultAdjustment",
+            "sync_positive_count_with_expression_rate",
+            False,
+        )
 
     def get_result_display_decimals(self) -> int:
         value = self.get_int("ResultAdjustment", "display_decimals", 1)
@@ -461,6 +468,7 @@ class ConfigManager:
                 "default_tail_rate_ratio": "1.0",
                 "fluorescence_result_factor": "1.0",
                 "expression_rate_result_factor": "1.0",
+                "sync_positive_count_with_expression_rate": "false",
                 "display_decimals": "1",
             },
             "Report": {

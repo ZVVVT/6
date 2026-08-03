@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """统一的蛋白分析结果校正服务。
 
 设计边界：
@@ -6,8 +6,9 @@
 2. 当前病例最多允许一个“最新有效尾部结果”作为病例内部校正来源；
 3. 内部尾部比例只作用于头部荧光强度；
 4. 荧光强度整体系数、标定率整体系数只作用于最终展示和报告；
-5. 最终荧光强度限制在等效 8-bit 的 0～255，最终标定率限制在 0%～100%；
-6. 所有舍入仅发生在格式化阶段。
+5. 可选让展示用共定位数按校正后的标定率与精子总数同步；
+6. 最终荧光强度限制在等效 8-bit 的 0～255，最终标定率限制在 0%～100%；
+7. 数据库中的原始精子数、共定位数和标定率始终保持不变。
 """
 
 from __future__ import annotations
@@ -35,6 +36,13 @@ class ResultAdjustmentService:
         if not math.isfinite(number):
             return None
         return number
+
+    @classmethod
+    def _nonnegative_int(cls, value: Any) -> Optional[int]:
+        number = cls._finite_float(value)
+        if number is None or number < 0.0:
+            return None
+        return int(round(number))
 
     @staticmethod
     def _normalize_part(value: Any) -> str:
@@ -162,9 +170,13 @@ class ResultAdjustmentService:
         protein_part: Any,
         raw_mean_intensity: Any,
         raw_expression_rate: Any,
+        raw_total_sperm_count: Any = None,
+        raw_positive_count: Any = None,
     ) -> Dict[str, Any]:
         raw_intensity = self._finite_float(raw_mean_intensity)
         raw_rate = self._finite_float(raw_expression_rate)
+        total_sperm_count = self._nonnegative_int(raw_total_sperm_count)
+        positive_count = self._nonnegative_int(raw_positive_count)
         part = self._normalize_part(protein_part)
         normalized_key = self._normalize_protein_key(protein_key)
 
@@ -179,6 +191,11 @@ class ResultAdjustmentService:
             "adjusted_expression_rate": raw_rate,
             "unclamped_expression_rate": raw_rate,
             "expression_rate_was_capped": False,
+            "raw_total_sperm_count": total_sperm_count,
+            "raw_positive_count": positive_count,
+            "adjusted_positive_count": positive_count,
+            "positive_count_sync_enabled": False,
+            "positive_count_was_adjusted": False,
             "case_tail_rate_ratio": 1.0,
             "applied_real_tail_rate": False,
             "used_default_tail_rate": False,
@@ -207,6 +224,26 @@ class ResultAdjustmentService:
             else min(max(unclamped_rate, 0.0), 100.0)
         )
 
+        sync_positive_count = (
+            self.config.is_sync_positive_count_with_expression_rate()
+        )
+        adjusted_positive_count = positive_count
+        positive_count_sync_applied = bool(
+            sync_positive_count
+            and total_sperm_count is not None
+            and adjusted_rate is not None
+        )
+        if positive_count_sync_applied:
+            # 计数必须与最终展示标定率一致。计数均为非负数，因此 floor(x + 0.5)
+            # 表示常规四舍五入，避免 Python round() 的银行家舍入造成 0.5 偏差。
+            calculated_count = int(
+                math.floor(total_sperm_count * adjusted_rate / 100.0 + 0.5)
+            )
+            adjusted_positive_count = min(
+                max(calculated_count, 0),
+                total_sperm_count,
+            )
+
         tail_info = {
             "rate_ratio": 1.0,
             "applied_real_tail_rate": False,
@@ -231,6 +268,15 @@ class ResultAdjustmentService:
             else min(max(unclamped_intensity, 0.0), 255.0)
         )
 
+        adjustment_message = str(tail_info.get("message", "") or "")
+        if positive_count_sync_applied:
+            sync_message = "共定位数已按校正后标定率与精子总数同步。"
+            adjustment_message = (
+                f"{adjustment_message.rstrip('。')}。{sync_message}"
+                if adjustment_message
+                else sync_message
+            )
+
         result.update(
             {
                 "adjusted_mean_intensity": adjusted_intensity,
@@ -244,11 +290,17 @@ class ResultAdjustmentService:
                 "expression_rate_was_capped": bool(
                     unclamped_rate is not None and adjusted_rate != unclamped_rate
                 ),
+                "adjusted_positive_count": adjusted_positive_count,
+                "positive_count_sync_enabled": bool(sync_positive_count),
+                "positive_count_was_adjusted": bool(
+                    positive_count_sync_applied
+                    and adjusted_positive_count != positive_count
+                ),
                 "case_tail_rate_ratio": float(tail_info.get("rate_ratio", 1.0) or 0.0),
                 "applied_real_tail_rate": bool(tail_info.get("applied_real_tail_rate")),
                 "used_default_tail_rate": bool(tail_info.get("used_default_tail_rate")),
                 "multiple_tail_conflict": bool(tail_info.get("multiple_tail_conflict")),
-                "message": str(tail_info.get("message", "") or ""),
+                "message": adjustment_message,
             }
         )
         return result
@@ -271,9 +323,15 @@ class ResultAdjustmentService:
             protein_part=resolved_part,
             raw_mean_intensity=copied.get("mean_intensity"),
             raw_expression_rate=copied.get("expression_rate"),
+            raw_total_sperm_count=copied.get(
+                "total_sperm_count",
+                copied.get("sperm_count"),
+            ),
+            raw_positive_count=copied.get("positive_count"),
         )
         copied["display_mean_intensity"] = adjusted.get("adjusted_mean_intensity")
         copied["display_expression_rate"] = adjusted.get("adjusted_expression_rate")
+        copied["display_positive_count"] = adjusted.get("adjusted_positive_count")
         copied["result_adjustment"] = adjusted
         return copied
 
