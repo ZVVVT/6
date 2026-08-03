@@ -4,11 +4,60 @@ param(
     [string]$BuildDate = '20260803',
     [string]$BuildRoot = '',
     [string]$OutputRoot = '',
-    [string]$PythonExe = ''
+    [string]$PythonExe = '',
+    [string]$PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+
+function Initialize-PipNetwork([string]$IndexUrl) {
+    try {
+        $uri = [System.Uri]$IndexUrl
+    }
+    catch {
+        throw "无效的 pip 镜像地址：$IndexUrl"
+    }
+
+    if (-not $uri.IsAbsoluteUri -or [string]::IsNullOrWhiteSpace($uri.Host)) {
+        throw "无效的 pip 镜像地址：$IndexUrl"
+    }
+
+    $hostName = $uri.Host
+    $bypassItems = @(
+        '127.0.0.1',
+        'localhost',
+        $hostName,
+        ".$hostName"
+    )
+
+    $existingBypass = @()
+    foreach ($value in @($env:NO_PROXY, $env:no_proxy)) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $existingBypass += $value.Split(',') |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_ }
+        }
+    }
+
+    $mergedBypass = @($existingBypass + $bypassItems) |
+        Select-Object -Unique
+
+    $env:NO_PROXY = $mergedBypass -join ','
+    $env:no_proxy = $env:NO_PROXY
+
+    Remove-Item Env:PIP_PROXY -ErrorAction SilentlyContinue
+    Remove-Item Env:pip_proxy -ErrorAction SilentlyContinue
+
+    # 禁止 pip 读取用户或系统级 pip.ini，所有关键参数由本脚本显式传入。
+    $env:PIP_CONFIG_FILE = 'NUL'
+    $env:PIP_INDEX_URL = $IndexUrl
+    $env:PIP_TRUSTED_HOST = $hostName
+
+    return $hostName
+}
+
+$PipTrustedHost = Initialize-PipNetwork $PipIndexUrl
 
 if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
     $BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
@@ -212,7 +261,12 @@ try {
         throw "独立构建环境版本异常：$BuildPythonVersion"
     }
 
-    & $BuildPython -m pip install --disable-pip-version-check 'pip==24.3.1'
+    & $BuildPython -m pip install `
+        --disable-pip-version-check `
+        --index-url $PipIndexUrl `
+        --trusted-host $PipTrustedHost `
+        --no-cache-dir `
+        'pip==24.3.1'
     if ($LASTEXITCODE -ne 0) {
         throw '升级独立构建环境 pip 失败。'
     }
@@ -220,6 +274,8 @@ try {
     $Requirements = Join-Path $SourceRoot 'packaging\windows\requirements-build.txt'
     & $BuildPython -m pip install `
         --disable-pip-version-check `
+        --index-url $PipIndexUrl `
+        --trusted-host $PipTrustedHost `
         --only-binary=:all: `
         --requirement $Requirements
     if ($LASTEXITCODE -ne 0) {
