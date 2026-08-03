@@ -251,7 +251,14 @@ for name in modules:
     version = getattr(module, "__version__", "unknown")
     print(f"{name}={version}")
 '@
-    & $BuildPython -c $ImportSmoke
+    $ImportSmokePath = Join-Path $BuildRoot 'verify_build_imports.py'
+    $Utf8NoBomForChecks = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText(
+        $ImportSmokePath,
+        $ImportSmoke,
+        $Utf8NoBomForChecks
+    )
+    & $BuildPython $ImportSmokePath
     if ($LASTEXITCODE -ne 0) {
         throw '构建环境关键模块导入检查失败。'
     }
@@ -380,7 +387,13 @@ if not parser.getboolean("AnalysisV2", "enabled"):
     raise SystemExit("AnalysisV2 未启用")
 print("config.ini 检查通过")
 '@
-    & $BuildPython -c $ConfigCheck $ConfigPath
+    $ConfigCheckPath = Join-Path $BuildRoot 'verify_config.py'
+    [System.IO.File]::WriteAllText(
+        $ConfigCheckPath,
+        $ConfigCheck,
+        $Utf8NoBom
+    )
+    & $BuildPython $ConfigCheckPath $ConfigPath
     if ($LASTEXITCODE -ne 0) {
         throw '成品 config.ini 解析检查失败。'
     }
