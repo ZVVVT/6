@@ -112,6 +112,53 @@ function Assert-SafeTarget([string]$Path, [string]$Kind) {
     }
 }
 
+function Remove-OutputPythonCache([string]$CacheRoot) {
+    $allowedRoots = @(
+        [System.IO.Path]::GetFullPath((Join-Path $OutputRoot 'core')).TrimEnd('\'),
+        [System.IO.Path]::GetFullPath((Join-Path $OutputRoot 'tools')).TrimEnd('\')
+    )
+    $cacheRootFull = [System.IO.Path]::GetFullPath($CacheRoot).TrimEnd('\')
+    $isAllowedRoot = $false
+    foreach ($allowedRoot in $allowedRoots) {
+        if ($cacheRootFull.Equals(
+                $allowedRoot,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            $isAllowedRoot = $true
+            break
+        }
+    }
+    if (-not $isAllowedRoot) {
+        throw "拒绝清理非成品 core/tools 路径：$cacheRootFull"
+    }
+    if (-not (Test-Path -LiteralPath $cacheRootFull -PathType Container)) {
+        return
+    }
+
+    $cacheDirectories = Get-ChildItem -LiteralPath $cacheRootFull `
+        -Recurse -Force -Directory |
+        Where-Object { $_.Name -eq '__pycache__' } |
+        Sort-Object { $_.FullName.Length } -Descending
+    foreach ($item in $cacheDirectories) {
+        if (-not (Test-IsSameOrChild $item.FullName $cacheRootFull)) {
+            throw "缓存目录超出允许清理范围：$($item.FullName)"
+        }
+        if (Test-Path -LiteralPath $item.FullName) {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force
+        }
+    }
+
+    $cacheFiles = Get-ChildItem -LiteralPath $cacheRootFull `
+        -Recurse -Force -File |
+        Where-Object { $_.Extension -eq '.pyc' -or $_.Extension -eq '.pyo' }
+    foreach ($item in $cacheFiles) {
+        if (-not (Test-IsSameOrChild $item.FullName $cacheRootFull)) {
+            throw "缓存文件超出允许清理范围：$($item.FullName)"
+        }
+        Remove-Item -LiteralPath $item.FullName -Force
+    }
+}
+
 function Invoke-Git([string[]]$Arguments) {
     & git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot @Arguments
     if ($LASTEXITCODE -ne 0) {
@@ -371,6 +418,9 @@ for name in modules:
         Copy-RequiredFile $item $SourceRoot $OutputRoot
     }
 
+    Remove-OutputPythonCache (Join-Path $OutputRoot 'core')
+    Remove-OutputPythonCache (Join-Path $OutputRoot 'tools')
+
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'config.ini') -Destination $OutputRoot
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'pipeline_params.ini') -Destination $OutputRoot
 
@@ -468,16 +518,6 @@ print("config.ini 检查通过")
         }
     }
 
-    $ForbiddenCoreFiles = Get-ChildItem -LiteralPath (Join-Path $OutputRoot 'core') `
-        -Recurse -Force |
-        Where-Object {
-            $_.Name -eq '__pycache__' -or
-            $_.Extension -eq '.pyc'
-        }
-    if ($ForbiddenCoreFiles) {
-        throw "外置 core 含缓存文件：$($ForbiddenCoreFiles.FullName -join ', ')"
-    }
-
     $ExternalRuntimeCheck = @'
 import configparser
 import importlib
@@ -541,9 +581,29 @@ print(value)
     if (-not (Test-Path -LiteralPath $MvImageIDPython -PathType Leaf)) {
         throw "成品 config.ini 配置的 MvImageID Python 不存在：$MvImageIDPython"
     }
-    & $MvImageIDPython $ExternalRuntimeCheckPath $OutputRoot
+    & $MvImageIDPython -B $ExternalRuntimeCheckPath $OutputRoot
     if ($LASTEXITCODE -ne 0) {
         throw 'MvImageID Python 无法导入成品外置 core/tools。'
+    }
+
+    $ForbiddenExternalCache = @(
+        Get-ChildItem -LiteralPath (Join-Path $OutputRoot 'core') `
+            -Recurse -Force |
+            Where-Object {
+                $_.Name -eq '__pycache__' -or
+                $_.Extension -eq '.pyc' -or
+                $_.Extension -eq '.pyo'
+            }
+        Get-ChildItem -LiteralPath (Join-Path $OutputRoot 'tools') `
+            -Recurse -Force |
+            Where-Object {
+                $_.Name -eq '__pycache__' -or
+                $_.Extension -eq '.pyc' -or
+                $_.Extension -eq '.pyo'
+            }
+    )
+    if ($ForbiddenExternalCache) {
+        throw "成品外置 core/tools 仍含 Python 缓存：`r`n$($ForbiddenExternalCache.FullName -join "`r`n")"
     }
 
     foreach ($emptyDir in @('data', 'reports', 'workspace')) {
