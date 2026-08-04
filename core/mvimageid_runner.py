@@ -209,7 +209,6 @@ class MvImageIDRunner:
 
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
-            env["PYTHONUTF8"] = "1"
             scripts_dir = Path(command[0]).parent
             env["PATH"] = str(scripts_dir) + os.pathsep + env.get("PATH", "")
 
@@ -241,28 +240,34 @@ class MvImageIDRunner:
                 )
 
                 assert process.stdout is not None
-                for line in process.stdout:
-                    if cancel_callback and cancel_callback():
-                        # 第一阶段只做温和终止；批量“取消后续分析”仍由上层控制。
-                        # 如确实进入这里，终止当前进程，避免界面无限等待。
-                        try:
-                            process.terminate()
-                        except Exception:
-                            pass
+                try:
+                    for line in process.stdout:
+                        if cancel_callback and cancel_callback():
+                            # 第一阶段只做温和终止；批量“取消后续分析”仍由上层控制。
+                            # 如确实进入这里，终止当前进程，避免界面无限等待。
+                            try:
+                                process.terminate()
+                            except Exception:
+                                pass
 
-                    line = line.rstrip()
-                    if not line:
-                        continue
-                    output_lines.append(line)
-                    last_lines.append(line)
-                    if len(last_lines) > 100:
-                        last_lines.pop(0)
-                    log_fp.write(line + "\n")
-                    log_fp.flush()
-                    if log_callback:
-                        log_callback(line)
+                        line = line.rstrip()
+                        if not line:
+                            continue
+                        output_lines.append(line)
+                        last_lines.append(line)
+                        if len(last_lines) > 100:
+                            last_lines.pop(0)
+                        log_fp.write(line + "\n")
+                        log_fp.flush()
+                        if log_callback:
+                            log_callback(line)
 
-                return_code = process.wait()
+                    return_code = process.wait()
+                except BaseException:
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait()
+                    raise
                 elapsed = time.time() - start_time
                 log_fp.write("\n" + "=" * 60 + "\n")
                 log_fp.write(f"ExitCode: {return_code}\n")

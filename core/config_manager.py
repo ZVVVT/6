@@ -28,6 +28,20 @@ class ConfigManager:
         self.config = configparser.ConfigParser()
         self.load()
 
+    def resolve_config_path(self, path_value) -> Path:
+        """Resolve a configured path against the application root.
+
+        Empty optional path values remain empty so callers can continue to use
+        them as "not configured" sentinels.
+        """
+        path_text = str(path_value or "").strip()
+        if not path_text:
+            return Path("")
+        path = Path(path_text)
+        if path.is_absolute():
+            return path
+        return self.app_root / path
+
     def load(self):
         self.config.read(self.config_path, encoding="utf-8")
 
@@ -193,24 +207,34 @@ class ConfigManager:
     # 工作目录 / 图片规则 / 蛋白配置
     # ------------------------------------------------------------------
     def get_workspace_root(self) -> Path:
-        return Path(self.get("Workspace", "root_dir", "workspace/cases"))
+        return self.resolve_config_path(
+            self.get("Workspace", "root_dir", "workspace/cases")
+        )
 
     def get_database_path(self) -> Path:
-        return Path(self.get("Workspace", "database", "data/analysis.db"))
+        return self.resolve_config_path(
+            self.get("Workspace", "database", "data/analysis.db")
+        )
 
     def get_report_dir(self) -> Path:
-        return Path(self.get("Workspace", "report_dir", "reports"))
+        return self.resolve_config_path(
+            self.get("Workspace", "report_dir", "reports")
+        )
 
     def get_qc_root_dir(self) -> Path:
         """质控微球测试根目录。
 
         默认使用 workspace/qc，质控每次运行会在其下创建 YYYYMMDD_01 目录。
         """
-        return Path(self.get("QC", "root_dir", r"workspace\qc"))
+        return self.resolve_config_path(
+            self.get("QC", "root_dir", r"workspace\qc")
+        )
 
     def get_qc_pipeline(self) -> Path:
         """质控微球荧光强度测试 Pipeline。"""
-        return Path(self.get_mvimageid("qc_pipeline", r"pipelines\pipeline_qc.cppipe"))
+        return self.resolve_config_path(
+            self.get_mvimageid("qc_pipeline", r"pipelines\pipeline_qc.cppipe")
+        )
 
     def get_image_rule(self) -> dict:
         return {
@@ -282,14 +306,14 @@ class ConfigManager:
         protein_key = self.normalize_protein_key(protein_name_or_key)
         custom_pipeline = self.get("ProteinPipelines", protein_key, "").strip()
         if custom_pipeline:
-            return Path(custom_pipeline)
+            return self.resolve_config_path(custom_pipeline)
 
         protein_part = self.get_protein_part(protein_key)
         if protein_part == "tail":
             pipeline = self.get_mvimageid("tail_pipeline", "")
         else:
             pipeline = self.get_mvimageid("head_pipeline", "")
-        return Path(pipeline)
+        return self.resolve_config_path(pipeline)
 
     def get_protein_intensity_min(self, protein_name_or_key: str) -> float:
         protein_key = self.normalize_protein_key(protein_name_or_key)
@@ -320,7 +344,9 @@ class ConfigManager:
     # MvImageID 配置
     # ------------------------------------------------------------------
     def get_source_project_dir(self) -> Path:
-        return Path(self.get_mvimageid("source_project_dir", r"F:\MvImageID"))
+        return self.resolve_config_path(
+            self.get_mvimageid("source_project_dir", r"F:\MvImageID")
+        )
 
     def get_python_exe(self) -> Path:
         """MvImageID 虚拟环境 Python 解释器。
@@ -330,19 +356,19 @@ class ConfigManager:
         """
         python_exe = self.get_mvimageid("python_exe", "").strip()
         if python_exe:
-            return Path(python_exe)
+            return self.resolve_config_path(python_exe)
         return self.get_source_project_dir() / ".venv" / "Scripts" / "python.exe"
 
     def get_module_name(self) -> str:
         return self.get_mvimageid("module_name", "MvImageID")
 
     def get_plugins_directory(self) -> Path:
-        return Path(self.get_mvimageid("plugins_directory", ""))
+        return self.resolve_config_path(self.get_mvimageid("plugins_directory", ""))
 
 
     def get_logo_path(self) -> Path:
         """报告 LOGO 路径。为兼容旧代码保留，不用于软件窗口图标。"""
-        return Path(self.get("Report", "logo_path", ""))
+        return self.resolve_config_path(self.get("Report", "logo_path", ""))
 
     # ------------------------------------------------------------------
     # 历史配置清理

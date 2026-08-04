@@ -84,7 +84,6 @@ class DirectCellposeRunner:
         environment.update({
             "PYTHONUNBUFFERED": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         })
         started_at = datetime.now().astimezone().isoformat(timespec="milliseconds")

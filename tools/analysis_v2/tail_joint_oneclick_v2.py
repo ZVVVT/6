@@ -568,20 +568,31 @@ def run_command(
     log_handle.write(banner)
     log_handle.flush()
 
+    child_env = os.environ.copy()
+    child_env["PYTHONIOENCODING"] = "utf-8"
     process = subprocess.Popen(
         [str(value) for value in command],
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        universal_newlines=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
+        env=child_env,
         creationflags=WINDOWS_CREATION_FLAGS,
     )
     assert process.stdout is not None
-    for line in process.stdout:
-        print(line, end="", flush=True)
-        log_handle.write(line)
-    return_code = process.wait()
+    try:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log_handle.write(line)
+        return_code = process.wait()
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        raise
     elapsed = time.perf_counter() - started
     footer = "[BATCH] DONE {} elapsed={:.3f}s return_code={}\n".format(
         label,

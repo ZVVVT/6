@@ -46,6 +46,7 @@ class TailPathService:
             raise FileNotFoundError("尾部历史算法不存在：{}".format(script_path))
 
         environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "utf-8"
         environment["MPLBACKEND"] = "Agg"
         cache_dir = self.task_root / "calibration" / "tail" / ".cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +70,9 @@ class TailPathService:
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         elapsed = time.perf_counter() - started
 

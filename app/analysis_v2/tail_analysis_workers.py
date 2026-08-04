@@ -89,35 +89,40 @@ class TailPathWorker(QThread):
         log_handle.write(subprocess.list2cmdline(command) + "\n")
         log_handle.flush()
 
-        environment = dict(__import__("os").environ)
-        environment["PYTHONIOENCODING"] = "utf-8"
-        environment["PYTHONUNBUFFERED"] = "1"
+        child_env = os.environ.copy()
+        child_env["PYTHONIOENCODING"] = "utf-8"
+        child_env["PYTHONUNBUFFERED"] = "1"
 
         process = subprocess.Popen(
             command,
             cwd=str(self.project_root),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True,
+            text=True,
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            env=environment,
+            env=child_env,
             creationflags=WINDOWS_CREATION_FLAGS,
         )
         if process.stdout is None:
             raise RuntimeError("{} 未能创建标准输出管道。".format(label))
 
         output_lines = []
-        for line in process.stdout:
-            output_lines.append(line)
-            log_handle.write(line)
-            log_handle.flush()
-            text = line.rstrip("\r\n")
-            if text:
-                self.log_signal.emit(text)
-
-        return_code = process.wait()
+        try:
+            for line in process.stdout:
+                output_lines.append(line)
+                log_handle.write(line)
+                log_handle.flush()
+                text = line.rstrip("\r\n")
+                if text:
+                    self.log_signal.emit(text)
+            return_code = process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            raise
         output = "".join(output_lines)
         log_handle.write(
             "===== {} return_code={} =====\n".format(label, return_code)
@@ -514,9 +519,9 @@ class TailFieldPrepareWorker(QThread):
                 "--log-path",
                 str(oneclick_log_path),
             ]
-            environment = dict(__import__("os").environ)
-            environment["PYTHONIOENCODING"] = "utf-8"
-            environment["PYTHONUNBUFFERED"] = "1"
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
+            child_env["PYTHONUNBUFFERED"] = "1"
             self.log_signal.emit(
                 "Analysis V2：视野 {} 头部已完成，后台开始准备对应尾部。".format(
                     self.field_id
@@ -530,11 +535,11 @@ class TailFieldPrepareWorker(QThread):
                     cwd=str(self.project_root),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    universal_newlines=True,
+                    text=True,
                     encoding="utf-8",
                     errors="replace",
                     bufsize=1,
-                    env=environment,
+                    env=child_env,
                     creationflags=WINDOWS_CREATION_FLAGS,
                 )
                 self._process = process
@@ -543,17 +548,23 @@ class TailFieldPrepareWorker(QThread):
                 output_lines = []
                 if process.stdout is None:
                     raise RuntimeError("尾部后台准备未能创建标准输出管道。")
-                for line in process.stdout:
-                    output_lines.append(line)
-                    log_handle.write(line)
-                    log_handle.flush()
-                    text = line.rstrip("\r\n")
-                    if text:
-                        self.log_signal.emit(
-                            "[{} 尾部后台] {}".format(self.field_id, text)
-                        )
-                return_code = process.wait()
-                self._process = None
+                try:
+                    for line in process.stdout:
+                        output_lines.append(line)
+                        log_handle.write(line)
+                        log_handle.flush()
+                        text = line.rstrip("\r\n")
+                        if text:
+                            self.log_signal.emit(
+                                "[{} 尾部后台] {}".format(self.field_id, text)
+                            )
+                    return_code = process.wait()
+                except BaseException:
+                    self._terminate_process_tree(process)
+                    process.wait()
+                    raise
+                finally:
+                    self._process = None
             if self._cancel_requested or self.isInterruptionRequested():
                 self.finished_signal.emit(
                     False, self.field_id, self._cancel_payload(started), ""
