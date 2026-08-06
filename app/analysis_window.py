@@ -3125,7 +3125,7 @@ class AnalysisWindow(QWidget):
         self.append_log(f"准备运行分析：{protein_name}")
         self.append_log(f"当前蛋白导入目录：{self.current_raw_image_folder}")
 
-        if protein_key == "protein3":
+        if protein_key == "protein3" and protein_part == "tail":
             try:
                 formal_items = self._prepare_protein3_formal_inputs(
                     complete_items=complete_items,

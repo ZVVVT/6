@@ -50,7 +50,7 @@ class TailPublicationWiringTests(unittest.TestCase):
         source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
         run_start = source.index("def run_analysis")
         protein3_index = source.index(
-            'if protein_key == "protein3":',
+            'if protein_key == "protein3" and protein_part == "tail":',
             run_start,
         )
         legacy_comment = source.index(
