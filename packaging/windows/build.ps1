@@ -1,15 +1,15 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidatePattern('^\d{8}$')]
-    [string]$BuildDate = '20260803',
-    [string]$BuildRoot = '',
-    [string]$OutputRoot = '',
     [string]$PythonExe = '',
     [string]$PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+
+$BuildDate = Get-Date -Format "yyyyMMdd"
+$BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
+$OutputRoot = "F:\sperm_protein_analyzer_Test_$BuildDate"
 
 function Initialize-PipNetwork([string]$IndexUrl) {
     try {
@@ -58,13 +58,6 @@ function Initialize-PipNetwork([string]$IndexUrl) {
 }
 
 $PipTrustedHost = Initialize-PipNetwork $PipIndexUrl
-
-if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
-    $BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
-}
-if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = "F:\sperm_protein_analyzer_Test_$BuildDate"
-}
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir '..\..')).TrimEnd('\')
@@ -193,10 +186,10 @@ if ((Test-IsSameOrChild $BuildRoot $OutputRoot) -or
     throw '构建目录与成品目录不能互相包含。'
 }
 if (Test-Path -LiteralPath $BuildRoot) {
-    throw "构建目录已存在，拒绝覆盖：$BuildRoot"
+    throw "构建目录已存在，停止打包；请先清理该目录：$BuildRoot"
 }
 if (Test-Path -LiteralPath $OutputRoot) {
-    throw "成品目录已存在，拒绝覆盖：$OutputRoot"
+    throw "成品目录已存在，停止打包；请先清理该目录：$OutputRoot"
 }
 
 if ([string]::IsNullOrWhiteSpace($PythonExe)) {
