@@ -1473,6 +1473,7 @@ class TailResultEditor:
 
         # 整图编辑状态：不再按头部逐个翻页。
         self.selected_index: Optional[int] = None
+        self.selected_indices: Set[int] = set()
         self.mode = "idle"  # idle / await_head / drawing
         self.manual_target_index: Optional[int] = None
         self.manual_points: List[Tuple[float, float]] = []
@@ -1483,7 +1484,8 @@ class TailResultEditor:
         self.manual_conflict_fragment_ids: List[int] = []
         self.message = ""
         self.show_fragments = False
-        self.edit_history: List[Tuple[int, EditorRecord]] = []
+        # 每一项代表一次完整编辑动作；多选删除可包含多个记录快照。
+        self.edit_history: List[List[Tuple[int, EditorRecord]]] = []
 
         self.result_owner_image = np.zeros(
             self.fragment_labels.shape,
@@ -1764,6 +1766,7 @@ class TailResultEditor:
             for index, record in enumerate(self.records):
                 if record.head_id == int(current_head_id):
                     self.selected_index = index
+                    self.selected_indices = {index}
                     break
 
         if loaded_count:
@@ -2158,17 +2161,27 @@ class TailResultEditor:
             (self.display_height, self.display_width, 4),
             dtype=np.float32,
         )
-        selected = self.selected_record
         selected_tail_rgba = empty_rgba
         selected_path = None
-        if selected is not None and self._has_result(selected) and self.mode == "idle":
-            selected_mask = self.display_result_owner_image == selected.head_id
+        selected = self.selected_record
+        selected_head_ids = [
+            self.records[index].head_id
+            for index in sorted(self.selected_indices)
+            if 0 <= index < len(self.records)
+            and self._has_result(self.records[index])
+        ]
+        if selected_head_ids and self.mode == "idle":
+            selected_mask = np.isin(
+                self.display_result_owner_image,
+                np.asarray(selected_head_ids, dtype=np.uint16),
+            )
             selected_tail_rgba = self._display_boundary_rgba(
                 selected_mask,
                 color=(1.0, 0.9, 0.0),
                 alpha=1.0,
             )
-            selected_path = selected.selected_points_xy
+            if selected is not None and self._has_result(selected):
+                selected_path = selected.selected_points_xy
         self.artists["selected_tail"].set_data(selected_tail_rgba)
         self.artists["selected_tail"].set_visible(bool(np.any(selected_tail_rgba[..., 3])))
 
@@ -2270,6 +2283,11 @@ class TailResultEditor:
                     "软件只保留沿黄色路径的一条碎片链；路线不对就撤销最后一点，再点击更靠近真实尾部的中间点；"
                     "正确后点击确认。"
                 )
+        elif len(self.selected_indices) > 1:
+            instruction = (
+                f"已选择 {len(self.selected_indices)} 条已有尾部；"
+                "Ctrl+左键可继续加入或取消选择，点击“删除所选”可一次删除。"
+            )
         elif selected is None:
             instruction = (
                 "白色轮廓是已有结果：点击后可直接删除或重画。"
@@ -2322,8 +2340,18 @@ class TailResultEditor:
             encoding="utf-8",
         )
 
-    def _push_history(self, index: int) -> None:
-        self.edit_history.append((index, deepcopy(self.records[index])))
+    def _push_history(self, indices: Any) -> None:
+        if isinstance(indices, int):
+            action_indices = [indices]
+        else:
+            action_indices = sorted({int(index) for index in indices})
+        snapshots = [
+            (index, deepcopy(self.records[index]))
+            for index in action_indices
+        ]
+        if not snapshots:
+            return
+        self.edit_history.append(snapshots)
         if len(self.edit_history) > 20:
             self.edit_history.pop(0)
 
@@ -2331,6 +2359,7 @@ class TailResultEditor:
         self.records[index] = record
         self.record_by_head[record.head_id] = record
         self.selected_index = index
+        self.selected_indices = {index}
         self._mark_result_cache_dirty()
 
     def _clear_manual_operation(self) -> None:
@@ -2347,10 +2376,28 @@ class TailResultEditor:
         for index, record in enumerate(self.records):
             if record.head_id == int(head_id):
                 self.selected_index = index
+                self.selected_indices = {index}
                 self.message = ""
                 return
 
-    def _select_at_point(self, point: Tuple[float, float]) -> str:
+    def _toggle_result_selection(self, index: int) -> None:
+        if index in self.selected_indices:
+            self.selected_indices.remove(index)
+            if self.selected_index == index:
+                self.selected_index = (
+                    sorted(self.selected_indices)[-1]
+                    if self.selected_indices
+                    else None
+                )
+            return
+        self.selected_indices.add(index)
+        self.selected_index = index
+
+    def _select_at_point(
+        self,
+        point: Tuple[float, float],
+        toggle_result: bool = False,
+    ) -> str:
         """返回 result / head / none；HeadFinalLabels实体和真实轮廓优先。"""
         x, y = point
         xi = int(round(x))
@@ -2359,6 +2406,32 @@ class TailResultEditor:
         self._ensure_result_cache()
 
         point_array = np.asarray(point, dtype=np.float32)
+
+        # Ctrl 多选已有尾部时，尾部命中优先于邻近的头部轮廓。
+        if toggle_result:
+            if self.path_tree is not None and len(self.path_tree_head_ids):
+                distance, path_index = self.path_tree.query(point_array, k=1)
+                if float(distance) <= 22.0:
+                    head_id = int(self.path_tree_head_ids[int(path_index)])
+                    index = next(
+                        index
+                        for index, record in enumerate(self.records)
+                        if record.head_id == head_id
+                    )
+                    self._toggle_result_selection(index)
+                    return "result"
+            if 0 <= xi < width and 0 <= yi < height:
+                display_x = int(np.clip(round(x * self.display_scale), 0, self.display_width - 1))
+                display_y = int(np.clip(round(y * self.display_scale), 0, self.display_height - 1))
+                owner = int(self.display_result_owner_image[display_y, display_x])
+                if owner > 0:
+                    index = next(
+                        index
+                        for index, record in enumerate(self.records)
+                        if record.head_id == owner
+                    )
+                    self._toggle_result_selection(index)
+                    return "result"
 
         # 点击HeadFinalLabels实体区域时，优先选择该真实Head ID。
         if 0 <= xi < width and 0 <= yi < height:
@@ -2387,9 +2460,18 @@ class TailResultEditor:
                 k=1,
             )
             if float(distance) <= 22.0:
-                self._select_head_id(
-                    int(self.path_tree_head_ids[int(path_index)])
+                head_id = int(self.path_tree_head_ids[int(path_index)])
+                index = next(
+                    index
+                    for index, record in enumerate(self.records)
+                    if record.head_id == head_id
                 )
+                if toggle_result:
+                    self._toggle_result_selection(index)
+                else:
+                    self.selected_index = index
+                    self.selected_indices = {index}
+                    self.message = ""
                 return "result"
 
         if 0 <= xi < width and 0 <= yi < height:
@@ -2397,21 +2479,34 @@ class TailResultEditor:
             display_y = int(np.clip(round(y * self.display_scale), 0, self.display_height - 1))
             owner = int(self.display_result_owner_image[display_y, display_x])
             if owner > 0:
-                self._select_head_id(owner)
+                index = next(
+                    index
+                    for index, record in enumerate(self.records)
+                    if record.head_id == owner
+                )
+                if toggle_result:
+                    self._toggle_result_selection(index)
+                else:
+                    self.selected_index = index
+                    self.selected_indices = {index}
+                    self.message = ""
                 return "result"
 
         # 头部外围仍保留较宽的容错点击范围。
         if float(head_distance) <= 45.0:
             self.selected_index = int(head_index)
+            self.selected_indices = {int(head_index)}
             self.message = ""
             return "head"
 
         self.selected_index = None
+        self.selected_indices.clear()
         self.message = "未选中已有尾部或头部。"
         return "none"
 
     def _start_drawing(self, index: int) -> None:
         self.selected_index = index
+        self.selected_indices = {index}
         self.manual_target_index = index
         self.mode = "drawing"
         self.manual_points = []
@@ -2634,31 +2729,33 @@ class TailResultEditor:
             self.message = "请先确认或取消当前绘制操作。"
             self.redraw()
             return
-        record = self.selected_record
-        if record is None:
+        selected_indices = [
+            index
+            for index in sorted(self.selected_indices)
+            if 0 <= index < len(self.records)
+            and self._has_result(self.records[index])
+        ]
+        if not selected_indices:
             self.message = "请先点击需要删除的已有尾部。"
             self.redraw()
             return
-        if not self._has_result(record):
-            self.message = (
-                f"Head {record.head_id} 当前没有尾部结果，无需删除。"
-            )
-            self.redraw()
-            return
 
-        index = self.selected_index
-        assert index is not None
-        self._push_history(index)
-        record.current_status = "deleted"
-        record.selected_points_xy = np.zeros((0, 2), dtype=np.float32)
-        record.selected_rank = None
-        record.selected_source = "deleted"
-        record.selected_fragment_ids = []
-        record.accepted_by_user = False
-        record.deleted = True
-        record.edit_note = "人工删除"
+        self._push_history(selected_indices)
+        for index in selected_indices:
+            record = self.records[index]
+            record.current_status = "deleted"
+            record.selected_points_xy = np.zeros((0, 2), dtype=np.float32)
+            record.selected_rank = None
+            record.selected_source = "deleted"
+            record.selected_fragment_ids = []
+            record.accepted_by_user = False
+            record.deleted = True
+            record.edit_note = "人工删除"
+        deleted_count = len(selected_indices)
+        self.selected_index = None
+        self.selected_indices.clear()
         self._mark_result_cache_dirty()
-        self.message = f"Head {record.head_id} 的尾部结果已删除并自动保存。"
+        self.message = f"已删除选中的 {deleted_count} 条尾部"
         self._autosave_state()
         self.redraw()
 
@@ -2685,9 +2782,18 @@ class TailResultEditor:
             return
 
         if self.edit_history:
-            index, snapshot = self.edit_history.pop()
-            self._restore_record(index, snapshot)
-            self.message = f"已撤销 Head {snapshot.head_id} 的上一次编辑。"
+            action = self.edit_history.pop()
+            restored_indices = []
+            for index, snapshot in action:
+                self.records[index] = snapshot
+                self.record_by_head[snapshot.head_id] = snapshot
+                restored_indices.append(index)
+            self.selected_indices = set(restored_indices)
+            self.selected_index = (
+                restored_indices[-1] if restored_indices else None
+            )
+            self._mark_result_cache_dirty()
+            self.message = "已撤销上一次完整编辑操作。"
             self._autosave_state()
         else:
             self.message = "当前没有可撤销的编辑。"
@@ -2708,6 +2814,7 @@ class TailResultEditor:
             )
         else:
             self.selected_index = None
+            self.selected_indices.clear()
             self.message = "已取消当前选择。"
         self.redraw()
 
@@ -2744,7 +2851,12 @@ class TailResultEditor:
             self.redraw()
             return
 
-        selection_kind = self._select_at_point(point)
+        event_key = str(getattr(event, "key", "") or "").lower()
+        ctrl_pressed = "ctrl" in event_key or "control" in event_key
+        selection_kind = self._select_at_point(
+            point,
+            toggle_result=ctrl_pressed,
+        )
         if selection_kind == "head" and self.selected_index is not None:
             record = self.records[self.selected_index]
             if not self._has_result(record):
