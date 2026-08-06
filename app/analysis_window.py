@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTextEdit,
     QSplitter,
+    QApplication,
 )
 
 from app.analysis_v2.head_analysis_workers import (
@@ -53,6 +54,7 @@ from core.analysis_v2.tail_calibration_service import task_paths_from_root
 from core.image_channel_matcher import ImageChannelMatcher
 from core.result_parser import ResultParser
 from core.protein_analysis_service import ProteinAnalysisService
+from core.analysis_process_registry import analysis_process_registry
 
 
 class SingleProteinAnalysisWorker(QThread):
@@ -71,6 +73,12 @@ class SingleProteinAnalysisWorker(QThread):
         self.protein_key = protein_key
         self.protein_name = protein_name
         self.config = config
+        self._cancel_requested = False
+
+    def request_cancel(self):
+        self._cancel_requested = True
+        self.requestInterruption()
+        analysis_process_registry.terminate_all()
 
     def run(self):
         try:
@@ -83,7 +91,7 @@ class SingleProteinAnalysisWorker(QThread):
                 overwrite=True,
                 reuse_existing_raw=True,
                 log_callback=self.log_signal.emit,
-                cancel_callback=None,
+                cancel_callback=lambda: self._cancel_requested,
             )
             elapsed = float(result.get("runner_elapsed_seconds", 0) or 0)
             self.finished_signal.emit(True, elapsed, result, "")
@@ -126,6 +134,7 @@ class AnalysisWindow(QWidget):
         self.current_output_dir = None
         self.current_raw_image_folder = None
         self._suspend_protein_changed = False
+        self._shutdown_cancel_requested = False
         self.current_protein_key = None
         self.protein_buttons = {}
 
@@ -1661,6 +1670,8 @@ class AnalysisWindow(QWidget):
         error_message: str,
     ) -> None:
         """Open manual calibration after head segmentation."""
+        if self._shutdown_cancel_requested:
+            return
         payload = dict(result) if isinstance(result, dict) else {}
 
         if not success:
@@ -1872,6 +1883,8 @@ class AnalysisWindow(QWidget):
         result: object,
         error_message: str,
     ) -> None:
+        if self._shutdown_cancel_requested:
+            return
         field_id = str(field_id or "").strip()
         payload = dict(result) if isinstance(result, dict) else {}
         if bool(payload.get("cancelled")):
@@ -2157,6 +2170,8 @@ class AnalysisWindow(QWidget):
         result: object,
         error_message: str,
     ) -> None:
+        if self._shutdown_cancel_requested:
+            return
         if not success:
             self._analysis_v2_finish_pending = True
             self._show_analysis_v2_error(
@@ -2467,6 +2482,8 @@ class AnalysisWindow(QWidget):
         error_message: str,
     ) -> None:
         """Safely publish validated tail output, save DB, and refresh UI."""
+        if self._shutdown_cancel_requested:
+            return
         payload = dict(result) if isinstance(result, dict) else {}
 
         if not success:
@@ -2800,6 +2817,8 @@ class AnalysisWindow(QWidget):
         error_message: str,
     ) -> None:
         """Publish measured output, atomically save DB rows, then commit files."""
+        if self._shutdown_cancel_requested:
+            return
         payload = dict(result) if isinstance(result, dict) else {}
 
         if not success:
@@ -3165,6 +3184,8 @@ class AnalysisWindow(QWidget):
         return True
 
     def on_analysis_finished(self, success: bool, elapsed: float, result: object, error_message: str):
+        if self._shutdown_cancel_requested:
+            return
         self.set_running_state(False)
 
         result = result or {}
@@ -3321,14 +3342,117 @@ class AnalysisWindow(QWidget):
 
     def closeEvent(self, event):
         if self.is_analysis_active():
-            QMessageBox.information(
-                self,
-                "提示",
-                "分析正在运行或等待人工校准，暂时不能关闭窗口。",
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Warning)
+            dialog.setWindowTitle("确认终止分析并退出")
+            dialog.setText(
+                "当前分析正在运行或等待人工校准。\n"
+                "终止后，本次尚未发布的分析结果不会写入数据库；"
+                "原有已完成结果将继续保留。\n"
+                "是否终止本次分析并退出软件？"
             )
-            event.ignore()
-            return
+            continue_button = dialog.addButton("继续分析", QMessageBox.RejectRole)
+            stop_button = dialog.addButton(
+                "终止分析并退出", QMessageBox.DestructiveRole
+            )
+            dialog.setDefaultButton(continue_button)
+            dialog.exec()
+            if dialog.clickedButton() is not stop_button:
+                event.ignore()
+                return
+            self._cancel_analysis_for_shutdown()
         super().closeEvent(event)
+
+    def _cancel_analysis_for_shutdown(self):
+        """Cancel owned work and preserve all previously published results."""
+        self._shutdown_cancel_requested = True
+        self.btn_run_analysis.setText("正在终止分析并关闭后台任务，请稍候……")
+        self.btn_run_analysis.setEnabled(False)
+        QApplication.processEvents()
+
+        window = self.head_calibration_window
+        if window is not None:
+            try:
+                window.close_for_shutdown()
+            except RuntimeError:
+                pass
+        self.head_calibration_window = None
+
+        controller = self.tail_calibration_controller
+        if controller is not None:
+            try:
+                controller.stop()
+            except RuntimeError:
+                pass
+        self.tail_calibration_controller = None
+
+        workers = [
+            self.analysis_worker,
+            self.head_segmentation_worker,
+            self.head_measurement_worker,
+            self.tail_field_prepare_worker,
+            self.tail_path_worker,
+            self.tail_measurement_worker,
+        ]
+        for worker in workers:
+            if not self._worker_is_running(worker):
+                continue
+            try:
+                cancel = getattr(worker, "request_cancel", None)
+                if cancel is not None:
+                    cancel()
+                else:
+                    worker.requestInterruption()
+            except RuntimeError:
+                pass
+
+        analysis_process_registry.terminate_all()
+        deadline = time.monotonic() + 8.0
+        for worker in workers:
+            if not self._worker_is_running(worker):
+                continue
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if remaining_ms:
+                worker.wait(remaining_ms)
+
+        # A second precise tree kill is the bounded fallback after cooperative cancel.
+        analysis_process_registry.terminate_all()
+        for worker in workers:
+            if self._worker_is_running(worker):
+                worker.wait(2000)
+        analysis_process_registry.clear_finished()
+
+        task_root_text = str(self.current_analysis_v2_task_root or "").strip()
+        if task_root_text:
+            task_root = Path(task_root_text).resolve()
+            lock_path = task_root / ".tail_joint_promote_measure_v2.lock"
+            try:
+                if lock_path.is_file():
+                    from tools.analysis_v2.tail_joint_promote_measure_v2 import (
+                        rollback_interrupted_promotion,
+                    )
+                    rollback_errors = rollback_interrupted_promotion(task_root)
+                    for rollback_error in rollback_errors:
+                        self.append_log("Analysis V2：{}".format(rollback_error))
+                    lock_path.unlink()
+            except BaseException as exception:
+                self.append_log(
+                    "Analysis V2：清除任务运行锁失败：{}".format(exception)
+                )
+            try:
+                TaskStateStore.from_task_paths(
+                    task_paths_from_root(task_root)
+                ).update(
+                    "cancelled",
+                    "shutdown",
+                    "用户终止当前分析并退出软件",
+                )
+            except BaseException as exception:
+                self.append_log(
+                    "Analysis V2：记录用户取消状态失败：{}".format(exception)
+                )
+
+        self._analysis_running = False
 
     def set_running_state(self, running: bool):
         running = bool(running)

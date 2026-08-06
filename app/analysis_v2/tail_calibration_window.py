@@ -9,6 +9,7 @@ from core.analysis_v2.tail_calibration_service import (
     complete_tail_calibration,
     publish_tail_final_labels,
 )
+from core.analysis_process_registry import analysis_process_registry
 
 
 class TailCalibrationController(QObject):
@@ -62,6 +63,8 @@ class TailCalibrationController(QObject):
         self.process.setArguments(self._editor_arguments())
         self.process.setWorkingDirectory(str(Path(self.payload["output_dir"])))
         self.process.start()
+        if self.process.waitForStarted(3000):
+            analysis_process_registry.register(self.process)
         self.log_signal.emit(
             "Analysis V2：已打开尾部编辑器（视野 {}/{}：{}）。".format(
                 self.index + 1, len(self.payloads), self.payload["field_id"]
@@ -69,6 +72,7 @@ class TailCalibrationController(QObject):
         )
 
     def _process_finished(self, exit_code, _exit_status) -> None:
+        analysis_process_registry.unregister(self.process)
         if self._stopping:
             return
         if exit_code != 0:
@@ -147,7 +151,7 @@ class TailCalibrationController(QObject):
     def stop(self) -> None:
         self._stopping = True
         if self.process.state() != QProcess.NotRunning:
-            self.process.terminate()
-            if not self.process.waitForFinished(3000):
-                self.process.kill()
-                self.process.waitForFinished(1000)
+            pid = int(self.process.processId() or 0)
+            analysis_process_registry._terminate_tree(pid, self.process)
+            self.process.waitForFinished(3000)
+        analysis_process_registry.unregister(self.process)

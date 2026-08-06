@@ -11,6 +11,7 @@ from PySide6.QtCore import QThread, Signal
 
 from core.analysis_v2.tail_measurement_service import TailMeasurementService
 from core.config_manager import ConfigManager
+from core.analysis_process_registry import analysis_process_registry
 
 
 WINDOWS_CREATION_FLAGS = (
@@ -49,6 +50,15 @@ class TailPathWorker(QThread):
         self.project_root = Path(project_root).resolve()
         self.task_root = Path(task_root).resolve()
         self.python_executable = Path(python_executable).resolve()
+        self._cancel_requested = False
+        self._process = None
+
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+        self.requestInterruption()
+        process = self._process
+        if process is not None:
+            analysis_process_registry._terminate_tree(process.pid, process)
 
     @staticmethod
     def _read_json(path: Path):
@@ -93,7 +103,7 @@ class TailPathWorker(QThread):
         child_env["PYTHONIOENCODING"] = "utf-8"
         child_env["PYTHONUNBUFFERED"] = "1"
 
-        process = subprocess.Popen(
+        process = analysis_process_registry.register(subprocess.Popen(
             command,
             cwd=str(self.project_root),
             stdout=subprocess.PIPE,
@@ -104,13 +114,17 @@ class TailPathWorker(QThread):
             bufsize=1,
             env=child_env,
             creationflags=WINDOWS_CREATION_FLAGS,
-        )
+        ))
+        self._process = process
         if process.stdout is None:
             raise RuntimeError("{} 未能创建标准输出管道。".format(label))
 
         output_lines = []
         try:
             for line in process.stdout:
+                if self._cancel_requested or self.isInterruptionRequested():
+                    analysis_process_registry._terminate_tree(process.pid, process)
+                    break
                 output_lines.append(line)
                 log_handle.write(line)
                 log_handle.flush()
@@ -123,6 +137,9 @@ class TailPathWorker(QThread):
                 process.kill()
             process.wait()
             raise
+        finally:
+            self._process = None
+            analysis_process_registry.unregister(process)
         output = "".join(output_lines)
         log_handle.write(
             "===== {} return_code={} =====\n".format(label, return_code)
@@ -530,7 +547,7 @@ class TailFieldPrepareWorker(QThread):
             with log_path.open("a", encoding="utf-8", newline="\n") as log_handle:
                 log_handle.write(subprocess.list2cmdline(command) + "\n")
                 log_handle.flush()
-                process = subprocess.Popen(
+                process = analysis_process_registry.register(subprocess.Popen(
                     command,
                     cwd=str(self.project_root),
                     stdout=subprocess.PIPE,
@@ -541,7 +558,7 @@ class TailFieldPrepareWorker(QThread):
                     bufsize=1,
                     env=child_env,
                     creationflags=WINDOWS_CREATION_FLAGS,
-                )
+                ))
                 self._process = process
                 if self._cancel_requested or self.isInterruptionRequested():
                     self._terminate_process_tree(process)
@@ -565,6 +582,7 @@ class TailFieldPrepareWorker(QThread):
                     raise
                 finally:
                     self._process = None
+                    analysis_process_registry.unregister(process)
             if self._cancel_requested or self.isInterruptionRequested():
                 self.finished_signal.emit(
                     False, self.field_id, self._cancel_payload(started), ""
@@ -639,6 +657,10 @@ class TailMeasurementWorker(QThread):
         self.task_root = Path(task_root).resolve()
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
+
+    def request_cancel(self) -> None:
+        self.requestInterruption()
+        analysis_process_registry.terminate_all()
 
     def run(self) -> None:
         started = time.perf_counter()

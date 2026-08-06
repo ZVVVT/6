@@ -585,17 +585,28 @@ class MainWindow(QMainWindow):
             )
             and analysis_page.is_analysis_active()
         ):
-            message = (
-                "分析正在运行或等待人工校准，暂时不能退出软件。"
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Warning)
+            dialog.setWindowTitle("确认终止分析并退出")
+            dialog.setText(
+                "当前分析正在运行或等待人工校准。\n"
+                "终止后，本次尚未发布的分析结果不会写入数据库；"
+                "原有已完成结果将继续保留。\n"
+                "是否终止本次分析并退出软件？"
             )
-            self.statusBar().showMessage(message)
-            QMessageBox.information(
-                self,
-                "分析进行中",
-                message,
+            continue_button = dialog.addButton("继续分析", QMessageBox.RejectRole)
+            stop_button = dialog.addButton(
+                "终止分析并退出", QMessageBox.DestructiveRole
             )
-            event.ignore()
-            return
+            dialog.setDefaultButton(continue_button)
+            dialog.exec()
+            if dialog.clickedButton() is not stop_button:
+                event.ignore()
+                return
+            self.statusBar().showMessage(
+                "正在终止分析并关闭后台任务，请稍候……"
+            )
+            analysis_page._cancel_analysis_for_shutdown()
 
         super().closeEvent(event)
 

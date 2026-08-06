@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .task_state import atomic_write_json
+from core.analysis_process_registry import analysis_process_registry
 
 
 @dataclass
@@ -107,17 +108,22 @@ class DirectCellposeRunner:
         try:
             with stdout_path.open("w", encoding="utf-8", newline="\n") as stdout_handle:
                 with stderr_path.open("w", encoding="utf-8", newline="\n") as stderr_handle:
-                    completed = subprocess.run(
+                    process = analysis_process_registry.register(subprocess.Popen(
                         command,
                         cwd=str(self.project_root),
                         env=environment,
                         stdout=stdout_handle,
                         stderr=stderr_handle,
-                        timeout=timeout,
                         creationflags=creationflags,
-                        check=False,
-                    )
-                    return_code = int(completed.returncode)
+                    ))
+                    try:
+                        return_code = int(process.wait(timeout=timeout))
+                    except subprocess.TimeoutExpired:
+                        analysis_process_registry._terminate_tree(process.pid, process)
+                        process.wait()
+                        raise
+                    finally:
+                        analysis_process_registry.unregister(process)
         finally:
             duration = time.perf_counter() - started
             ended_at = datetime.now().astimezone().isoformat(timespec="milliseconds")

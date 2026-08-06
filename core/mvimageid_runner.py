@@ -227,7 +227,7 @@ class MvImageIDRunner:
                 log_fp.write("=" * 60 + "\n\n")
                 log_fp.flush()
 
-                process = subprocess.Popen(
+                process = analysis_process_registry.register(subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -237,7 +237,7 @@ class MvImageIDRunner:
                     cwd=str(self.source_project_dir),
                     env=env,
                     **self._get_subprocess_window_options(),
-                )
+                ))
 
                 assert process.stdout is not None
                 try:
@@ -268,6 +268,8 @@ class MvImageIDRunner:
                         process.kill()
                     process.wait()
                     raise
+                finally:
+                    analysis_process_registry.unregister(process)
                 elapsed = time.time() - start_time
                 log_fp.write("\n" + "=" * 60 + "\n")
                 log_fp.write(f"ExitCode: {return_code}\n")
@@ -372,3 +374,4 @@ class MvImageIDWorker(QThread):
         )
         message = result.output_text if result.success else (result.error_message or result.output_text)
         self.finished_signal.emit(result.success, result.elapsed_seconds, message)
+from core.analysis_process_registry import analysis_process_registry

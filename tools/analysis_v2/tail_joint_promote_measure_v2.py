@@ -493,6 +493,62 @@ def acquire_lock(task_root: Path) -> Path:
     return lock_path
 
 
+def rollback_interrupted_promotion(task_root: Path) -> List[str]:
+    """Restore the latest atomic-promotion backup after its recorded process stops."""
+    root = Path(task_root).resolve()
+    calibration_root = root / "calibration"
+    backup_parent = calibration_root / "tail_joint_atomic_backups"
+    backup_roots = sorted(
+        [path for path in backup_parent.iterdir() if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ) if backup_parent.is_dir() else []
+    old_formal = sorted(
+        calibration_root.glob(".tail_joint_old_*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    old_measurement = sorted(
+        (root / "measurement").glob(".tail_old_*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    backup_root = backup_roots[0] if backup_roots else None
+    errors: List[str] = []
+
+    try:
+        source = old_formal[0] if old_formal else (
+            backup_root / "formal_tail_before" if backup_root is not None else None
+        )
+        if source is not None and source.is_dir():
+            target = calibration_root / "tail"
+            if target.exists():
+                shutil.rmtree(str(target))
+            os.replace(str(source), str(target))
+    except BaseException as exception:
+        errors.append("恢复 calibration/tail 失败：{}".format(exception))
+
+    try:
+        source = old_measurement[0] if old_measurement else (
+            backup_root / "measurement_tail_before" if backup_root is not None else None
+        )
+        if source is not None and source.is_dir():
+            target = root / "measurement" / "tail"
+            if target.exists():
+                shutil.rmtree(str(target))
+            os.replace(str(source), str(target))
+    except BaseException as exception:
+        errors.append("恢复 measurement/tail 失败：{}".format(exception))
+
+    try:
+        if backup_root is not None:
+            restore_file_from_backup(backup_root / "state_before.json", root / "state.json")
+            restore_file_from_backup(backup_root / "manifest_before.json", root / "manifest.json")
+    except BaseException as exception:
+        errors.append("恢复 state/manifest 失败：{}".format(exception))
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="联合尾部三视野原子提升并重新测量。")
     parser.add_argument("--task-root", required=True)

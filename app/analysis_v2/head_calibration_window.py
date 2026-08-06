@@ -489,6 +489,9 @@ class HeadCalibrationWindow(QMainWindow):
             self._show_error("完成头部校准失败", exception)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if getattr(self, "_shutdown_close_requested", False):
+            event.accept()
+            return
         if not self._calibration_completed:
             answer = QMessageBox.question(
                 self,
@@ -514,3 +517,8 @@ class HeadCalibrationWindow(QMainWindow):
             self.calibration_closed.emit(
                 bool(self._calibration_completed)
             )
+
+    def close_for_shutdown(self) -> None:
+        """Close without another prompt while the main application exits."""
+        self._shutdown_close_requested = True
+        self.close()

@@ -15,6 +15,7 @@ from core.analysis_v2 import (
     run_head_segmentation,
 )
 from core.config_manager import ConfigManager
+from core.analysis_process_registry import analysis_process_registry
 
 
 class HeadSegmentationWorker(QThread):
@@ -43,6 +44,10 @@ class HeadSegmentationWorker(QThread):
         ]
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
+
+    def request_cancel(self) -> None:
+        self.requestInterruption()
+        analysis_process_registry.terminate_all()
 
     def run(self) -> None:
         started = time.perf_counter()
@@ -154,6 +159,10 @@ class HeadMeasurementWorker(QThread):
         self.task_root = Path(task_root).resolve()
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
+
+    def request_cancel(self) -> None:
+        self.requestInterruption()
+        analysis_process_registry.terminate_all()
 
     def run(self) -> None:
         started = time.perf_counter()
