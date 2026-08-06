@@ -200,6 +200,7 @@ class HeadCalibrationWindow(QMainWindow):
             )
 
             self.current_field_id = field_id
+            field.model.clear_selection()
 
             self.canvas.set_image(
                 image,
@@ -208,6 +209,7 @@ class HeadCalibrationWindow(QMainWindow):
             self.canvas.set_labels(
                 field.model.labels,
                 field.model.selected_object_id,
+                field.model.selected_object_ids,
             )
 
             if fit:
@@ -279,6 +281,7 @@ class HeadCalibrationWindow(QMainWindow):
             self.controls.field_combo.setCurrentText(previous)
             self.controls.field_combo.blockSignals(False)
             return
+        self.service.load_field(previous).model.clear_selection()
         self._load_field(field_id, fit=True)
 
     def _move_field(self, offset: int) -> None:
@@ -304,6 +307,7 @@ class HeadCalibrationWindow(QMainWindow):
             "正在完成视野 {} 并启动后台尾部准备…".format(field_id)
         )
         result = self.service.complete_field(field_id)
+        self.service.load_field(field_id).model.clear_selection()
         self._completed_fields.add(field_id)
         self.field_calibration_completed.emit(field_id, result)
         return result
@@ -358,20 +362,28 @@ class HeadCalibrationWindow(QMainWindow):
         self.canvas.set_mode("add")
         self.statusBar().showMessage("新增模式：在原图上拖动绘制椭圆")
 
-    def _select_at(self, x: float, y: float) -> None:
+    def _select_at(self, x: float, y: float, toggle: bool = False) -> None:
         try:
             field = self.service.load_field(self.current_field_id)
-            object_id = self.service.select_object(self.current_field_id, x, y)
-            self.canvas.set_selected_object(object_id)
+            self.service.select_object(
+                self.current_field_id,
+                x,
+                y,
+                toggle=toggle,
+            )
+            self.canvas.set_selected_objects(field.model.selected_object_ids)
             self._update_status()
         except BaseException as exception:
             self._show_error("选择对象失败", exception)
 
     def _delete_selected(self) -> None:
         try:
-            if self.service.delete_selected(self.current_field_id):
+            deleted_count = self.service.delete_selected(self.current_field_id)
+            if deleted_count:
                 self._refresh_labels()
-                self.statusBar().showMessage("选中头部已删除并自动保存")
+                self.statusBar().showMessage(
+                    "已删除选中的 {} 个头部并自动保存".format(deleted_count)
+                )
             else:
                 self.statusBar().showMessage("当前没有选中头部")
         except BaseException as exception:
@@ -417,7 +429,19 @@ class HeadCalibrationWindow(QMainWindow):
 
     def _refresh_labels(self) -> None:
         field = self.service.load_field(self.current_field_id)
-        self.canvas.set_labels(field.model.labels, field.model.selected_object_id)
+        valid_ids = set(int(value) for value in field.model.object_ids.tolist())
+        field.model.selected_object_ids.intersection_update(valid_ids)
+        if field.model.selected_object_id not in field.model.selected_object_ids:
+            field.model.selected_object_id = (
+                max(field.model.selected_object_ids)
+                if field.model.selected_object_ids
+                else 0
+            )
+        self.canvas.set_labels(
+            field.model.labels,
+            field.model.selected_object_id,
+            field.model.selected_object_ids,
+        )
         self._update_status()
 
     def _update_status(self) -> None:
@@ -425,7 +449,13 @@ class HeadCalibrationWindow(QMainWindow):
             return
         field = self.service.load_field(self.current_field_id)
         statistics = field.model.selected_statistics()
-        if statistics:
+        selected_count = len(field.model.selected_object_ids)
+        if selected_count > 1:
+            message = "已选中 {} 个头部 | 当前对象总数 {}".format(
+                selected_count,
+                field.model.object_count,
+            )
+        elif statistics:
             message = "视野 {} | 对象 ID {} | 面积 {} | 当前对象总数 {}".format(
                 field.field_id,
                 statistics["object_id"],

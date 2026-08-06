@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
@@ -19,7 +19,7 @@ from core.analysis_v2.opencv_compat import cv2
 
 
 class ImageCanvas(QGraphicsView):
-    imageClicked = Signal(float, float)
+    imageClicked = Signal(float, float, bool)
     ellipseRequested = Signal(float, float, float, float)
 
     def __init__(self, parent=None) -> None:
@@ -92,17 +92,43 @@ class ImageCanvas(QGraphicsView):
         if fit:
             self.fit_to_window()
 
-    def set_labels(self, labels: np.ndarray, selected_object_id: int = 0) -> None:
+    def set_labels(
+        self,
+        labels: np.ndarray,
+        selected_object_id: int = 0,
+        selected_object_ids: Optional[Iterable[int]] = None,
+    ) -> None:
         self._labels = labels
         self._outline_item.setPath(self._contours_path(labels > 0))
-        self.set_selected_object(selected_object_id)
+        if selected_object_ids is None:
+            selected_object_ids = (
+                (int(selected_object_id),)
+                if int(selected_object_id) > 0
+                else ()
+            )
+        self.set_selected_objects(selected_object_ids)
 
     def set_selected_object(self, object_id: int) -> None:
-        if self._labels is None or int(object_id) <= 0:
+        self.set_selected_objects(
+            (int(object_id),) if int(object_id) > 0 else ()
+        )
+
+    def set_selected_objects(self, object_ids: Iterable[int]) -> None:
+        selected = tuple(sorted({
+            int(value)
+            for value in object_ids
+            if int(value) > 0
+        }))
+        if self._labels is None or not selected:
             self._selected_item.setPath(QPainterPath())
         else:
             self._selected_item.setPath(
-                self._contours_path(self._labels == int(object_id))
+                self._contours_path(
+                    np.isin(
+                        self._labels,
+                        np.asarray(selected, dtype=self._labels.dtype),
+                    )
+                )
             )
 
     def set_mode(self, mode: str) -> None:
@@ -203,7 +229,12 @@ class ImageCanvas(QGraphicsView):
                 self._remove_preview()
                 self.ellipseRequested.emit(pressed.x(), pressed.y(), released.x(), released.y())
             else:
-                self.imageClicked.emit(released.x(), released.y())
+                ctrl_pressed = bool(event.modifiers() & Qt.ControlModifier)
+                self.imageClicked.emit(
+                    released.x(),
+                    released.y(),
+                    ctrl_pressed,
+                )
             event.accept()
             return
         super().mouseReleaseEvent(event)

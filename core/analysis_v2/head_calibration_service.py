@@ -278,9 +278,15 @@ class HeadCalibrationService:
 
         return cached[normalized]
 
-    def select_object(self, field_id: str, x: float, y: float) -> int:
+    def select_object(
+        self,
+        field_id: str,
+        x: float,
+        y: float,
+        toggle: bool = False,
+    ) -> int:
         field = self.load_field(field_id)
-        object_id = field.model.select_at(x, y)
+        object_id = field.model.select_at(x, y, toggle=toggle)
         if object_id:
             statistics = field.model.selected_statistics()
             self.logger.event(
@@ -327,23 +333,32 @@ class HeadCalibrationService:
         )
         return payload
 
-    def delete_selected(self, field_id: str) -> bool:
+    def delete_selected(self, field_id: str) -> int:
         field = self.load_field(field_id)
         command = field.model.delete_selected()
         if command is None:
-            return False
+            return 0
+        object_ids = tuple(
+            command.object_ids
+            or ((command.object_id,) if command.object_id else ())
+        )
         self.logger.info(
             "head_calibration",
-            "视野 {} 删除对象 {}".format(field_id, command.object_id),
+            "视野 {} 删除对象 {}".format(field_id, list(object_ids)),
         )
         self.logger.event(
             "object_deleted",
             "head_calibration",
             "edited",
-            extra={"field_id": field_id, "object_id": command.object_id},
+            extra={
+                "field_id": field_id,
+                "object_id": command.object_id,
+                "object_ids": list(object_ids),
+                "object_count": len(object_ids),
+            },
         )
         self.save_field(field_id)
-        return True
+        return len(object_ids)
 
     def add_ellipse(
         self,

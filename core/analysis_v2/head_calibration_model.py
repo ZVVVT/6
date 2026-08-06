@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -18,6 +18,7 @@ class LabelEditCommand:
     before: np.ndarray
     after: np.ndarray
     object_id: int
+    object_ids: Tuple[int, ...] = ()
 
     def apply(self, labels: np.ndarray, use_after: bool) -> None:
         x, y, width, height = self.bbox
@@ -27,6 +28,10 @@ class LabelEditCommand:
         return {
             "action": self.action,
             "object_id": self.object_id,
+            "object_ids": list(
+                self.object_ids
+                or ((self.object_id,) if self.object_id else ())
+            ),
             "bbox": list(self.bbox),
             "changed_pixels": int(np.count_nonzero(self.before != self.after)),
         }
@@ -53,6 +58,7 @@ class HeadCalibrationModel:
         )
         validate_label_image(self.labels, expected_shape=tuple(self.initial_labels.shape))
         self.selected_object_id = 0
+        self.selected_object_ids = set()  # type: Set[int]
         self.revision = int(revision)
         self.history_limit = int(history_limit)
         self.undo_stack = []  # type: List[LabelEditCommand]
@@ -74,17 +80,40 @@ class HeadCalibrationModel:
             return 0
         return int(self.labels[row, column])
 
-    def select_at(self, x: float, y: float) -> int:
-        self.selected_object_id = self.object_id_at(x, y)
+    def select_at(self, x: float, y: float, toggle: bool = False) -> int:
+        object_id = self.object_id_at(x, y)
+        if object_id <= 0:
+            self.clear_selection()
+            return 0
+        if toggle:
+            if object_id in self.selected_object_ids:
+                self.selected_object_ids.remove(object_id)
+                self.selected_object_id = (
+                    max(self.selected_object_ids)
+                    if self.selected_object_ids
+                    else 0
+                )
+            else:
+                self.selected_object_ids.add(object_id)
+                self.selected_object_id = object_id
+        else:
+            self.selected_object_ids = {object_id}
+            self.selected_object_id = object_id
         return self.selected_object_id
 
+    def clear_selection(self) -> None:
+        self.selected_object_id = 0
+        self.selected_object_ids.clear()
+
     def selected_statistics(self) -> Optional[Dict[str, Any]]:
+        if len(self.selected_object_ids) != 1:
+            return None
         object_id = int(self.selected_object_id)
         if object_id <= 0:
             return None
         rows, columns = np.nonzero(self.labels == object_id)
         if rows.size == 0:
-            self.selected_object_id = 0
+            self.clear_selection()
             return None
         return {
             "object_id": object_id,
@@ -113,22 +142,37 @@ class HeadCalibrationModel:
             del self.operation_summaries[0]
 
     def delete_selected(self) -> Optional[LabelEditCommand]:
-        object_id = int(self.selected_object_id)
-        if object_id <= 0:
+        object_ids = tuple(sorted(
+            int(value)
+            for value in self.selected_object_ids
+            if int(value) > 0
+        ))
+        if not object_ids:
             return None
-        rows, columns = np.nonzero(self.labels == object_id)
+        selected_mask = np.isin(
+            self.labels,
+            np.asarray(object_ids, dtype=self.labels.dtype),
+        )
+        rows, columns = np.nonzero(selected_mask)
         if rows.size == 0:
-            self.selected_object_id = 0
+            self.clear_selection()
             return None
         x, y = int(columns.min()), int(rows.min())
         width = int(columns.max() - x + 1)
         height = int(rows.max() - y + 1)
         before = self.labels[y : y + height, x : x + width].copy()
         after = before.copy()
-        after[after == object_id] = 0
-        command = LabelEditCommand("delete", (x, y, width, height), before, after, object_id)
+        after[np.isin(after, np.asarray(object_ids, dtype=after.dtype))] = 0
+        command = LabelEditCommand(
+            "delete",
+            (x, y, width, height),
+            before,
+            after,
+            object_ids[0] if len(object_ids) == 1 else 0,
+            object_ids,
+        )
         self._record(command)
-        self.selected_object_id = 0
+        self.clear_selection()
         return command
 
     def add_ellipse(
@@ -167,6 +211,7 @@ class HeadCalibrationModel:
         command = LabelEditCommand("add_ellipse", (left, top, width, height), before, after, new_id)
         self._record(command)
         self.selected_object_id = new_id
+        self.selected_object_ids = {new_id}
         return command
 
     def undo(self) -> Optional[LabelEditCommand]:
@@ -176,11 +221,12 @@ class HeadCalibrationModel:
         command.apply(self.labels, use_after=False)
         self.redo_stack.append(command)
         self.revision += 1
-        self.selected_object_id = 0
+        self.clear_selection()
         self.operation_summaries.append({
             "action": "undo",
             "target": command.action,
             "object_id": command.object_id,
+            "object_ids": list(command.object_ids),
             "revision": self.revision,
         })
         return command
@@ -192,11 +238,12 @@ class HeadCalibrationModel:
         command.apply(self.labels, use_after=True)
         self.undo_stack.append(command)
         self.revision += 1
-        self.selected_object_id = 0
+        self.clear_selection()
         self.operation_summaries.append({
             "action": "redo",
             "target": command.action,
             "object_id": command.object_id,
+            "object_ids": list(command.object_ids),
             "revision": self.revision,
         })
         return command
