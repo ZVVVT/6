@@ -870,8 +870,8 @@ class SettingsWindow(QWidget):
         layout = QVBoxLayout(tab)
 
         tips = QLabel(
-            "说明：内部编号用于工作目录和配置索引；显示名称用于界面和报告。"
-            "自定义 Pipeline 为空时，会按表达部位自动使用头部、尾部 Pipeline。"
+            "内部编号用于工作目录和配置索引；显示名称用于界面和报告。"
+            "切换表达部位时会自动匹配头部或尾部默认 Pipeline，也可点击“选择”手动覆盖。"
         )
         tips.setWordWrap(True)
         tips.setStyleSheet("color: #666666;")
@@ -1671,6 +1671,26 @@ class SettingsWindow(QWidget):
             lambda checked=False, button=btn_select: self.select_protein_pipeline_for_button(button)
         )
         self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select, margin_left=8, margin_right=8))
+
+        # 初始部位和已保存 Pipeline 都写入后再绑定，避免页面加载时覆盖自定义值。
+        part_combo.currentTextChanged.connect(
+            lambda part, combo=part_combo: self.apply_default_pipeline_for_part(combo, part)
+        )
+
+    def apply_default_pipeline_for_part(self, part_combo, part):
+        """按用户切换后的表达部位更新该下拉框所在行的标准 Pipeline。"""
+        row = self.find_part_combo_row(part_combo)
+        if row < 0 or part not in ("head", "tail"):
+            return
+
+        pipeline = str(Path("pipelines") / f"pipeline_{part}.cppipe")
+        self.protein_table.setItem(row, 3, QTableWidgetItem(pipeline))
+
+    def find_part_combo_row(self, part_combo):
+        for row in range(self.protein_table.rowCount()):
+            if self.get_part_combo_from_row(row) is part_combo:
+                return row
+        return -1
 
     def add_empty_protein_row(self):
         next_index = self.protein_table.rowCount() + 1
