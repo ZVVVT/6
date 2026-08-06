@@ -741,14 +741,12 @@ class TailMeasurementService:
         self.pipeline = Path(pipeline).resolve()
         self.mvimageid_root = Path(mvimageid_root).resolve()
         self.python_exe = Path(python_exe).resolve()
-        plugins_text = str(plugins_directory or "").strip()
-        if plugins_text and plugins_text != ".":
-            self.plugins_dir = Path(plugins_text).resolve()
-        else:
-            self.plugins_dir = (
-                self.mvimageid_root / "C-plugins" / "active_plugins"
-            ).resolve()
         self.tail_measurement_dir = self.paths.measurement_dir / "tail"
+        # 本管道只使用 CellProfiler 内置模块。使用任务内专用空目录，
+        # 避免加载全局 active_plugins 中与尾部标签测量无关的重型插件。
+        self.plugins_dir = (
+            self.tail_measurement_dir / "_builtin_only_plugins"
+        ).resolve()
         self.input_dir = self.tail_measurement_dir / "input"
         self.output_dir = self.tail_measurement_dir / "candidate_output"
         self.result_path = self.tail_measurement_dir / "tail_measurement_result.json"
@@ -768,6 +766,23 @@ class TailMeasurementService:
             plugins_directory=str(self.plugins_dir),
             log_file="",
         )
+
+    def _prepare_builtin_only_plugins_dir(self) -> None:
+        if self.plugins_dir.exists() and not self.plugins_dir.is_dir():
+            raise ValueError(
+                "尾部标签测量专用插件路径不是目录：{}".format(
+                    self.plugins_dir
+                )
+            )
+        self.plugins_dir.mkdir(parents=True, exist_ok=True)
+        unexpected = sorted(path.name for path in self.plugins_dir.iterdir())
+        if unexpected:
+            raise ValueError(
+                "尾部标签测量专用插件目录必须为空：{}；发现：{}".format(
+                    self.plugins_dir,
+                    unexpected,
+                )
+            )
 
     def run(self) -> Dict[str, Any]:
         try:
@@ -795,6 +810,7 @@ class TailMeasurementService:
                     "尾部测量管道不存在：{}".format(self.pipeline)
                 )
 
+            self._prepare_builtin_only_plugins_dir()
             fields = collect_tail_measurement_fields(self.paths.task_root)
             prepared = prepare_standardized_tail_input(fields, self.input_dir)
             _reset_directory(self.output_dir)
@@ -817,6 +833,7 @@ class TailMeasurementService:
                     "calculation_mode": CALCULATION_MODE,
                     "formula_version": FORMULA_VERSION,
                     "pipeline_path": str(self.pipeline),
+                    "plugins_directory": str(self.plugins_dir),
                     "input_dir": str(self.input_dir),
                     "candidate_output_dir": str(self.output_dir),
                     "field_count": len(fields),
@@ -832,6 +849,14 @@ class TailMeasurementService:
                 STAGE,
                 "开始一次性测量 {} 个尾部视野".format(len(fields)),
             )
+            self.logger.info(
+                STAGE,
+                "尾部标签测量仅使用 CellProfiler 内置模块。",
+            )
+            self.logger.info(STAGE, "插件目录：{}".format(self.plugins_dir))
+            self.logger.info(STAGE, "Pipeline：{}".format(self.pipeline))
+            self.logger.info(STAGE, "输入目录：{}".format(self.input_dir))
+            self.logger.info(STAGE, "输出目录：{}".format(self.output_dir))
 
             environment = EnvironmentSnapshotWriter(
                 self.paths,

@@ -28,8 +28,9 @@ import cv2
 import numpy as np
 from PIL import Image
 
-VERSION = "tail_joint_final_candidate_export_mvp_v1_1_pixel_sync"
+VERSION = "tail_joint_final_candidate_export_mvp_v1_2_shared_fragment_reuse"
 ACCEPTED_STATUSES = {"trusted_auto", "user_accepted"}
+RESOLUTION_MODE = "editor_unique_assignment_nearest_centerline"
 
 
 def read_image(path: Path) -> np.ndarray:
@@ -127,6 +128,130 @@ def selected_records(results_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return selected
 
 
+def is_manual_record(record: Dict[str, Any]) -> bool:
+    selected_source = str(record.get("selected_source") or "").strip()
+    return bool(record.get("accepted_by_user", False)) or selected_source.startswith(
+        "manual"
+    )
+
+
+def classify_shared_conflicts(
+    selected: Sequence[Dict[str, Any]],
+    conflicts_payload: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    raw_conflicts = conflicts_payload.get("conflicts")
+    if raw_conflicts is None:
+        raise ValueError("edited_tail_region_conflicts.json 缺少 conflicts 字段。")
+    if not isinstance(raw_conflicts, list):
+        raise ValueError("edited_tail_region_conflicts.json 的 conflicts 必须是数组。")
+
+    claimants_by_fragment: Dict[int, List[Dict[str, Any]]] = {}
+    for record in selected:
+        points = record.get("selected_points_xy")
+        if not isinstance(points, list) or len(points) < 2:
+            raise ValueError(
+                "已接受尾部路径为空或不足两个点：head_id={}".format(
+                    record.get("head_id")
+                )
+            )
+        fragment_ids = record.get("selected_fragment_ids")
+        if not isinstance(fragment_ids, list) or not fragment_ids:
+            raise ValueError(
+                "已接受尾部缺少 fragment_id：head_id={}".format(
+                    record.get("head_id")
+                )
+            )
+        normalized_fragment_ids: List[int] = []
+        for raw_fragment_id in fragment_ids:
+            fragment_id = int(raw_fragment_id)
+            if fragment_id <= 0:
+                raise ValueError(
+                    "已接受尾部包含无效 fragment_id：head_id={}，fragment_id={}".format(
+                        record.get("head_id"), raw_fragment_id
+                    )
+                )
+            normalized_fragment_ids.append(fragment_id)
+        if len(set(normalized_fragment_ids)) != len(normalized_fragment_ids):
+            raise ValueError(
+                "已接受尾部重复引用 fragment_id：head_id={}".format(
+                    record.get("head_id")
+                )
+            )
+        for fragment_id in normalized_fragment_ids:
+            claimants_by_fragment.setdefault(fragment_id, []).append(record)
+
+    allowed: List[Dict[str, Any]] = []
+    seen_fragment_ids = set()
+    for raw_row in raw_conflicts:
+        if not isinstance(raw_row, dict):
+            raise ValueError("区域冲突表存在非对象记录。")
+        required_keys = {
+            "fragment_id",
+            "claimant_count",
+            "overlap_pixel_count",
+            "ambiguous_pixel_count",
+        }
+        missing_keys = sorted(required_keys - set(raw_row))
+        if missing_keys:
+            raise ValueError("区域冲突记录缺少字段：{}".format(missing_keys))
+
+        fragment_id = int(raw_row["fragment_id"])
+        claimant_count = int(raw_row["claimant_count"])
+        overlap_pixel_count = int(raw_row["overlap_pixel_count"])
+        ambiguous_pixel_count = int(raw_row["ambiguous_pixel_count"])
+        if fragment_id <= 0 or fragment_id in seen_fragment_ids:
+            raise ValueError("区域冲突记录的 fragment_id 无效或重复：{}".format(fragment_id))
+        if claimant_count < 2 or overlap_pixel_count <= 0 or ambiguous_pixel_count < 0:
+            raise ValueError("区域冲突记录数值无效：fragment_id={}".format(fragment_id))
+        if ambiguous_pixel_count > overlap_pixel_count:
+            raise ValueError("区域冲突的歧义像素数超过重叠像素数：fragment_id={}".format(fragment_id))
+
+        claimants = claimants_by_fragment.get(fragment_id, [])
+        if not claimants:
+            raise ValueError("区域冲突引用了不存在的 fragment_id：{}".format(fragment_id))
+        if len(claimants) != claimant_count:
+            raise ValueError(
+                "区域冲突 claimant_count 与已接受尾部不一致：fragment_id={}，记录={}，实际={}".format(
+                    fragment_id, claimant_count, len(claimants)
+                )
+            )
+
+        manual_flags = [is_manual_record(record) for record in claimants]
+        if all(manual_flags):
+            conflict_type = "manual_manual"
+        elif any(manual_flags):
+            conflict_type = "manual_auto"
+        else:
+            raise ValueError(
+                "仍存在纯自动候选区域冲突：fragment_id={}，head_ids={}".format(
+                    fragment_id,
+                    [int(record["head_id"]) for record in claimants],
+                )
+            )
+
+        allowed.append(
+            {
+                "fragment_id": fragment_id,
+                "head_ids": [int(record["head_id"]) for record in claimants],
+                "conflict_type": conflict_type,
+                "overlap_pixel_count": overlap_pixel_count,
+                "ambiguous_pixel_count": ambiguous_pixel_count,
+                "selected_source": [
+                    str(record.get("selected_source") or "") for record in claimants
+                ],
+                "accepted_by_user": [
+                    bool(record.get("accepted_by_user", False)) for record in claimants
+                ],
+                "resolution_mode": RESOLUTION_MODE,
+                "shared_pixels_double_counted": False,
+                "manual_objects_preserved": True,
+            }
+        )
+        seen_fragment_ids.add(fragment_id)
+
+    return allowed
+
+
 def validate_inputs(
     head_final_labels: np.ndarray,
     edited_regions_head_id: np.ndarray,
@@ -145,9 +270,7 @@ def validate_inputs(
     if len(set(head_ids)) != len(head_ids):
         raise ValueError("人工编辑结果存在重复 Head ID。")
 
-    conflict_rows = list(conflicts_payload.get("conflicts") or [])
-    if conflict_rows:
-        raise ValueError(f"仍存在区域冲突，数量={len(conflict_rows)}。")
+    allowed_shared_conflicts = classify_shared_conflicts(selected, conflicts_payload)
 
     region_ids = positive_ids(edited_regions_head_id)
     centerline_head_ids = positive_ids(edited_centerline_head_id)
@@ -207,6 +330,12 @@ def validate_inputs(
         "head_ids": expected_ids,
         "full_head_count": len(full_head_ids),
         "conflict_count": 0,
+        "allowed_shared_conflict_count": len(allowed_shared_conflicts),
+        "allowed_shared_conflicts": allowed_shared_conflicts,
+        "shared_fragment_reuse_allowed": True,
+        "resolution_mode": RESOLUTION_MODE,
+        "shared_pixels_double_counted": False,
+        "manual_objects_preserved": True,
         "region_pixel_count_sync_count": len(pixel_mismatches),
         "region_pixel_count_sync_rows": pixel_mismatches,
         "region_pixel_count_source": "edited_tail_regions_head_id_uint16.tif",
@@ -319,6 +448,16 @@ def write_candidate(
         print(
             f"提示：已按最终区域TIFF自动同步{sync_count}条JSON像素数，"
             "无需重新人工编辑。"
+        )
+    allowed_shared_count = int(validation.get("allowed_shared_conflict_count", 0))
+    if allowed_shared_count:
+        print(
+            f"检测到{allowed_shared_count}条已接受尾部的共享碎片记录，"
+            "已保留全部尾部对象并继续导出。"
+        )
+        print(
+            "共享区域沿用编辑器的最近中心线唯一分配规则，"
+            "不进行重复像素计量。"
         )
     selected = list(validation.pop("selected_records"))
     head_ids = list(validation["head_ids"])
