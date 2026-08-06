@@ -476,7 +476,10 @@ class SettingsWindow(QWidget):
         self.btn_open_pipeline_dir.clicked.connect(self.open_pipeline_dir)
         self.btn_open_pipeline_param_file.clicked.connect(self.open_pipeline_param_file)
 
-        self.tabs.addTab(tab, "管道参数")
+        # 交付界面暂不向普通用户注册“管道参数”顶部入口。
+        # 页面对象和全部维护逻辑继续保留，开发时恢复 addTab 即可重新启用；
+        # 未加入 QTabWidget 也可避免旧索引、键盘切换或程序跳转进入空白页。
+        self.pipeline_params_page = tab
 
     def create_head_pipeline_param_page(self):
         group = QGroupBox("头部蛋白管道参数")
