@@ -123,15 +123,76 @@ def contour_for_mask(component_mask: np.ndarray) -> Optional[np.ndarray]:
     return max(contours, key=cv2.contourArea) if contours else None
 
 
+def normalize_label_connectivity(
+    raw_labels: np.ndarray,
+) -> Tuple[np.ndarray, List[Dict[str, int]]]:
+    """每个正标签仅保留一个 8 邻域连通的最大区域。"""
+    labels = np.asarray(raw_labels)
+    normalized = labels.copy()
+    changes = []  # type: List[Dict[str, int]]
+    object_slices = ndimage.find_objects(labels)
+
+    for raw_id in np.unique(labels[labels > 0]):
+        object_id = int(raw_id)
+        object_slice = object_slices[object_id - 1]
+        if object_slice is None:
+            continue
+        local_mask = (labels[object_slice] == raw_id).astype(np.uint8)
+        component_count, components = cv2.connectedComponents(
+            local_mask,
+            connectivity=8,
+        )
+        if component_count <= 2:
+            continue
+
+        component_areas = np.bincount(components.ravel())[1:]
+        maximum_area = int(component_areas.max())
+        largest_components = np.flatnonzero(component_areas == maximum_area) + 1
+        # 面积并列时保留左上像素按行优先最靠前的区域，不依赖组件编号。
+        kept_component = min(
+            (int(component_id) for component_id in largest_components),
+            key=lambda component_id: int(
+                np.flatnonzero(components == component_id)[0]
+            ),
+        )
+        kept_pixels = int(component_areas[kept_component - 1])
+        removed_pixels = int(component_areas.sum()) - kept_pixels
+        local_labels = normalized[object_slice]
+        local_labels[(local_mask > 0) & (components != kept_component)] = 0
+        changes.append({
+            "object_id": object_id,
+            "component_count": int(component_count - 1),
+            "kept_pixels": kept_pixels,
+            "removed_pixels": removed_pixels,
+        })
+
+    return normalized, changes
+
+
 def measure_and_filter(
     raw_labels: np.ndarray,
     parameters: Dict[str, Any],
+    field_id: Optional[str] = None,
 ) -> Tuple[np.ndarray, List[Dict[str, Any]], List[np.ndarray]]:
     labels = np.squeeze(np.asarray(raw_labels))
     if labels.ndim != 2:
         raise ValueError("Cellpose 标签必须为二维，实际 shape={}".format(labels.shape))
     if np.any(labels < 0):
         raise ValueError("Cellpose 标签包含负值")
+
+    labels, connectivity_changes = normalize_label_connectivity(labels)
+    for change in connectivity_changes:
+        print(
+            "head_label_connectivity_normalized: "
+            "field={} object_id={} components={} kept_pixels={} removed_pixels={}".format(
+                field_id or "",
+                change["object_id"],
+                change["component_count"],
+                change["kept_pixels"],
+                change["removed_pixels"],
+            ),
+            flush=True,
+        )
 
     height, width = labels.shape
     source_ids, source_areas = np.unique(labels, return_counts=True)
@@ -273,7 +334,11 @@ def process_field(item: Dict[str, Any], model: Any, runtime: Dict[str, Any], par
     raw_labels = eval_model(model, cellpose_input, parameters)
     eval_ms = (time.perf_counter() - eval_started) * 1000.0
     post_started = time.perf_counter()
-    labels, objects, contours = measure_and_filter(raw_labels, parameters)
+    labels, objects, contours = measure_and_filter(
+        raw_labels,
+        parameters,
+        field_id=str(item["field_id"]),
+    )
     overlay = build_overlay(gray_preview, objects, contours)
     postprocess_ms = (time.perf_counter() - post_started) * 1000.0
     labels_path.parent.mkdir(parents=True, exist_ok=True)
