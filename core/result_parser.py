@@ -525,7 +525,51 @@ class ResultParser:
         if object_csv is None or object_df is None:
             missing.append("未找到对象级 CSV，无法按新版公式计算荧光强度。")
         elif object_df.empty:
-            missing.append(f"对象级 CSV 为空：{object_csv}")
+            object_cols = set(object_df.columns)
+            if part != "head":
+                missing.append(f"对象级 CSV 为空：{object_csv}")
+            elif "Math_MeanIntensity255" not in object_cols:
+                missing.append(
+                    "头部对象 CSV 缺少 Math_MeanIntensity255，"
+                    "无法计算荧光强度。"
+                )
+            elif "Count_R_objects" not in image_df.columns:
+                pass
+            elif (
+                "Count_R_colocalized" not in image_df.columns
+                and "Count_G_colocalized" not in image_df.columns
+            ):
+                pass
+            else:
+                r_counts = pd.to_numeric(
+                    image_df["Count_R_objects"], errors="coerce"
+                )
+                colocalized_column = (
+                    "Count_R_colocalized"
+                    if "Count_R_colocalized" in image_df.columns
+                    else "Count_G_colocalized"
+                )
+                colocalized_counts = pd.to_numeric(
+                    image_df[colocalized_column], errors="coerce"
+                )
+
+                if r_counts.isna().any():
+                    missing.append(
+                        "Image.csv 的 Count_R_objects 无法取得有效数值。"
+                    )
+                elif (r_counts <= 0).any():
+                    missing.append(
+                        "Image.csv 的 Count_R_objects 不大于 0，"
+                        "无有效头部，无法计算。"
+                    )
+                elif colocalized_counts.isna().any():
+                    missing.append(
+                        "Image.csv 的 {} 无法取得有效数值。".format(
+                            colocalized_column
+                        )
+                    )
+                elif (colocalized_counts != 0).any():
+                    missing.append(f"对象级 CSV 为空：{object_csv}")
         else:
             object_cols = set(object_df.columns)
             if (
