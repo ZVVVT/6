@@ -7,6 +7,9 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import tifffile
+from PIL import Image
+
 from .environment_snapshot import EnvironmentSnapshotWriter
 from .head_measurement_result import validate_head_measurement_output
 from .manifest_store import ManifestStore
@@ -16,6 +19,46 @@ from .task_state import TaskStateStore, atomic_write_json
 
 
 STAGE = "head_measurement"
+
+
+def _prepare_measurement_channel_image(
+    source: Path,
+    destination: Path,
+) -> None:
+    """将通道图像暂存为内容真实且可读取的 TIFF。"""
+    source_path = Path(source).resolve()
+    destination_path = Path(destination).resolve()
+
+    try:
+        with Image.open(source_path) as image:
+            image.load()
+            source_format = str(image.format or "").upper()
+
+            if source_format == "TIFF":
+                # 只有内容确实为 TIFF 且 tifffile 可读取时才保留原文件。
+                tifffile.imread(str(source_path))
+                shutil.copy2(str(source_path), str(destination_path))
+            else:
+                # 以解码后的像素重新编码；不做缩放、增强或数值变换。
+                image.save(
+                    str(destination_path),
+                    format="TIFF",
+                    compression="raw",
+                )
+
+        with Image.open(destination_path) as verification:
+            if str(verification.format or "").upper() != "TIFF":
+                raise ValueError("生成文件的实际格式不是 TIFF")
+            verification.verify()
+        tifffile.imread(str(destination_path))
+    except Exception as exception:
+        raise ValueError(
+            "无法准备标准 TIFF 测量通道图像：{} -> {}；原因：{}".format(
+                source_path,
+                destination_path,
+                exception,
+            )
+        ) from exception
 
 
 def _record_path(task_root: Path, record: Dict[str, Any]) -> Path:
@@ -291,10 +334,14 @@ def prepare_standardized_head_input(
         }
 
         for key, destination in destinations.items():
-            shutil.copy2(
-                str(sources[key]),
-                str(destination),
-            )
+            if key == "labels":
+                # 标签图由校准阶段以 uint16 TIFF 生成，必须逐字节保留。
+                shutil.copy2(str(sources[key]), str(destination))
+            else:
+                _prepare_measurement_channel_image(
+                    sources[key],
+                    destination,
+                )
 
         records.append({
             "field_id": field_id,

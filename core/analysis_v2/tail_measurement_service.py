@@ -13,6 +13,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+import tifffile
 from PIL import Image
 
 from core.result_parser import ResultParser
@@ -285,58 +286,36 @@ def _prepare_measurement_channel_image(
 ) -> None:
     """为 MvImageID 准备真实 TIFF 通道图像。
 
-    已是 TIFF 的正式显微图保持原文件字节不变；PNG 等其他格式必须
-    重新编码为无压缩 TIFF，禁止仅修改扩展名。带透明通道或调色板的
-    图像统一转换为 RGB，避免旧版 Bio-Formats/JAI 读取失败。
+    实际格式为 TIFF 且 tifffile 可读取时保持原文件字节不变；其他
+    格式从解码像素重新编码为无压缩 TIFF，禁止仅修改扩展名。
     """
     source_path = Path(source).resolve()
     destination_path = Path(destination).resolve()
 
-    if source_path.suffix.casefold() in {".tif", ".tiff"}:
-        shutil.copy2(str(source_path), str(destination_path))
-        return
-
     try:
         with Image.open(source_path) as image:
             image.load()
-            source_mode = str(image.mode or "")
+            source_format = str(image.format or "").upper()
 
-            if source_mode in {"P", "PA", "RGBA", "LA"}:
-                prepared = image.convert("RGB")
-            elif source_mode == "1":
-                prepared = image.convert("L")
-            elif source_mode in {"L", "RGB", "I", "F", "I;16", "I;16L", "I;16B"}:
-                prepared = image.copy()
+            if source_format == "TIFF":
+                tifffile.imread(str(source_path))
+                shutil.copy2(str(source_path), str(destination_path))
             else:
-                prepared = image.convert("RGB")
-
-            try:
-                prepared.save(
-                    destination_path,
+                image.save(
+                    str(destination_path),
                     format="TIFF",
                     compression="raw",
                 )
-            finally:
-                prepared.close()
-    except Exception as exception:
-        raise ValueError(
-            "无法将测量通道图像转换为标准 TIFF：{} -> {}；原因：{}".format(
-                source_path,
-                destination_path,
-                exception,
-            )
-        ) from exception
 
-    try:
         with Image.open(destination_path) as verification:
             if str(verification.format or "").upper() != "TIFF":
-                raise ValueError(
-                    "生成文件不是 TIFF，而是 {}。".format(verification.format)
-                )
+                raise ValueError("生成文件的实际格式不是 TIFF")
             verification.verify()
+        tifffile.imread(str(destination_path))
     except Exception as exception:
         raise ValueError(
-            "标准 TIFF 写入后校验失败：{}；原因：{}".format(
+            "无法准备标准 TIFF 测量通道图像：{} -> {}；原因：{}".format(
+                source_path,
                 destination_path,
                 exception,
             )
