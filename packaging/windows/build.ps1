@@ -3,7 +3,7 @@ param(
     [string]$PythonExe = '',
     [string]$PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple',
     [string]$PythonEmbedUrl = 'https://www.python.org/ftp/python/3.8.3/python-3.8.3-embed-amd64.zip',
-    [string]$OutputRoot = 'F:\sperm_protein_analyzer_Test_20260811'
+    [string]$OutputRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +11,9 @@ Set-StrictMode -Version 2.0
 
 $BuildDate = Get-Date -Format "yyyyMMdd"
 $BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = "F:\sperm_protein_analyzer_Test_$BuildDate"
+}
 
 function Initialize-PipNetwork([string]$IndexUrl) {
     try {
