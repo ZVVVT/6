@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +50,26 @@ def _field_id_for_row(
         if "samplename" in str(name).lower()
     ]
     values = sample_values or [str(value or "") for value in row.values()]
+
+    def has_boundary_match(field_id: str) -> bool:
+        pattern = (
+            r"(?<![^\W_])"
+            + re.escape(field_id)
+            + r"(?![^\W_])"
+        )
+        return any(
+            re.search(pattern, value, flags=re.IGNORECASE) is not None
+            for value in values
+        )
+
+    boundary_matches = [
+        field_id
+        for field_id in field_ids
+        if has_boundary_match(field_id)
+    ]
+    if len(boundary_matches) == 1:
+        return boundary_matches[0]
+
     matches = [
         field_id
         for field_id in field_ids

@@ -35,6 +35,9 @@ from app.analysis_v2.tail_analysis_workers import (
     TailMeasurementWorker,
     TailPathWorker,
 )
+from app.analysis_v2.c18b_tail_calibration_window import (
+    C18BTailCalibrationController,
+)
 from app.analysis_v2.tail_calibration_window import TailCalibrationController
 from app.long_message_dialog import show_long_message_dialog
 from app.result_viewer import ResultViewer
@@ -775,7 +778,7 @@ class AnalysisWindow(QWidget):
 
         if protein_key == "protein3" and protein_part == "tail":
             self.pipeline_label.setText(
-                "Pipeline：Analysis V2：头部校准 → 联合尾部候选 → 人工校准 → 校准后测量"
+                "Pipeline：Analysis V2：头部人工校准 → C18B尾部处理 → 尾部测量"
             )
         elif str(protein_part).strip().lower() == "head":
             self.pipeline_label.setText(
@@ -1870,7 +1873,7 @@ class AnalysisWindow(QWidget):
         worker.finished.connect(worker.deleteLater)
         self.tail_field_prepare_worker = worker
         self.append_log(
-            "Analysis V2：后台开始准备视野 {} 尾部；头部窗口可继续操作。".format(
+            "Analysis V2：后台开始视野 {} 的C18B尾部处理；头部窗口可继续操作。".format(
                 field_id
             )
         )
@@ -1902,14 +1905,14 @@ class AnalysisWindow(QWidget):
         if success:
             elapsed = float(payload.get("elapsed_seconds", 0.0) or 0.0)
             self.append_log(
-                "Analysis V2：视野 {} 尾部后台准备完成，耗时 {:.1f}s。".format(
+                "Analysis V2：视野 {} 的C18B尾部处理完成，耗时 {:.1f}s。".format(
                     field_id,
                     elapsed,
                 )
             )
         else:
             self.append_log(
-                "Analysis V2：视野 {} 尾部后台准备失败；全部头部完成后将自动重试。".format(
+                "Analysis V2：视野 {} 的C18B尾部处理失败；全部头部完成后将自动重试。".format(
                     field_id
                 )
             )
@@ -1924,7 +1927,7 @@ class AnalysisWindow(QWidget):
         self._maybe_start_tail_path_after_field_prepare()
 
     def _maybe_start_tail_path_after_field_prepare(self) -> None:
-        """Start manual tail flow as soon as field 1 is ready.
+        """Start the protein3 C18B final-contract flow when field 1 is ready.
 
         Field 2/3 preparation remains in the existing background queue.  The
         manual worker waits only for the field it is about to open, so it no
@@ -1955,9 +1958,8 @@ class AnalysisWindow(QWidget):
         )
         first_ready = bool(first_result.get("success"))
 
-        # 正常路径：尾部1已完成草稿和编辑器适配，立即进入人工窗口。
-        # 回退路径：队列已经结束但尾部1预处理失败，让 manual-stream
-        # 自己安全补算当前视野，避免流程永久卡住。
+        # 正常路径：视野1的C18B结果已准备，立即生成正式尾部结果。
+        # 回退路径：队列结束后由总流程补算缺少的C18B结果。
         no_prepare_work_left = (
             not self._worker_is_running(self.tail_field_prepare_worker)
             and not self.tail_field_prepare_queue
@@ -1973,12 +1975,12 @@ class AnalysisWindow(QWidget):
 
         if first_ready:
             self.append_log(
-                "Analysis V2：尾部1已准备完成，立即打开尾部人工窗口；"
-                "尾部2和尾部3继续在后台准备。"
+                "Analysis V2：视野1的C18B尾部处理已准备完成；"
+                "开始生成C18B尾部结果，其他视野继续后台处理。"
             )
         else:
             self.append_log(
-                "Analysis V2：尾部1后台准备未成功，进入安全补算模式；"
+                "Analysis V2：视野1的C18B尾部处理未成功，进入安全补算模式；"
                 "只补算当前需要的视野。"
             )
         self._start_tail_path_worker(project_root, task_root)
@@ -2070,11 +2072,10 @@ class AnalysisWindow(QWidget):
                 self.tail_field_order = list(completed_fields)
                 self._tail_head_calibration_finished = True
                 self._tail_path_start_pending = True
-                self.btn_run_analysis.setText("正在准备尾部1...")
+                self.btn_run_analysis.setText("正在进行C18B尾部处理...")
                 self.append_log(
                     "Analysis V2：全部头部校准完成；头部窗口立即关闭。"
-                    "尾部1一旦准备好就立即打开人工窗口，"
-                    "不会等待尾部2和尾部3。"
+                    "开始C18B尾部处理，完成后直接生成尾部结果。"
                 )
                 self._start_next_tail_field_prepare()
                 self._maybe_start_tail_path_after_field_prepare()
@@ -2141,10 +2142,16 @@ class AnalysisWindow(QWidget):
     ) -> None:
         if self._worker_is_running(self.tail_path_worker):
             raise RuntimeError("尾部自动路径任务已经在运行。")
+        context = dict(self.current_analysis_v2_context or {})
+        is_c18b = context.get("workflow") == "protein3_tail"
         mark_tail_stage(
             task_root,
             "tail_segmenting",
-            "正在执行联合尾部候选、人工校准和原子提升",
+            (
+                "正在执行C18B尾部处理和结果生成"
+                if is_c18b
+                else "正在执行联合尾部候选、人工校准和原子提升"
+            ),
         )
         worker = TailPathWorker(
             project_root=project_root,
@@ -2157,10 +2164,16 @@ class AnalysisWindow(QWidget):
         worker.finished.connect(self._on_tail_path_thread_finished)
         worker.finished.connect(worker.deleteLater)
         self.tail_path_worker = worker
-        self.btn_run_analysis.setText("正在校准尾部...")
+        self.btn_run_analysis.setText(
+            "正在生成C18B尾部结果..." if is_c18b else "正在校准尾部..."
+        )
         self.append_log(
-            "Analysis V2：开始实时尾部人工流水线；"
-            "当前视野就绪即打开，后续视野继续后台准备。"
+            "Analysis V2：开始C18B尾部处理和结果生成。"
+            if is_c18b
+            else (
+                "Analysis V2：开始实时尾部人工流水线；"
+                "当前视野就绪即打开，后续视野继续后台准备。"
+            )
         )
         worker.start()
 
@@ -2174,10 +2187,19 @@ class AnalysisWindow(QWidget):
             return
         if not success:
             self._analysis_v2_finish_pending = True
+            context = dict(self.current_analysis_v2_context or {})
+            is_c18b = context.get("workflow") == "protein3_tail"
             self._show_analysis_v2_error(
-                "尾部自动处理失败",
-                "联合尾部流程未完成；任务目录、自动候选和已保存的人工结果均保留，可再次运行续接。",
-                str(error_message or "尾部自动处理失败。"),
+                "C18B尾部处理失败" if is_c18b else "尾部自动处理失败",
+                (
+                    "C18B尾部结果未生成；头部校准和已有C18B结果均保留，可再次运行。"
+                    if is_c18b
+                    else "联合尾部流程未完成；任务目录、自动候选和已保存的人工结果均保留，可再次运行续接。"
+                ),
+                str(
+                    error_message
+                    or ("C18B尾部处理失败。" if is_c18b else "尾部自动处理失败。")
+                ),
             )
             return
         try:
@@ -2262,14 +2284,23 @@ class AnalysisWindow(QWidget):
                 self._on_tail_calibration_completed(payload)
                 return
 
-            # 兼容旧任务：只有旧 TailPathWorker 结果才进入旧编辑器控制器。
+            # C18B 使用独立控制器；legacy 继续使用原尾部校准控制器。
             mark_tail_stage(task_root, "tail_segmented", "全部视野尾部自动路径完成")
             mark_tail_stage(
                 task_root,
                 "tail_calibration_required",
                 "等待人工尾部校准",
             )
-            controller = TailCalibrationController(
+            is_c18b_editor_payload = (
+                payload.get("workflow") == "c18b_tail_editor"
+                and payload.get("tail_backend") == "C18B"
+            )
+            controller_class = (
+                C18BTailCalibrationController
+                if is_c18b_editor_payload
+                else TailCalibrationController
+            )
+            controller = controller_class(
                 task_root=task_root,
                 field_payloads=fields,
                 parent=self,
@@ -2360,7 +2391,9 @@ class AnalysisWindow(QWidget):
             self.tail_measurement_worker = worker
             self.btn_run_analysis.setText("正在测量尾部...")
             self.append_log(
-                "Analysis V2：全部视野尾部校准完成，开始新版尾部测量。"
+                "Analysis V2：C18B尾部结果已完成，开始新版尾部测量。"
+                if str(payload.get("tail_backend") or "") == "C18B"
+                else "Analysis V2：全部视野尾部校准完成，开始新版尾部测量。"
             )
             worker.start()
 
@@ -2372,9 +2405,14 @@ class AnalysisWindow(QWidget):
                     pass
             self.tail_measurement_worker = None
             task_root_text = str(self.current_analysis_v2_task_root or "")
+            is_c18b = str(payload.get("tail_backend") or "") == "C18B"
             self._show_analysis_v2_error(
                 "尾部测量启动失败",
-                "人工校准结果已保留，旧正式结果没有被修改。",
+                (
+                    "C18B尾部结果已保留，旧正式结果没有被修改。"
+                    if is_c18b
+                    else "人工校准结果已保留，旧正式结果没有被修改。"
+                ),
                 "{}\n\n任务目录：{}".format(
                     exception, task_root_text
                 ),
@@ -2489,9 +2527,16 @@ class AnalysisWindow(QWidget):
         if not success:
             self._analysis_v2_finish_pending = True
             task_root_text = str(self.current_analysis_v2_task_root or "")
+            context = dict(self.current_analysis_v2_context or {})
+            calibration = dict(context.get("tail_calibration_result") or {})
+            is_c18b = str(calibration.get("tail_backend") or "") == "C18B"
             self._show_analysis_v2_error(
                 "尾部测量失败",
-                "新版尾部测量未完成，人工校准数据已保留，旧正式结果没有被修改。",
+                (
+                    "新版尾部测量未完成，C18B尾部结果已保留，旧正式结果没有被修改。"
+                    if is_c18b
+                    else "新版尾部测量未完成，人工校准数据已保留，旧正式结果没有被修改。"
+                ),
                 "{}\n\n任务目录：{}".format(
                     error_message or "尾部测量失败。",
                     task_root_text,

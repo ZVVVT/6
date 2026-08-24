@@ -47,6 +47,7 @@ class TailCalibrationController(QObject):
             "--green", self.payload["green"],
             "--probability", self.payload["probability"],
             "--fragments", self.payload["fragments"],
+            "--head-labels", self.payload["head_labels"],
             "--entries", self.payload["entries"],
             "--paths", self.payload["paths"],
             "--global-results", self.payload["global_results"],

@@ -1,0 +1,37 @@
+{
+  "version": "C-03",
+  "validation_threshold": 0.15,
+  "graph": {
+    "min_segment_length": 5,
+    "min_candidate_length": 25,
+    "max_gap": 35,
+    "max_angle": 42,
+    "max_curvature_delta": 0.12
+  },
+  "candidate_merging": {
+    "path_radius": 3,
+    "min_overlap": 0.35,
+    "max_spatial_distance": 5.0,
+    "max_endpoint_gap": 400.0,
+    "min_direction": 0.4,
+    "min_facing": 0.1,
+    "min_fitc_continuity": 0.12
+  },
+  "region_growing": {
+    "max_distance": 18.0,
+    "intensity_weight": 3.0,
+    "direction_weight": 0.8
+  },
+  "identity_graph_v3": {
+    "edge_weight": "total_similarity",
+    "edge_formula": "0.22 endpoint + 0.13 spatial + 0.18 bridge FITC + 0.10 background + 0.12 direction + 0.15 tangent + 0.10 curvature",
+    "community_algorithm": "Louvain",
+    "community_resolution": 2.2,
+    "seed": 17017
+  },
+  "reconstruction": {
+    "method": "graph_constrained_instance_separation",
+    "intensity_weight": 3.0,
+    "direction_weight": 0.8
+  }
+}

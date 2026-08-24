@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [string]$PythonExe = '',
-    [string]$PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple'
+    [string]$PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple',
+    [string]$PythonEmbedUrl = 'https://www.python.org/ftp/python/3.8.3/python-3.8.3-embed-amd64.zip',
+    [string]$OutputRoot = 'F:\sperm_protein_analyzer_Test_20260811'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,7 +11,6 @@ Set-StrictMode -Version 2.0
 
 $BuildDate = Get-Date -Format "yyyyMMdd"
 $BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
-$OutputRoot = "F:\sperm_protein_analyzer_Test_$BuildDate"
 
 function Initialize-PipNetwork([string]$IndexUrl) {
     try {
@@ -218,6 +219,7 @@ $Branch = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot 
 $Commit = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot rev-parse HEAD).Trim()
 
 $ToolsWhitelist = @(
+    'tools\analysis_v2\c18b_score015_adapter.py',
     'tools\analysis_v2\direct_cellpose_worker.py',
     'tools\analysis_v2\tail_joint_chain_candidate_mvp.py',
     'tools\analysis_v2\tail_joint_draft_editor_launcher_mvp.py',
@@ -235,7 +237,25 @@ $ToolsWhitelist = @(
     'tools\analysis_v2\tail_legacy\tail_result_editor_v2_3_draft_mvp.py'
 )
 
-foreach ($item in $ToolsWhitelist) {
+$C18BPipelineFiles = @(
+    'tools\analysis_v2\c18b_score015\__init__.py',
+    'tools\analysis_v2\c18b_score015\candidate_merging.py',
+    'tools\analysis_v2\c18b_score015\candidate_scoring.py',
+    'tools\analysis_v2\c18b_score015\candidate_validation.py',
+    'tools\analysis_v2\c18b_score015\fitc_processing.py',
+    'tools\analysis_v2\c18b_score015\graph_constrained_instance_separation.py',
+    'tools\analysis_v2\c18b_score015\graph_seeded_region_growing.py',
+    'tools\analysis_v2\c18b_score015\identity_graph_v3.py',
+    'tools\analysis_v2\c18b_score015\run_pipeline.py',
+    'tools\analysis_v2\c18b_score015\tail_graph_experiment.py',
+    'tools\analysis_v2\c18b_score015\config\frozen_parameters.json'
+)
+$C18BRuntimeRequirements = 'packaging\windows\requirements-c18b.txt'
+$RequiredExternalFiles = @(
+    $ToolsWhitelist + $C18BPipelineFiles + $C18BRuntimeRequirements
+)
+
+foreach ($item in $RequiredExternalFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $item) -PathType Leaf)) {
         throw "当前工作树中的正式 tools 白名单文件缺失：$item"
     }
@@ -274,6 +294,7 @@ try {
     $RequiredPackagingFiles = @(
         'packaging\windows\SpermProteinAnalyzer.spec',
         'packaging\windows\requirements-build.txt',
+        'packaging\windows\requirements-c18b.txt',
         'config.ini',
         'pipeline_params.ini',
         'main.py'
@@ -407,8 +428,70 @@ for name in modules:
     # pipelines/tools 一样是 git archive 生成的同一份干净源码。
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'core') -Destination $OutputRoot -Recurse
 
-    foreach ($item in $ToolsWhitelist) {
+    foreach ($item in @($ToolsWhitelist + $C18BPipelineFiles)) {
         Copy-RequiredFile $item $SourceRoot $OutputRoot
+    }
+
+    # C18B 使用成品内独立 Python，不依赖也不修改客户的 F:\MvImageID。
+    $C18BRuntimeRoot = Join-Path $OutputRoot '.venv-c18b'
+    $PythonEmbedArchive = Join-Path $BuildRoot 'python-3.8.3-embed-amd64.zip'
+    Invoke-WebRequest -Uri $PythonEmbedUrl -OutFile $PythonEmbedArchive
+    Expand-Archive -LiteralPath $PythonEmbedArchive -DestinationPath $C18BRuntimeRoot
+
+    $C18BPthPath = Join-Path $C18BRuntimeRoot 'python38._pth'
+    if (-not (Test-Path -LiteralPath $C18BPthPath -PathType Leaf)) {
+        throw 'C18B Python 嵌入式运行时缺少 python38._pth。'
+    }
+    $C18BPthText = @(
+        'python38.zip',
+        '.',
+        'Lib\site-packages',
+        'import site'
+    ) -join "`r`n"
+    [System.IO.File]::WriteAllText(
+        $C18BPthPath,
+        $C18BPthText + "`r`n",
+        $Utf8NoBomForChecks
+    )
+
+    $C18BSitePackages = Join-Path $C18BRuntimeRoot 'Lib\site-packages'
+    New-Item -ItemType Directory -Path $C18BSitePackages -Force | Out-Null
+    & $BuildPython -m pip install `
+        --disable-pip-version-check `
+        --index-url $PipIndexUrl `
+        --trusted-host $PipTrustedHost `
+        --only-binary=:all: `
+        --no-compile `
+        --target $C18BSitePackages `
+        --requirement (Join-Path $SourceRoot $C18BRuntimeRequirements)
+    if ($LASTEXITCODE -ne 0) {
+        throw '安装 C18B 独立运行时依赖失败。'
+    }
+
+    $C18BPython = Join-Path $C18BRuntimeRoot 'python.exe'
+    $C18BSmoke = @'
+import platform
+import cv2
+import networkx
+import numpy
+import PIL
+import tifffile
+
+if platform.python_version() != "3.8.3":
+    raise SystemExit("C18B Python 版本不是 3.8.3")
+if not hasattr(cv2, "ximgproc") or not hasattr(cv2.ximgproc, "thinning"):
+    raise SystemExit("C18B OpenCV 缺少 cv2.ximgproc.thinning")
+print("C18B 独立运行时检查通过")
+'@
+    $C18BSmokePath = Join-Path $BuildRoot 'verify_c18b_runtime.py'
+    [System.IO.File]::WriteAllText(
+        $C18BSmokePath,
+        $C18BSmoke,
+        $Utf8NoBomForChecks
+    )
+    & $C18BPython $C18BSmokePath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'C18B 独立运行时导入检查失败。'
     }
 
     Remove-OutputPythonCache (Join-Path $OutputRoot 'core')
@@ -622,6 +705,11 @@ print(value)
             throw "成品缺少正式 tools 文件：$item"
         }
     }
+    foreach ($item in $C18BPipelineFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $OutputRoot $item) -PathType Leaf)) {
+            throw "成品缺少 C18B pipeline/config 文件：$item"
+        }
+    }
 
     $ExcludedTool = Join-Path $OutputRoot 'tools\analysis_v2\tail_corner_guard_replay_v1.py'
     if (Test-Path -LiteralPath $ExcludedTool) {
@@ -635,6 +723,8 @@ print(value)
         'core',
         'pipelines',
         'tools\analysis_v2',
+        '.venv-c18b\python.exe',
+        '.venv-c18b\Lib\site-packages',
         'config.ini',
         'pipeline_params.ini',
         'data',

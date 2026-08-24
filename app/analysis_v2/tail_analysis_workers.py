@@ -21,6 +21,56 @@ WINDOWS_CREATION_FLAGS = (
 )
 
 
+def _task_protein_key(task_root: Path) -> str:
+    manifest_path = Path(task_root) / "manifest.json"
+    if not manifest_path.is_file():
+        return ""
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return str(payload.get("protein_key", "") or "").strip()
+
+
+def _field_fitc_path(task_root: Path, field_id: str) -> Path:
+    input_dir = Path(task_root) / "input"
+    matches = sorted(input_dir.glob("{}_FITC.*".format(field_id)))
+    matches = [path.resolve() for path in matches if path.is_file()]
+    if len(matches) != 1:
+        raise FileNotFoundError(
+            "视野 {} 的FITC输入数量必须为1，实际={}。".format(
+                field_id,
+                [str(path) for path in matches],
+            )
+        )
+    return matches[0]
+
+
+def _field_merge_path(task_root: Path, field_id: str) -> Path:
+    input_dir = Path(task_root) / "input"
+    matches = sorted(input_dir.glob("{}_Merge.*".format(field_id)))
+    matches = [path.resolve() for path in matches if path.is_file()]
+    if len(matches) != 1:
+        raise FileNotFoundError(
+            "视野 {} 的Merge输入数量必须为1，实际={}。".format(
+                field_id,
+                [str(path) for path in matches],
+            )
+        )
+    return matches[0]
+
+
+def _c18b_output_dir(task_root: Path, field_id: str) -> Path:
+    return Path(task_root) / "segmentation" / "c18b_score015" / field_id
+
+
+def _c18b_instances_path(task_root: Path, field_id: str) -> Path:
+    fitc_path = _field_fitc_path(task_root, field_id)
+    return (
+        _c18b_output_dir(task_root, field_id)
+        / fitc_path.stem
+        / "06_final_tail_instances.tif"
+    ).resolve()
+
+
 class TailPathWorker(QThread):
     """Run the validated joint-tail workflow and prepare formal calibration labels.
 
@@ -190,6 +240,152 @@ class TailPathWorker(QThread):
             })
         return result
 
+    def _ensure_c18b_result(self, field_id, log_handle):
+        instances_path = _c18b_instances_path(self.task_root, field_id)
+        if instances_path.is_file() and instances_path.stat().st_size > 0:
+            message = "[C18B backend] {} 使用已有实例结果：{}".format(
+                field_id,
+                instances_path,
+            )
+            self.log_signal.emit(message)
+            log_handle.write(message + "\n")
+            log_handle.flush()
+            return instances_path
+
+        fitc_path = _field_fitc_path(self.task_root, field_id)
+        head_labels = (
+            self.task_root
+            / "calibration"
+            / "head"
+            / (field_id + "_HeadFinalLabels.tif")
+        )
+        runner = (
+            self.project_root
+            / "tools"
+            / "analysis_v2"
+            / "c18b_score015_adapter.py"
+        ).resolve()
+        if not runner.is_file():
+            raise FileNotFoundError("C18B运行器不存在：{}".format(runner))
+        compatibility_dir = (
+            self.task_root
+            / "segmentation"
+            / "c18b_runner_contract"
+            / field_id
+        )
+        self.log_signal.emit(
+            "[C18B backend] {} 开始生成尾部实例。".format(field_id)
+        )
+        self._run_streaming_command(
+            [
+                str(self.python_executable),
+                "-u",
+                str(runner),
+                "--green",
+                str(fitc_path),
+                "--head-labels",
+                str(head_labels),
+                "--output-dir",
+                str(compatibility_dir),
+                "--c18b-output-dir",
+                str(_c18b_output_dir(self.task_root, field_id)),
+            ],
+            "{} C18B backend".format(field_id),
+            log_handle,
+        )
+        if not instances_path.is_file() or instances_path.stat().st_size <= 0:
+            raise FileNotFoundError("C18B未生成实例标签：{}".format(instances_path))
+        return instances_path
+
+    def _prepare_c18b_editor_payload(self, field_id, instances_path, log_handle):
+        adapter = (
+            self.project_root
+            / "tools"
+            / "analysis_v2"
+            / "c18b_tail_editor_adapter.py"
+        ).resolve()
+        if not adapter.is_file():
+            raise FileNotFoundError("C18B editor adapter不存在：{}".format(adapter))
+        head_labels = (
+            self.task_root
+            / "calibration"
+            / "head"
+            / (field_id + "_HeadFinalLabels.tif")
+        )
+        fitc_path = _field_fitc_path(self.task_root, field_id)
+        merge_path = _field_merge_path(self.task_root, field_id)
+        probability_path = (
+            self.task_root
+            / "segmentation"
+            / "c18b_runner_contract"
+            / field_id
+            / "02_probability_uint16.tif"
+        )
+        output_dir = self.task_root / "calibration" / "tail" / field_id
+        editor_script = (
+            self.project_root
+            / "tools"
+            / "analysis_v2"
+            / "tail_legacy"
+            / "tail_result_editor_v2_3_draft_mvp.py"
+        ).resolve()
+        if not editor_script.is_file():
+            raise FileNotFoundError("尾部editor不存在：{}".format(editor_script))
+        self._run_streaming_command(
+            [
+                str(self.python_executable),
+                "-u",
+                str(adapter),
+                "--instances", str(instances_path),
+                "--head-labels", str(head_labels),
+                "--fitc", str(fitc_path),
+                "--merge", str(merge_path),
+                "--probability", str(probability_path),
+                "--output-dir", str(output_dir),
+            ],
+            "{} C18B editor payload".format(field_id),
+            log_handle,
+        )
+
+        return {
+            "field_id": field_id,
+            "merge": str(merge_path),
+            "green": str(fitc_path),
+            "probability": str((output_dir / "probability.tif").resolve()),
+            "fragments": str((output_dir / "fragments.tif").resolve()),
+            "head_labels": str(head_labels.resolve()),
+            "entries": str((output_dir / "entries.json").resolve()),
+            "paths": str((output_dir / "paths.json").resolve()),
+            "global_results": str((output_dir / "global_results.json").resolve()),
+            "output_dir": str(output_dir.resolve()),
+            "python_executable": str(self.python_executable),
+            "editor_script": str(editor_script),
+        }
+
+    def _run_c18b_workflow(self, fields, log_handle, started):
+        self.log_signal.emit("Analysis V2：开始C18B尾部处理。")
+        editor_payloads = []
+        for field_id in fields:
+            instances_path = self._ensure_c18b_result(field_id, log_handle)
+            editor_payloads.append(
+                self._prepare_c18b_editor_payload(
+                    field_id,
+                    instances_path,
+                    log_handle,
+                )
+            )
+        return {
+            "success": True,
+            "workflow": "c18b_tail_editor",
+            "tail_backend": "C18B",
+            "joint_workflow_completed": False,
+            "manual_calibration_completed": False,
+            "ready_for_measurement": False,
+            "task_root": str(self.task_root),
+            "fields": editor_payloads,
+            "elapsed_seconds": float(time.perf_counter() - started),
+        }
+
     def run(self) -> None:
         started = time.perf_counter()
         result_path = self.task_root / "tail_joint_ui_worker_result.json"
@@ -212,11 +408,16 @@ class TailPathWorker(QThread):
                 / "analysis_v2"
                 / "tail_joint_promote_measure_v2.py"
             ).resolve()
-            missing_scripts = [
-                str(path)
-                for path in (oneclick_script, promotion_script)
-                if not path.is_file()
-            ]
+            is_c18b = _task_protein_key(self.task_root) == "protein3"
+            missing_scripts = (
+                []
+                if is_c18b
+                else [
+                    str(path)
+                    for path in (oneclick_script, promotion_script)
+                    if not path.is_file()
+                ]
+            )
             if missing_scripts:
                 raise FileNotFoundError(
                     "联合尾部正式流程缺少脚本：\n{}".format(
@@ -227,6 +428,17 @@ class TailPathWorker(QThread):
             fields = self._discover_fields()
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("a", encoding="utf-8", newline="\n") as log_handle:
+                if is_c18b:
+                    payload = self._run_c18b_workflow(fields, log_handle, started)
+                    result_path.write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    self.log_signal.emit(
+                        "Analysis V2：C18B editor payload生成完成，等待人工校准。"
+                    )
+                    self.finished_signal.emit(True, payload, "")
+                    return
                 _, oneclick_return_code = self._run_streaming_command(
                     [
                         str(self.python_executable),
@@ -372,7 +584,16 @@ class TailPathWorker(QThread):
             )
             failure = {
                 "success": False,
-                "workflow": "tail_joint_v2",
+                "workflow": (
+                    "c18b_tail_editor"
+                    if _task_protein_key(self.task_root) == "protein3"
+                    else "tail_joint_v2"
+                ),
+                "tail_backend": (
+                    "C18B"
+                    if _task_protein_key(self.task_root) == "protein3"
+                    else ""
+                ),
                 "task_root": str(self.task_root),
                 "error": str(exception),
                 "traceback": detail,
@@ -487,13 +708,64 @@ class TailFieldPrepareWorker(QThread):
                 raise FileNotFoundError(
                     "当前视野最终头部标签尚未生成：{}".format(head_labels)
                 )
+            is_c18b = _task_protein_key(self.task_root) == "protein3"
+            if is_c18b:
+                instances_path = _c18b_instances_path(
+                    self.task_root,
+                    self.field_id,
+                )
+                if instances_path.is_file() and instances_path.stat().st_size > 0:
+                    self.log_signal.emit(
+                        "[C18B backend] 视野 {} 已有实例结果，跳过旧tail_joint准备。".format(
+                            self.field_id
+                        )
+                    )
+                    payload = {
+                        "success": True,
+                        "tail_backend": "C18B",
+                        "field_id": self.field_id,
+                        "task_root": str(self.task_root),
+                        "c18b_instances": str(instances_path),
+                        "elapsed_seconds": float(time.perf_counter() - started),
+                    }
+                    self.finished_signal.emit(True, self.field_id, payload, "")
+                    return
+                c18b_runner = (
+                    self.project_root
+                    / "tools"
+                    / "analysis_v2"
+                    / "c18b_score015_adapter.py"
+                ).resolve()
+                if not c18b_runner.is_file():
+                    raise FileNotFoundError("C18B运行器不存在：{}".format(c18b_runner))
+                fitc_path = _field_fitc_path(self.task_root, self.field_id)
+                command = [
+                    str(self.python_executable),
+                    "-u",
+                    str(c18b_runner),
+                    "--green",
+                    str(fitc_path),
+                    "--head-labels",
+                    str(head_labels),
+                    "--output-dir",
+                    str(
+                        self.task_root
+                        / "segmentation"
+                        / "c18b_runner_contract"
+                        / self.field_id
+                    ),
+                    "--c18b-output-dir",
+                    str(_c18b_output_dir(self.task_root, self.field_id)),
+                ]
+            else:
+                command = None
             oneclick_script = (
                 self.project_root
                 / "tools"
                 / "analysis_v2"
                 / "tail_joint_oneclick_v2.py"
             ).resolve()
-            if not oneclick_script.is_file():
+            if not is_c18b and not oneclick_script.is_file():
                 raise FileNotFoundError(
                     "联合尾部脚本不存在：{}".format(oneclick_script)
                 )
@@ -520,29 +792,32 @@ class TailFieldPrepareWorker(QThread):
                 / "logs"
                 / ("tail_field_prepare_{}_oneclick.log".format(safe_field_id))
             )
-            command = [
-                str(self.python_executable),
-                "-u",
-                str(oneclick_script),
-                "--task-root",
-                str(self.task_root),
-                "--fields",
-                self.field_id,
-                "--prepare-only",
-                "--display-max-dim",
-                str(self.display_max_dim),
-                "--summary-path",
-                str(summary_path),
-                "--log-path",
-                str(oneclick_log_path),
-            ]
+            if command is None:
+                command = [
+                    str(self.python_executable),
+                    "-u",
+                    str(oneclick_script),
+                    "--task-root",
+                    str(self.task_root),
+                    "--fields",
+                    self.field_id,
+                    "--prepare-only",
+                    "--display-max-dim",
+                    str(self.display_max_dim),
+                    "--summary-path",
+                    str(summary_path),
+                    "--log-path",
+                    str(oneclick_log_path),
+                ]
             child_env = os.environ.copy()
             child_env["PYTHONIOENCODING"] = "utf-8"
             child_env["PYTHONUNBUFFERED"] = "1"
             self.log_signal.emit(
-                "Analysis V2：视野 {} 头部已完成，后台开始准备对应尾部。".format(
-                    self.field_id
-                )
+                (
+                    "[C18B backend] 视野 {} 头部已完成，后台生成C18B实例。"
+                    if is_c18b
+                    else "Analysis V2：视野 {} 头部已完成，后台开始准备对应尾部。"
+                ).format(self.field_id)
             )
             with log_path.open("a", encoding="utf-8", newline="\n") as log_handle:
                 log_handle.write(subprocess.list2cmdline(command) + "\n")
@@ -596,6 +871,26 @@ class TailFieldPrepareWorker(QThread):
                         "".join(output_lines)[-12000:],
                     )
                 )
+
+            if is_c18b:
+                instances_path = _c18b_instances_path(
+                    self.task_root,
+                    self.field_id,
+                )
+                if not instances_path.is_file() or instances_path.stat().st_size <= 0:
+                    raise FileNotFoundError(
+                        "C18B后台准备缺少实例结果：{}".format(instances_path)
+                    )
+                payload = {
+                    "success": True,
+                    "tail_backend": "C18B",
+                    "field_id": self.field_id,
+                    "task_root": str(self.task_root),
+                    "c18b_instances": str(instances_path),
+                    "elapsed_seconds": float(time.perf_counter() - started),
+                }
+                self.finished_signal.emit(True, self.field_id, payload, "")
+                return
 
             if not summary_path.is_file():
                 raise FileNotFoundError(
@@ -679,7 +974,11 @@ class TailMeasurementWorker(QThread):
                 )
 
             self.log_signal.emit(
-                "Analysis V2：开始测量人工校准后的尾部标签。"
+                (
+                    "Analysis V2：开始测量C18B尾部结果。"
+                    if _task_protein_key(self.task_root) == "protein3"
+                    else "Analysis V2：开始测量人工校准后的尾部标签。"
+                )
             )
 
             service = TailMeasurementService(
