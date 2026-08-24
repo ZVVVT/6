@@ -179,6 +179,22 @@ function Copy-RequiredFile(
     Copy-Item -LiteralPath $source -Destination $destination
 }
 
+function Copy-RequiredDirectory(
+    [string]$RelativePath,
+    [string]$SourceRoot,
+    [string]$DestinationRoot
+) {
+    $source = Join-Path $SourceRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+        throw "正式 tools 白名单目录缺失：$RelativePath"
+    }
+
+    $destination = Join-Path $DestinationRoot $RelativePath
+    $parent = Split-Path -Parent $destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $parent -Recurse
+}
+
 Assert-SafeTarget $BuildRoot '构建目录'
 Assert-SafeTarget $OutputRoot '成品目录'
 
@@ -223,6 +239,7 @@ $Commit = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot 
 
 $ToolsWhitelist = @(
     'tools\analysis_v2\c18b_score015_adapter.py',
+    'tools\analysis_v2\c18b_tail_editor_adapter.py',
     'tools\analysis_v2\direct_cellpose_worker.py',
     'tools\analysis_v2\tail_joint_chain_candidate_mvp.py',
     'tools\analysis_v2\tail_joint_draft_editor_launcher_mvp.py',
@@ -431,9 +448,13 @@ for name in modules:
     # pipelines/tools 一样是 git archive 生成的同一份干净源码。
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'core') -Destination $OutputRoot -Recurse
 
-    foreach ($item in @($ToolsWhitelist + $C18BPipelineFiles)) {
+    foreach ($item in $ToolsWhitelist) {
         Copy-RequiredFile $item $SourceRoot $OutputRoot
     }
+    Copy-RequiredDirectory `
+        'tools\analysis_v2\c18b_score015' `
+        $SourceRoot `
+        $OutputRoot
 
     # C18B 使用成品内独立 Python，不依赖也不修改客户的 F:\MvImageID。
     $C18BRuntimeRoot = Join-Path $OutputRoot '.venv-c18b'
