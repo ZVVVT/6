@@ -122,6 +122,8 @@ class AnalysisWindow(QWidget):
         self.head_calibration_window = None
         self.tail_path_worker = None
         self.tail_field_prepare_worker = None
+        self.tail_field_prepare_workers = {}
+        self.tail_field_prepare_max_workers = 2
         self.tail_field_prepare_queue = []
         self.tail_field_prepare_results = {}
         self.tail_field_order = []
@@ -1405,6 +1407,12 @@ class AnalysisWindow(QWidget):
             or self._worker_is_running(self.head_segmentation_worker)
             or self._worker_is_running(self.head_measurement_worker)
             or self._worker_is_running(self.tail_path_worker)
+            or any(
+                self._worker_is_running(worker)
+                for worker in getattr(
+                    self, "tail_field_prepare_workers", {}
+                ).values()
+            )
             or self._worker_is_running(self.tail_field_prepare_worker)
             or self._worker_is_running(self.tail_measurement_worker)
             or self.tail_calibration_controller is not None
@@ -1459,6 +1467,9 @@ class AnalysisWindow(QWidget):
         self._analysis_v2_select_next_pending = False
         self.tail_field_prepare_queue = []
         self.tail_field_prepare_results = {}
+        self.tail_field_prepare_workers = {}
+        self.tail_field_prepare_worker = None
+        self.tail_field_prepare_max_workers = 2
         self._tail_head_calibration_finished = False
         self._tail_path_start_pending = False
 
@@ -1826,10 +1837,8 @@ class AnalysisWindow(QWidget):
         if (
             field_id not in self.tail_field_prepare_queue
             and field_id not in self.tail_field_prepare_results
-            and not (
-                self.tail_field_prepare_worker is not None
-                and str(getattr(self.tail_field_prepare_worker, "field_id", ""))
-                == field_id
+            and field_id not in getattr(
+                self, "tail_field_prepare_workers", {}
             )
         ):
             self.tail_field_prepare_queue.append(field_id)
@@ -1841,11 +1850,6 @@ class AnalysisWindow(QWidget):
         self._start_next_tail_field_prepare()
 
     def _start_next_tail_field_prepare(self) -> None:
-        if self._worker_is_running(self.tail_field_prepare_worker):
-            return
-        if not self.tail_field_prepare_queue:
-            self._maybe_start_tail_path_after_field_prepare()
-            return
         context = dict(self.current_analysis_v2_context or {})
         if context.get("workflow") != "protein3_tail":
             self.tail_field_prepare_queue = []
@@ -1854,30 +1858,59 @@ class AnalysisWindow(QWidget):
         project_root = Path(
             str(context.get("project_root", "") or "")
         ).resolve()
-        field_id = str(self.tail_field_prepare_queue.pop(0))
-        worker = TailFieldPrepareWorker(
-            project_root=project_root,
-            task_root=task_root,
-            python_executable=Path(self.config.get_python_exe()),
-            field_id=field_id,
-            display_max_dim=1400,
-            parent=self,
-        )
-        worker.log_signal.connect(self.append_log)
-        worker.finished_signal.connect(
-            self._on_tail_field_prepare_finished
-        )
-        worker.finished.connect(
-            self._on_tail_field_prepare_thread_finished
-        )
-        worker.finished.connect(worker.deleteLater)
-        self.tail_field_prepare_worker = worker
-        self.append_log(
-            "Analysis V2：后台开始视野 {} 的C18B尾部处理；头部窗口可继续操作。".format(
-                field_id
+        workers = getattr(self, "tail_field_prepare_workers", None)
+        if workers is None:
+            workers = {}
+            self.tail_field_prepare_workers = workers
+        max_workers = max(
+            1,
+            min(
+                2,
+                int(getattr(self, "tail_field_prepare_max_workers", 2) or 1),
             )
         )
-        worker.start()
+        while self.tail_field_prepare_queue and len(workers) < max_workers:
+            field_id = str(self.tail_field_prepare_queue.pop(0))
+            worker = TailFieldPrepareWorker(
+                project_root=project_root,
+                task_root=task_root,
+                python_executable=Path(self.config.get_python_exe()),
+                field_id=field_id,
+                display_max_dim=1400,
+                parent=self,
+            )
+            worker.log_signal.connect(self.append_log)
+            worker.finished_signal.connect(
+                self._on_tail_field_prepare_finished
+            )
+            worker.finished.connect(
+                self._on_tail_field_prepare_thread_finished
+            )
+            worker.finished.connect(worker.deleteLater)
+            workers[field_id] = worker
+            self.tail_field_prepare_worker = next(iter(workers.values()), None)
+            self.append_log(
+                "Analysis V2：后台开始视野 {} 的C18B尾部处理；当前并发 {}/{}。".format(
+                    field_id,
+                    len(workers),
+                    max_workers,
+                )
+            )
+            try:
+                worker.start()
+            except BaseException:
+                workers.pop(field_id, None)
+                self.tail_field_prepare_queue.insert(0, field_id)
+                if max_workers > 1:
+                    self.tail_field_prepare_max_workers = 1
+                    self.append_log(
+                        "Analysis V2：C18B并行启动失败，当前任务回退为串行模式。"
+                    )
+                    break
+                raise
+        self.tail_field_prepare_worker = next(iter(workers.values()), None)
+        if not self.tail_field_prepare_queue and not workers:
+            self._maybe_start_tail_path_after_field_prepare()
 
     def _on_tail_field_prepare_finished(
         self,
@@ -1921,18 +1954,21 @@ class AnalysisWindow(QWidget):
 
     def _on_tail_field_prepare_thread_finished(self) -> None:
         worker = self.sender()
-        if self.tail_field_prepare_worker is worker:
-            self.tail_field_prepare_worker = None
+        workers = getattr(self, "tail_field_prepare_workers", {})
+        field_id = str(getattr(worker, "field_id", "") or "").strip()
+        if field_id and workers.get(field_id) is worker:
+            workers.pop(field_id, None)
+        else:
+            for active_field, active_worker in list(workers.items()):
+                if active_worker is worker:
+                    workers.pop(active_field, None)
+                    break
+        self.tail_field_prepare_worker = next(iter(workers.values()), None)
         self._start_next_tail_field_prepare()
         self._maybe_start_tail_path_after_field_prepare()
 
     def _maybe_start_tail_path_after_field_prepare(self) -> None:
-        """Start the protein3 C18B final-contract flow when field 1 is ready.
-
-        Field 2/3 preparation remains in the existing background queue.  The
-        manual worker waits only for the field it is about to open, so it no
-        longer blocks on all three automatic preparations.
-        """
+        """Start the final-contract flow after parallel field preparation."""
         if not self._tail_head_calibration_finished:
             return
         if not self._tail_path_start_pending:
@@ -1952,19 +1988,11 @@ class AnalysisWindow(QWidget):
         if not ordered_fields:
             return
 
-        first_field_id = ordered_fields[0]
-        first_result = dict(
-            self.tail_field_prepare_results.get(first_field_id) or {}
-        )
-        first_ready = bool(first_result.get("success"))
-
-        # 正常路径：视野1的C18B结果已准备，立即生成正式尾部结果。
-        # 回退路径：队列结束后由总流程补算缺少的C18B结果。
         no_prepare_work_left = (
-            not self._worker_is_running(self.tail_field_prepare_worker)
+            not getattr(self, "tail_field_prepare_workers", {})
             and not self.tail_field_prepare_queue
         )
-        if not first_ready and not no_prepare_work_left:
+        if not no_prepare_work_left:
             return
 
         task_root = Path(self.current_analysis_v2_task_root).resolve()
@@ -1973,15 +2001,24 @@ class AnalysisWindow(QWidget):
         ).resolve()
         self._tail_path_start_pending = False
 
-        if first_ready:
+        failed_fields = [
+            field_id
+            for field_id in ordered_fields
+            if not bool(
+                dict(self.tail_field_prepare_results.get(field_id) or {}).get(
+                    "success"
+                )
+            )
+        ]
+        if not failed_fields:
             self.append_log(
-                "Analysis V2：视野1的C18B尾部处理已准备完成；"
-                "开始生成C18B尾部结果，其他视野继续后台处理。"
+                "Analysis V2：全部视野C18B并行准备完成；开始生成尾部结果。"
             )
         else:
             self.append_log(
-                "Analysis V2：视野1的C18B尾部处理未成功，进入安全补算模式；"
-                "只补算当前需要的视野。"
+                "Analysis V2：部分C18B并行任务未成功，进入串行安全补算模式：{}。".format(
+                    ", ".join(failed_fields)
+                )
             )
         self._start_tail_path_worker(project_root, task_root)
 
@@ -2059,14 +2096,14 @@ class AnalysisWindow(QWidget):
                     field_id = str(item.get("field_id", "") or "").strip()
                     if field_id and field_id not in completed_fields:
                         completed_fields.append(field_id)
-                active_field = str(
-                    getattr(self.tail_field_prepare_worker, "field_id", "") or ""
-                ).strip()
+                active_fields = set(
+                    getattr(self, "tail_field_prepare_workers", {}).keys()
+                )
                 for field_id in completed_fields:
                     if (
                         field_id not in self.tail_field_prepare_results
                         and field_id not in self.tail_field_prepare_queue
-                        and field_id != active_field
+                        and field_id not in active_fields
                     ):
                         self.tail_field_prepare_queue.append(field_id)
                 self.tail_field_order = list(completed_fields)
@@ -2227,8 +2264,12 @@ class AnalysisWindow(QWidget):
                 self._tail_head_calibration_finished = False
                 self._tail_path_start_pending = False
 
-                prepare_worker = self.tail_field_prepare_worker
-                if self._worker_is_running(prepare_worker):
+                prepare_workers = list(
+                    getattr(self, "tail_field_prepare_workers", {}).values()
+                )
+                for prepare_worker in prepare_workers:
+                    if not self._worker_is_running(prepare_worker):
+                        continue
                     try:
                         prepare_worker.request_cancel()
                         self.append_log(
@@ -3431,11 +3472,19 @@ class AnalysisWindow(QWidget):
                 pass
         self.tail_calibration_controller = None
 
+        prepare_workers = list(
+            getattr(self, "tail_field_prepare_workers", {}).values()
+        )
+        if (
+            self.tail_field_prepare_worker is not None
+            and self.tail_field_prepare_worker not in prepare_workers
+        ):
+            prepare_workers.append(self.tail_field_prepare_worker)
         workers = [
             self.analysis_worker,
             self.head_segmentation_worker,
             self.head_measurement_worker,
-            self.tail_field_prepare_worker,
+            *prepare_workers,
             self.tail_path_worker,
             self.tail_measurement_worker,
         ]

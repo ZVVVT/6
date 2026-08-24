@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import tempfile
+import time
 from pathlib import Path
 
 import cv2
@@ -46,22 +47,27 @@ def paths_view(fitc, paths, kept):
 
 
 def run_one(input_path, output_root, cfg, return_enhanced=False):
+    pipeline_started = time.perf_counter()
+    timings = {}
     sample = input_path.stem[:-2] if input_path.stem.endswith("_G") else input_path.stem
     output = output_root / sample
     output.mkdir(parents=True, exist_ok=True)
 
-    _, g8 = read_fitc(input_path)
-    fitc = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
-    if fitc is None:
-        raise FileNotFoundError(input_path)
+    started = time.perf_counter()
+    fitc, g8 = read_fitc(input_path)
     if fitc.ndim == 3:
         fitc = cv2.cvtColor(fitc, cv2.COLOR_BGR2GRAY)
     fitc = fitc.astype(np.float32)
+    timings["fitc_read"] = time.perf_counter() - started
 
+    started = time.perf_counter()
     enhanced = enhanced_mask(g8)
+    timings["preprocess"] = time.perf_counter() - started
     if SAVE_DEBUG_IMAGES:
         cv2.imwrite(str(output / "01_fitc_enhanced.png"), enhanced)
+    started = time.perf_counter()
     skel = skeleton(enhanced)
+    timings["skeletonize"] = time.perf_counter() - started
     if SAVE_DEBUG_IMAGES:
         cv2.imwrite(str(output / "02_skeleton.png"), skel)
 
@@ -72,35 +78,68 @@ def run_one(input_path, output_root, cfg, return_enhanced=False):
         cv2.imwrite(str(mask_path), enhanced)
         cv2.imwrite(str(skeleton_path), skel)
         ns = argparse.Namespace(mask=mask_path, skeleton=skeleton_path, **graph)
-        rows, paths = reconstruct(ns, fitc)
+        rows, paths = reconstruct(ns, fitc, performance_timings=timings)
     threshold = cfg["validation_threshold"]
+    started = time.perf_counter()
     kept = [(r, p) for r, p in zip(rows, paths) if r["final_score"] >= threshold]
     kept_rows = [x[0] for x in kept]
     kept_paths = [x[1] for x in kept]
+    timings["validation"] += time.perf_counter() - started
     if SAVE_DEBUG_IMAGES:
         cv2.imwrite(str(output / "03_graph_paths.png"), paths_view(fitc, paths, kept_paths))
 
     merge_args = argparse.Namespace(**cfg["candidate_merging"])
+    started = time.perf_counter()
     merged, _, _ = merge_candidates(kept_rows, kept_paths, fitc, merge_args)
     groups = [[kept_paths[i] for i in group] for group in merged]
+    timings["candidate_merging"] = time.perf_counter() - started
     grow_cfg = cfg["region_growing"]
+    started = time.perf_counter()
     grown, _ = grow(fitc, groups, grow_cfg["max_distance"], grow_cfg["intensity_weight"], grow_cfg["direction_weight"])
+    timings["region_growing"] = time.perf_counter() - started
     if SAVE_DEBUG_IMAGES:
         cols = np.random.default_rng(6022).integers(45, 256, (len(groups)+1, 3), dtype=np.uint8)
         cv2.imwrite(str(output / "04_region_growing.png"), instance_overlay(fitc, grown, cols))
 
+    started = time.perf_counter()
     nodes, edges = graph_data(groups, fitc)
     identity_cfg = cfg["identity_graph_v3"]
     membership, communities = cluster(nodes, edges, identity_cfg["community_resolution"],
                                       identity_cfg["seed"])
+    timings["identity_graph"] = time.perf_counter() - started
     reconstruction_cfg = cfg["reconstruction"]
+    started = time.perf_counter()
     final = identity_reconstruct(grown, fitc, groups, membership,
                                  reconstruction_cfg["intensity_weight"],
                                  reconstruction_cfg["direction_weight"])
+    timings["instance_separation"] = time.perf_counter() - started
     if SAVE_DEBUG_IMAGES:
         final_cols = np.random.default_rng(6023).integers(45, 256, (int(final.max())+1, 3), dtype=np.uint8)
         cv2.imwrite(str(output / "05_separation_result.png"), instance_overlay(fitc, final, final_cols))
+    started = time.perf_counter()
     cv2.imwrite(str(output / "06_final_tail_instances.tif"), final)
+    timings["final_label_save"] = time.perf_counter() - started
+    timings["pipeline_to_label_save"] = time.perf_counter() - pipeline_started
+    timing_names = (
+        ("FITC读取", "fitc_read"),
+        ("增强/preprocess", "preprocess"),
+        ("skeletonize", "skeletonize"),
+        ("graph candidate生成", "graph_candidate"),
+        ("validation", "validation"),
+        ("candidate merging（补充）", "candidate_merging"),
+        ("region growing", "region_growing"),
+        ("identity graph构建", "identity_graph"),
+        ("instance separation", "instance_separation"),
+        ("最终label保存", "final_label_save"),
+        ("C18B开始至label保存", "pipeline_to_label_save"),
+    )
+    for stage_name, timing_key in timing_names:
+        print(
+            "[C18B_PERF] sample={} stage={} seconds={:.6f}".format(
+                sample, stage_name, timings[timing_key]
+            ),
+            flush=True,
+        )
 
     metrics = []
     for iid in range(1, int(final.max()) + 1):

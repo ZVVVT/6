@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 from pathlib import Path
 
 import cv2
@@ -71,7 +72,8 @@ def connection_scores(edge, paths, fitc, mask, distance):
     return intensity, width, curvature
 
 
-def reconstruct(args, fitc):
+def reconstruct(args, fitc, performance_timings=None):
+    graph_started = time.perf_counter()
     mask = read_binary(args.mask)
     skel = read_binary(args.skeleton)
     if mask.shape != skel.shape or fitc.shape != skel.shape:
@@ -86,6 +88,12 @@ def reconstruct(args, fitc):
     links = select_links(proposals, len(paths))
     groups = candidate_groups(len(paths), links)
     groups = [g for g in groups if sum(len(paths[j]) for j in g) >= args.min_candidate_length]
+    if performance_timings is not None:
+        performance_timings["graph_candidate"] = (
+            time.perf_counter() - graph_started
+        )
+
+    validation_started = time.perf_counter()
     distance = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
 
     rows, polylines = [], []
@@ -121,6 +129,10 @@ def reconstruct(args, fitc):
                      "curvature_score": float(curvature_score),
                      "final_score": final})
         polylines.append(poly)
+    if performance_timings is not None:
+        performance_timings["validation"] = (
+            time.perf_counter() - validation_started
+        )
     return rows, polylines
 
 

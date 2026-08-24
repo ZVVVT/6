@@ -3,12 +3,25 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from PIL import Image
 
 
 def read_fitc(path):
-    rgb = np.asarray(Image.open(path).convert("RGB"))
-    return rgb, rgb[:, :, 1]
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise FileNotFoundError(path)
+    if image.ndim == 2:
+        green = image
+    elif image.ndim == 3:
+        green = image[:, :, 1]
+    else:
+        raise ValueError(
+            "FITC image must be two-dimensional or three-channel: {}".format(
+                path
+            )
+        )
+    if green.dtype != np.uint8:
+        green = np.clip(green, 0, 255).astype(np.uint8)
+    return image, green
 
 
 def corrected_signal(g: np.ndarray, sigma: float = 18.0) -> np.ndarray:

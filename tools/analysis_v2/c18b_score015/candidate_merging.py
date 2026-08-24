@@ -95,8 +95,42 @@ def pair_metrics(a, b, fitc, radius):
     return overlap, spatial, gap, direction, facing, continuity
 
 
+def endpoint_gap(a, b):
+    """Return the minimum endpoint distance without computing pair metrics."""
+    endpoints_a = a[[0, -1]].astype(float)
+    endpoints_b = b[[0, -1]].astype(float)
+    distances = np.sqrt(
+        ((endpoints_a[:, None, :] - endpoints_b[None, :, :]) ** 2).sum(axis=2)
+    )
+    return float(distances.min())
+
+
+def expanded_bbox(path, radius):
+    # OpenCV may rasterize an odd-width line one pixel beyond the nominal
+    # radius. Match pair_metrics' local-crop padding so this remains a safe
+    # rejection gate for path-mask overlap.
+    padding = radius + 1
+    return (
+        int(path[:, 0].min()) - padding,
+        int(path[:, 1].min()) - padding,
+        int(path[:, 0].max()) + padding,
+        int(path[:, 1].max()) + padding,
+    )
+
+
+def bboxes_intersect(a, b):
+    return not (a[2] < b[0] or b[2] < a[0] or
+                a[3] < b[1] or b[3] < a[1])
+
+
 def merge_candidates(rows, paths, fitc, args):
     n = len(paths)
+    prefilter_enabled = not getattr(args, "disable_candidate_pair_prefilter", False)
+    bboxes = [expanded_bbox(path, args.path_radius) for path in paths]
+    total_pairs = n * (n - 1) // 2
+    prefilter_pass_pairs = 0
+    actual_pair_metrics_calls = 0
+    merge_count_before_union = 0
     parent = list(range(n))
     def find(x):
         while parent[x] != x:
@@ -109,8 +143,14 @@ def merge_candidates(rows, paths, fitc, args):
     pair_rows = []
     for i in range(n):
         for j in range(i + 1, n):
+            if (prefilter_enabled and
+                    not bboxes_intersect(bboxes[i], bboxes[j]) and
+                    endpoint_gap(paths[i], paths[j]) > args.max_endpoint_gap):
+                continue
+            prefilter_pass_pairs += 1
             overlap, spatial, gap, direction, facing, continuity = pair_metrics(
                 paths[i], paths[j], fitc, args.path_radius)
+            actual_pair_metrics_calls += 1
             parallel_merge = (overlap >= args.min_overlap and
                               spatial <= args.max_spatial_distance and
                               direction >= args.min_direction and
@@ -120,7 +160,9 @@ def merge_candidates(rows, paths, fitc, args):
                               facing >= args.min_facing and
                               continuity >= args.min_fitc_continuity)
             merge = parallel_merge or endpoint_merge
-            if merge: union(i, j)
+            if merge:
+                merge_count_before_union += 1
+                union(i, j)
             # The table contains accepted relationships; rejected O(n^2) pairs
             # would obscure the candidate-to-merged-instance audit.
             if merge:
@@ -136,6 +178,17 @@ def merge_candidates(rows, paths, fitc, args):
     assignment = {}
     for mid, group in enumerate(ordered, 1):
         for i in group: assignment[i] = mid
+    print(
+        "[C18B_MERGE] total_pairs={} prefilter_pass_pairs={} filtered_pairs={} "
+        "actual_pair_metrics_calls={} merge_count_before_union={}".format(
+            total_pairs,
+            prefilter_pass_pairs,
+            total_pairs - prefilter_pass_pairs,
+            actual_pair_metrics_calls,
+            merge_count_before_union,
+        ),
+        flush=True,
+    )
     return ordered, assignment, pair_rows
 
 
@@ -189,6 +242,8 @@ def main():
     ap.add_argument("--max-gap", type=float, default=35)
     ap.add_argument("--max-angle", type=float, default=42)
     ap.add_argument("--max-curvature-delta", type=float, default=.12)
+    ap.add_argument("--disable-candidate-pair-prefilter", action="store_true",
+                    help="Debug only: restore the legacy all-pairs evaluation")
     args = ap.parse_args(); args.output.mkdir(parents=True, exist_ok=True)
     fitc = cv2.imread(str(args.fitc), cv2.IMREAD_UNCHANGED)
     if fitc is None: raise FileNotFoundError(args.fitc)

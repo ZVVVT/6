@@ -74,13 +74,24 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
             callback.index('context.get("workflow") == "protein3_tail"'),
             callback.index("HeadMeasurementWorker("),
         )
-        self.assertIn("first_ready", deferred_start)
         self.assertIn("no_prepare_work_left", deferred_start)
+        self.assertIn('not getattr(self, "tail_field_prepare_workers", {})', deferred_start)
         self.assertIn("self._start_tail_path_worker(project_root, task_root)", deferred_start)
         self.assertIn("worker = TailPathWorker(", worker_start)
         self.assertIn("project_root=project_root", worker_start)
         self.assertIn("task_root=task_root", worker_start)
         self.assertIn("worker.start()", worker_start)
+
+    def test_c18b_field_prepare_is_bounded_and_has_serial_fallback(self):
+        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
+        scheduler = source[
+            source.index("def _start_next_tail_field_prepare"):
+            source.index("def _on_tail_field_prepare_finished")
+        ]
+        self.assertIn("min(\n                2,", scheduler)
+        self.assertIn("len(workers) < max_workers", scheduler)
+        self.assertIn("self.tail_field_prepare_max_workers = 1", scheduler)
+        self.assertIn("self.tail_field_prepare_queue.insert(0, field_id)", scheduler)
 
     def test_tail_worker_runs_joint_oneclick_then_promote_measure(self):
         source = TAIL_WORKER.read_text(encoding="utf-8")

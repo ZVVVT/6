@@ -165,6 +165,14 @@ def _validate_stage1_directory(stage1_dir: Path) -> None:
         raise RuntimeError("C18B Stage 1 manifest 来源标记无效。")
 
 
+def _publish_identical_file(source: Path, destination: Path) -> None:
+    """Publish an identical contract file without encoding the TIFF again."""
+    try:
+        os.link(str(source), str(destination))
+    except OSError:
+        shutil.copyfile(str(source), str(destination))
+
+
 def _publish_stage1_directory(temporary_dir: Path, output_dir: Path) -> None:
     backup_root = None
     backup_dir = None
@@ -297,14 +305,20 @@ def run_adapter(
             str(temporary_dir / "02_probability_uint16.tif"),
             probability,
         )
-        for preset in ("loose", "balanced", "strict"):
-            tifffile.imwrite(
-                str(temporary_dir / (preset + "_mask_uint8.tif")),
-                mask_uint8,
+        balanced_mask_path = temporary_dir / "balanced_mask_uint8.tif"
+        balanced_skeleton_path = (
+            temporary_dir / "balanced_skeleton_uint8.tif"
+        )
+        tifffile.imwrite(str(balanced_mask_path), mask_uint8)
+        tifffile.imwrite(str(balanced_skeleton_path), skeleton_uint8)
+        for preset in ("loose", "strict"):
+            _publish_identical_file(
+                balanced_mask_path,
+                temporary_dir / (preset + "_mask_uint8.tif"),
             )
-            tifffile.imwrite(
-                str(temporary_dir / (preset + "_skeleton_uint8.tif")),
-                skeleton_uint8,
+            _publish_identical_file(
+                balanced_skeleton_path,
+                temporary_dir / (preset + "_skeleton_uint8.tif"),
             )
 
         manifest_path = temporary_dir / "c18b_score015_adapter_manifest.json"
