@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -20,6 +21,7 @@ import numpy as np
 ADAPTER_VERSION = "c18b_tail_editor_adapter_v1"
 DILATION_RADIUS_PX = 20
 MAX_MATCHING_DISTANCE_PX = 80.0
+CENTERLINE_ROI_MARGIN_PX = 2
 NEIGHBOURS_8 = (
     (-1, -1), (-1, 0), (-1, 1),
     (0, -1), (0, 1),
@@ -436,14 +438,47 @@ def closest_component_to_head(
 def ordered_centerline(
     instance_mask: np.ndarray,
     head_mask: np.ndarray,
+    timings: Dict[str, float] = None,
 ) -> List[List[float]]:
-    skeleton = skeletonize(instance_mask)
-    head_points = np.argwhere(head_mask)
+    ordered_started = time.perf_counter()
+    instance_y, instance_x = np.nonzero(instance_mask)
+    if not len(instance_y):
+        if timings is not None:
+            timings["ordered_centerline_seconds"] += (
+                time.perf_counter() - ordered_started
+            )
+        return []
+
+    height, width = instance_mask.shape
+    margin = CENTERLINE_ROI_MARGIN_PX
+    y_offset = max(0, int(instance_y.min()) - margin)
+    y_limit = min(height, int(instance_y.max()) + margin + 1)
+    x_offset = max(0, int(instance_x.min()) - margin)
+    x_limit = min(width, int(instance_x.max()) + margin + 1)
+    instance_roi = instance_mask[y_offset:y_limit, x_offset:x_limit]
+
+    skeleton_started = time.perf_counter()
+    skeleton = skeletonize(instance_roi)
+    skeleton_elapsed = time.perf_counter() - skeleton_started
+    head_points = np.argwhere(head_mask).astype(np.int64, copy=False)
+    if len(head_points):
+        head_points[:, 0] -= y_offset
+        head_points[:, 1] -= x_offset
     if not np.any(skeleton) or not len(head_points):
+        if timings is not None:
+            timings["skeletonize_seconds"] += skeleton_elapsed
+            timings["ordered_centerline_seconds"] += (
+                time.perf_counter() - ordered_started
+            )
         return []
 
     component_points = closest_component_to_head(skeleton, head_points)
     if not len(component_points):
+        if timings is not None:
+            timings["skeletonize_seconds"] += skeleton_elapsed
+            timings["ordered_centerline_seconds"] += (
+                time.perf_counter() - ordered_started
+            )
         return []
     component = set(
         (int(point[0]), int(point[1])) for point in component_points.tolist()
@@ -478,8 +513,21 @@ def ordered_centerline(
         current = parent[current]
     path_yx.reverse()
     if len(path_yx) < 2:
+        if timings is not None:
+            timings["skeletonize_seconds"] += skeleton_elapsed
+            timings["ordered_centerline_seconds"] += (
+                time.perf_counter() - ordered_started
+            )
         return []
-    return [[float(x), float(y)] for y, x in path_yx]
+    points_xy = [
+        [float(x + x_offset), float(y + y_offset)] for y, x in path_yx
+    ]
+    if timings is not None:
+        timings["skeletonize_seconds"] += skeleton_elapsed
+        timings["ordered_centerline_seconds"] += (
+            time.perf_counter() - ordered_started
+        )
+    return points_xy
 
 
 def path_length(points_xy: Sequence[Sequence[float]]) -> float:
@@ -540,6 +588,11 @@ def run_adapter(
     dilation_radius: int = DILATION_RADIUS_PX,
     maximum_distance: float = MAX_MATCHING_DISTANCE_PX,
 ) -> Dict[str, Any]:
+    adapter_started = time.perf_counter()
+    timings = {
+        "skeletonize_seconds": 0.0,
+        "ordered_centerline_seconds": 0.0,
+    }
     source_paths = {
         "instances": Path(instances_path).expanduser().resolve(),
         "head_labels": Path(head_labels_path).expanduser().resolve(),
@@ -596,6 +649,7 @@ def run_adapter(
         points_xy = ordered_centerline(
             instances == instance_id,
             head_labels == head_id,
+            timings=timings,
         )
         if len(points_xy) < 2:
             skipped = dict(match)
@@ -676,6 +730,8 @@ def run_adapter(
         "validation": validation,
     }
     write_json_atomic(output_paths["manifest"], manifest)
+    timings["adapter_seconds"] = time.perf_counter() - adapter_started
+    manifest["timings"] = timings
     return manifest
 
 
@@ -718,6 +774,14 @@ def main() -> int:
     print("paths数量：{}".format(validation["paths_count"]))
     print("global数量：{}".format(validation["global_count"]))
     print("所有尺寸一致：是")
+    timings = dict(manifest["timings"])
+    print("skeletonize总耗时：{:.6f}秒".format(
+        timings["skeletonize_seconds"]
+    ))
+    print("ordered_centerline总耗时：{:.6f}秒".format(
+        timings["ordered_centerline_seconds"]
+    ))
+    print("adapter总耗时：{:.6f}秒".format(timings["adapter_seconds"]))
     return 0
 
 
