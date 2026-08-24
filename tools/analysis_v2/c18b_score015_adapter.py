@@ -214,10 +214,11 @@ def run_adapter(
     try:
         from run_pipeline import run_one
 
-        result_dir, statistics = run_one(
+        result_dir, statistics, enhanced = run_one(
             green_path,
             c18b_output_dir,
             {key: value for key, value in config.items() if not key.startswith("_")},
+            return_enhanced=True,
         )
     finally:
         try:
@@ -227,17 +228,14 @@ def run_adapter(
 
     result_dir = Path(result_dir).resolve()
     labels_path = result_dir / "06_final_tail_instances.tif"
-    enhanced_path = result_dir / "01_fitc_enhanced.png"
-    if not labels_path.is_file() or not enhanced_path.is_file():
+    if not labels_path.is_file():
         raise RuntimeError(
-            "C18B 输出不完整：labels={} enhanced={}".format(
+            "C18B 输出不完整：labels={}".format(
                 labels_path,
-                enhanced_path,
             )
         )
 
     labels = _read_gray(labels_path)
-    enhanced = _read_gray(enhanced_path)
     head_labels = _read_gray(head_labels_path)
     if labels.shape != enhanced.shape or labels.shape != head_labels.shape:
         raise ValueError(

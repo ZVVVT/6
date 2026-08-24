@@ -19,6 +19,7 @@ from identity_graph_v3 import cluster, graph_data, reconstruct as identity_recon
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "frozen_parameters.json"
+SAVE_DEBUG_IMAGES = False
 
 
 def write_csv(path, rows, fields=None):
@@ -44,7 +45,7 @@ def paths_view(fitc, paths, kept):
     return out
 
 
-def run_one(input_path, output_root, cfg):
+def run_one(input_path, output_root, cfg, return_enhanced=False):
     sample = input_path.stem[:-2] if input_path.stem.endswith("_G") else input_path.stem
     output = output_root / sample
     output.mkdir(parents=True, exist_ok=True)
@@ -58,9 +59,11 @@ def run_one(input_path, output_root, cfg):
     fitc = fitc.astype(np.float32)
 
     enhanced = enhanced_mask(g8)
-    cv2.imwrite(str(output / "01_fitc_enhanced.png"), enhanced)
+    if SAVE_DEBUG_IMAGES:
+        cv2.imwrite(str(output / "01_fitc_enhanced.png"), enhanced)
     skel = skeleton(enhanced)
-    cv2.imwrite(str(output / "02_skeleton.png"), skel)
+    if SAVE_DEBUG_IMAGES:
+        cv2.imwrite(str(output / "02_skeleton.png"), skel)
 
     graph = cfg["graph"]
     with tempfile.TemporaryDirectory(prefix="c01_graph_") as td_name:
@@ -74,15 +77,17 @@ def run_one(input_path, output_root, cfg):
     kept = [(r, p) for r, p in zip(rows, paths) if r["final_score"] >= threshold]
     kept_rows = [x[0] for x in kept]
     kept_paths = [x[1] for x in kept]
-    cv2.imwrite(str(output / "03_graph_paths.png"), paths_view(fitc, paths, kept_paths))
+    if SAVE_DEBUG_IMAGES:
+        cv2.imwrite(str(output / "03_graph_paths.png"), paths_view(fitc, paths, kept_paths))
 
     merge_args = argparse.Namespace(**cfg["candidate_merging"])
     merged, _, _ = merge_candidates(kept_rows, kept_paths, fitc, merge_args)
     groups = [[kept_paths[i] for i in group] for group in merged]
     grow_cfg = cfg["region_growing"]
     grown, _ = grow(fitc, groups, grow_cfg["max_distance"], grow_cfg["intensity_weight"], grow_cfg["direction_weight"])
-    cols = np.random.default_rng(6022).integers(45, 256, (len(groups)+1, 3), dtype=np.uint8)
-    cv2.imwrite(str(output / "04_region_growing.png"), instance_overlay(fitc, grown, cols))
+    if SAVE_DEBUG_IMAGES:
+        cols = np.random.default_rng(6022).integers(45, 256, (len(groups)+1, 3), dtype=np.uint8)
+        cv2.imwrite(str(output / "04_region_growing.png"), instance_overlay(fitc, grown, cols))
 
     nodes, edges = graph_data(groups, fitc)
     identity_cfg = cfg["identity_graph_v3"]
@@ -92,8 +97,9 @@ def run_one(input_path, output_root, cfg):
     final = identity_reconstruct(grown, fitc, groups, membership,
                                  reconstruction_cfg["intensity_weight"],
                                  reconstruction_cfg["direction_weight"])
-    final_cols = np.random.default_rng(6023).integers(45, 256, (int(final.max())+1, 3), dtype=np.uint8)
-    cv2.imwrite(str(output / "05_separation_result.png"), instance_overlay(fitc, final, final_cols))
+    if SAVE_DEBUG_IMAGES:
+        final_cols = np.random.default_rng(6023).integers(45, 256, (int(final.max())+1, 3), dtype=np.uint8)
+        cv2.imwrite(str(output / "05_separation_result.png"), instance_overlay(fitc, final, final_cols))
     cv2.imwrite(str(output / "06_final_tail_instances.tif"), final)
 
     metrics = []
@@ -131,6 +137,8 @@ TailFinalLabels was not read or used by this run.
 """
     (output / "report.md").write_text(report, encoding="utf-8")
     print(input_path.name, stats)
+    if return_enhanced:
+        return output, stats, enhanced
     return output, stats
 
 
