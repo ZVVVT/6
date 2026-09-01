@@ -514,40 +514,6 @@ print("C18B 独立运行时检查通过")
     $ConfigPath = Join-Path $OutputRoot 'config.ini'
     $ConfigText = [System.IO.File]::ReadAllText($ConfigPath)
 
-    if ($ConfigText -notmatch '(?m)^\[AnalysisV2\]\s*$') {
-        throw 'config.ini 缺少 [AnalysisV2]，拒绝生成不完整配置。'
-    }
-
-    $AnalysisV2Match = [regex]::Match(
-        $ConfigText,
-        '(?ms)^\[AnalysisV2\]\s*\r?\n.*?(?=^\[|\z)'
-    )
-    if (-not $AnalysisV2Match.Success) {
-        throw '无法解析 config.ini 的 [AnalysisV2]。'
-    }
-
-    $AnalysisV2Section = $AnalysisV2Match.Value
-    if ($AnalysisV2Section -match '(?m)^enabled\s*=') {
-        $AnalysisV2Section = [regex]::Replace(
-            $AnalysisV2Section,
-            '(?m)^(enabled\s*=\s*)[^\r\n]*',
-            '${1}true'
-        )
-    }
-    else {
-        $AnalysisV2Section = $AnalysisV2Section -replace `
-            '(^\[AnalysisV2\]\s*\r?\n)', `
-            "`$1enabled = true`r`n"
-    }
-
-    $ConfigText = (
-        $ConfigText.Substring(0, $AnalysisV2Match.Index) +
-        $AnalysisV2Section +
-        $ConfigText.Substring(
-            $AnalysisV2Match.Index + $AnalysisV2Match.Length
-        )
-    )
-
     $RequiredConfigValues = @(
         'source_project_dir = F:\MvImageID',
         'plugins_directory = F:\MvImageID\C-plugins\active_plugins',
@@ -579,8 +545,6 @@ parser = configparser.ConfigParser()
 loaded = parser.read(sys.argv[1], encoding="utf-8")
 if not loaded:
     raise SystemExit("config.ini 无法读取")
-if not parser.getboolean("AnalysisV2", "enabled"):
-    raise SystemExit("AnalysisV2 未启用")
 print("config.ini 检查通过")
 '@
     $ConfigCheckPath = Join-Path $BuildRoot 'verify_config.py'
