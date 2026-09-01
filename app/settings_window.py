@@ -23,18 +23,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QSizePolicy,
-    QDoubleSpinBox,
-    QScrollArea,
     QCheckBox,
 )
 
 from core.config_manager import ConfigManager, get_application_root
 from core.qc_beads_service import QCBeadsService, QCBeadsWorker
-from core.pipeline_parameter_manager import PipelineParameterManager
 
 
-class PipelineParamLineEdit(QLineEdit):
-    """管道参数输入框。
+class BoundedNumberLineEdit(QLineEdit):
+    """带数值范围校验的输入框。
 
     用 QLineEdit 代替 QDoubleSpinBox：
     1. 没有右侧上下箭头；
@@ -112,8 +109,6 @@ class SettingsWindow(QWidget):
         self.project_root = get_application_root()
         self.config = ConfigManager(str(self.project_root / "config.ini"))
         self.config.ensure_default_config()
-        self.pipeline_param_manager = PipelineParameterManager(self.project_root)
-        self.pipeline_param_manager.ensure_default_params()
         self.init_ui()
         self.load_config()
 
@@ -153,7 +148,6 @@ class SettingsWindow(QWidget):
         self.init_app_info_tab()
         self.init_runtime_tab()
         self.init_qc_tab()
-        self.init_pipeline_params_tab()
         self.init_workspace_tab()
         self.init_image_rule_tab()
         self.init_protein_tab()
@@ -197,14 +191,13 @@ class SettingsWindow(QWidget):
         - 检查路径
         - 保存设置
 
-        质控微球测试页只显示全局“保存设置”按钮；管道参数页和“关于”页
-        隐藏全局按钮栏，避免显示与当前页面无关的操作。
+        质控微球测试页只显示全局“保存设置”按钮；“关于”页隐藏
+        全局按钮栏，避免显示与当前页面无关的操作。
         """
         current_text = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
-        is_pipeline_tab = current_text == "管道参数"
         is_qc_tab = current_text == "质控微球测试"
         is_about_tab = current_text == "关于"
-        self.global_button_bar.setVisible(not is_pipeline_tab and not is_about_tab)
+        self.global_button_bar.setVisible(not is_about_tab)
         self.btn_reload.setVisible(not is_qc_tab)
         self.btn_test.setVisible(not is_qc_tab)
         self.log_edit.setVisible(not is_about_tab)
@@ -385,430 +378,6 @@ class SettingsWindow(QWidget):
 
         self.tabs.addTab(tab, "质控微球测试")
 
-    def init_pipeline_params_tab(self):
-        """管道参数设置页。
-
-        参数保存到 pipeline_params.ini。
-        用户低频修改参数后，点击“保存并应用参数”，同时保存参数并生成实际运行管道。
-        蛋白分析、批量分析和质控测试运行时仍直接读取生成后的 .cppipe。
-        """
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
-
-        hint = QLabel(
-            "说明：管道参数保存在 pipeline_params.ini 中。"
-            "修改参数后请点击“保存并应用参数”，软件会自动保存参数、备份旧管道，并根据 pipelines\\templates 中的母版生成实际运行的 pipelines\\pipeline_*.cppipe。"
-            "运行分析时不会动态改管道，只会直接读取已生成的 .cppipe。"
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666666;")
-        layout.addWidget(hint)
-
-        self.pipeline_param_widgets = {}
-
-        self.pipeline_param_tooltips = {
-            "Head": {
-                "red_diameter": "用于控制红色头部识别的预期对象大小。值偏小更容易识别小目标，值偏大更适合较大的头部信号。",
-                "red_flow_threshold": "红色头部识别的分割严格程度。一般保持 0.4 左右；数值过高可能漏检，过低可能增加误检。",
-                "red_cellprob_threshold": "红色头部识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
-                "red_min_size": "过滤过小的红色对象，减少噪声和碎点。值过大可能漏掉真实的小头部信号。",
-                "red_formfactor_min": "对应 FormFactor，用于保留较圆的红色头部对象。越接近 1 越偏向圆形；值过高可能漏掉形态略不规则的头部。",
-                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色对象。默认 75；值越小过滤越严格，过小可能漏掉真实头部。",
-                "green_expand_pixels": "用于扩大红色头部匹配范围，帮助判断绿色信号与红色头部是否共定位。值过小可能漏配，值过大可能误配相邻对象。",
-                "green_intensity_min": "用于过滤共定位对象中的弱绿色信号。值越高越严格，过高可能漏掉弱阳性。"
-            },
-            "Tail": {
-                "green_diameter": "用于控制绿色尾部识别的预期对象大小。尾部通常较细，建议结合实际图像调节。",
-                "green_flow_threshold": "绿色尾部识别的分割严格程度。一般保持 0.4 左右；数值过高可能漏检，过低可能增加误检。",
-                "green_distance_threshold": "绿色尾部识别的概率/距离场阈值。范围建议 -6 到 6；数值越低越容易识别弱尾部，数值越高越严格。",
-                "green_min_size": "过滤过小的绿色尾部对象，减少碎点和噪声。值过大可能漏掉断续尾部。",
-                "green_eccentricity_min": "对应 Eccentricity，用于保留细长的绿色尾部对象。越接近 1 越偏向细长结构；值过高可能漏掉弯曲或断续尾部。",
-                "green_intensity_min": "对应 Math_G_objects_Run_MeanIntensity，用于过滤绿色尾部弱信号。当前默认值来自尾部管道，为 5。数值越高越严格，过高可能漏掉弱阳性尾部。",
-                "red_diameter": "用于控制红色头部识别的预期对象大小。尾部蛋白管道中仍需要红色头部作为定位和分母依据。",
-                "red_flow_threshold": "红色头部识别的分割严格程度。一般保持 0.4 左右；数值过高可能漏检，过低可能增加误检。",
-                "red_cellprob_threshold": "红色头部识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
-                "red_min_size": "过滤过小的红色头部对象，减少噪声和碎点。值过大可能漏掉真实的小头部信号。",
-                "red_formfactor_min": "对应 FormFactor，用于保留较圆的红色头部对象。越接近 1 越偏向圆形；值过高可能漏掉形态略不规则的头部。",
-                "red_equivalent_diameter_max": "对应 AreaShape_EquivalentDiameter 的最大值，用于过滤识别过大的红色头部对象。默认 75；值越小过滤越严格，过小可能漏掉真实头部。",
-                "red_search_radius": "以红色头部为中心向外搜索绿色尾部的范围。值过小可能找不到尾部，值过大可能匹配到邻近精子的尾部。",
-                "colocalized_child_count_min": "判断共定位时要求匹配到的最少绿色对象数量。通常为 1，值提高会更严格。"
-            },
-            "QC": {
-                "bead_diameter": "用于控制微球识别的预期对象大小。应尽量接近质控微球在图像中的实际直径。",
-                "bead_flow_threshold": "微球识别的分割严格程度。一般保持 0.4 左右；数值过高可能漏检，过低可能增加误检。",
-                "bead_cellprob_threshold": "微球识别的概率阈值。范围建议 -6 到 6；数值越低越容易识别弱信号，数值越高越严格。",
-                "bead_min_size": "过滤过小的微球对象，减少噪声和碎点。值过大可能漏掉真实微球。",
-                "bead_formfactor_min": "对应 FormFactor，用于保留较圆的微球对象。越接近 1 越偏向圆形；值过高可能漏掉边缘略不完整的微球。"
-            }
-        }
-
-        self.pipeline_param_tabs = QTabWidget()
-        self.pipeline_param_tabs.addTab(self.create_head_pipeline_param_page(), "头部蛋白")
-        self.pipeline_param_tabs.addTab(self.create_tail_pipeline_param_page(), "尾部蛋白")
-        self.pipeline_param_tabs.addTab(self.create_qc_pipeline_param_page(), "质控微球")
-        layout.addWidget(self.pipeline_param_tabs, 1)
-
-        button_layout = QHBoxLayout()
-        self.btn_apply_pipeline_params = QPushButton("保存并应用参数")
-        self.btn_check_pipeline_effective = QPushButton("检查生效状态")
-        self.btn_validate_pipeline_templates = QPushButton("检查并补齐模板")
-        self.btn_restore_pipeline_backup = QPushButton("恢复最近备份")
-        self.btn_reset_pipeline_params = QPushButton("恢复默认并应用")
-        self.btn_open_pipeline_dir = QPushButton("打开管道目录")
-        self.btn_open_pipeline_param_file = QPushButton("打开参数文件")
-
-        button_layout.addWidget(self.btn_apply_pipeline_params)
-        button_layout.addWidget(self.btn_check_pipeline_effective)
-        button_layout.addWidget(self.btn_validate_pipeline_templates)
-        button_layout.addWidget(self.btn_restore_pipeline_backup)
-        button_layout.addWidget(self.btn_reset_pipeline_params)
-        button_layout.addWidget(self.btn_open_pipeline_dir)
-        button_layout.addWidget(self.btn_open_pipeline_param_file)
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
-
-        self.btn_apply_pipeline_params.clicked.connect(self.save_and_apply_pipeline_params)
-        self.btn_check_pipeline_effective.clicked.connect(self.check_pipeline_effective_status)
-        self.btn_validate_pipeline_templates.clicked.connect(self.validate_pipeline_templates)
-        self.btn_restore_pipeline_backup.clicked.connect(self.restore_latest_pipeline_backup)
-        self.btn_reset_pipeline_params.clicked.connect(self.reset_pipeline_params)
-        self.btn_open_pipeline_dir.clicked.connect(self.open_pipeline_dir)
-        self.btn_open_pipeline_param_file.clicked.connect(self.open_pipeline_param_file)
-
-        # 交付界面暂不向普通用户注册“管道参数”顶部入口。
-        # 页面对象和全部维护逻辑继续保留，开发时恢复 addTab 即可重新启用；
-        # 未加入 QTabWidget 也可避免旧索引、键盘切换或程序跳转进入空白页。
-        self.pipeline_params_page = tab
-
-    def create_head_pipeline_param_page(self):
-        group = QGroupBox("头部蛋白管道参数")
-        form = QFormLayout(group)
-
-        self.pipeline_param_widgets["Head"] = {
-            "red_diameter": self._make_double_spin(1, 500, 1, 0),
-            "red_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
-            "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
-            "red_min_size": self._make_double_spin(0, 100000, 1, 0),
-            "red_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
-            "red_equivalent_diameter_max": self._make_double_spin(1, 1000, 1, 0),
-            "green_expand_pixels": self._make_double_spin(0, 500, 1, 0),
-            "green_intensity_min": self._make_double_spin(0, 100000000, 1, 2),
-        }
-
-        self.add_pipeline_param_row(form, "红色预期直径：", self.pipeline_param_widgets["Head"]["red_diameter"], self.pipeline_param_tooltips["Head"]["red_diameter"])
-        self.add_pipeline_param_row(form, "红色流阈值(0.4)：", self.pipeline_param_widgets["Head"]["red_flow_threshold"], self.pipeline_param_tooltips["Head"]["red_flow_threshold"])
-        self.add_pipeline_param_row(form, "红色概率阈值(±6)：", self.pipeline_param_widgets["Head"]["red_cellprob_threshold"], self.pipeline_param_tooltips["Head"]["red_cellprob_threshold"])
-        self.add_pipeline_param_row(form, "红色最小尺寸：", self.pipeline_param_widgets["Head"]["red_min_size"], self.pipeline_param_tooltips["Head"]["red_min_size"])
-        self.add_pipeline_param_row(form, "红色过滤圆度下限(0-1)：", self.pipeline_param_widgets["Head"]["red_formfactor_min"], self.pipeline_param_tooltips["Head"]["red_formfactor_min"])
-        self.add_pipeline_param_row(form, "红色等效直径上限：", self.pipeline_param_widgets["Head"]["red_equivalent_diameter_max"], self.pipeline_param_tooltips["Head"]["red_equivalent_diameter_max"])
-        self.add_pipeline_param_row(form, "绿色匹配扩张像素：", self.pipeline_param_widgets["Head"]["green_expand_pixels"], self.pipeline_param_tooltips["Head"]["green_expand_pixels"])
-        self.add_pipeline_param_row(form, "绿色过滤共定位强度下限：", self.pipeline_param_widgets["Head"]["green_intensity_min"], self.pipeline_param_tooltips["Head"]["green_intensity_min"])
-
-        return self._wrap_pipeline_param_group(group)
-
-    def create_tail_pipeline_param_page(self):
-        group = QGroupBox("尾部蛋白管道参数")
-        form = QFormLayout(group)
-
-        self.pipeline_param_widgets["Tail"] = {
-            "green_diameter": self._make_double_spin(1, 500, 1, 0),
-            "green_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
-            "green_distance_threshold": self._make_double_spin(-6, 6, 0.1, 2),
-            "green_min_size": self._make_double_spin(0, 100000, 1, 0),
-            "green_eccentricity_min": self._make_double_spin(0, 1, 0.01, 2),
-            "green_intensity_min": self._make_double_spin(0, 100000000, 1, 2),
-            "red_diameter": self._make_double_spin(1, 500, 1, 0),
-            "red_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
-            "red_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
-            "red_min_size": self._make_double_spin(0, 100000, 1, 0),
-            "red_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
-            "red_equivalent_diameter_max": self._make_double_spin(1, 1000, 1, 0),
-            "red_search_radius": self._make_double_spin(0, 1000, 1, 0),
-            "colocalized_child_count_min": self._make_double_spin(0, 1000, 1, 0),
-        }
-
-        self.add_pipeline_param_row(form, "绿色预期直径：", self.pipeline_param_widgets["Tail"]["green_diameter"], self.pipeline_param_tooltips["Tail"]["green_diameter"])
-        self.add_pipeline_param_row(form, "绿色流阈值(0.4)：", self.pipeline_param_widgets["Tail"]["green_flow_threshold"], self.pipeline_param_tooltips["Tail"]["green_flow_threshold"])
-        self.add_pipeline_param_row(form, "绿色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["green_distance_threshold"], self.pipeline_param_tooltips["Tail"]["green_distance_threshold"])
-        self.add_pipeline_param_row(form, "绿色最小尺寸：", self.pipeline_param_widgets["Tail"]["green_min_size"], self.pipeline_param_tooltips["Tail"]["green_min_size"])
-        self.add_pipeline_param_row(form, "绿色过滤细长度下限(0-1)：", self.pipeline_param_widgets["Tail"]["green_eccentricity_min"], self.pipeline_param_tooltips["Tail"]["green_eccentricity_min"])
-        self.add_pipeline_param_row(form, "绿色过滤强度下限：", self.pipeline_param_widgets["Tail"]["green_intensity_min"], self.pipeline_param_tooltips["Tail"]["green_intensity_min"])
-        self.add_pipeline_param_row(form, "红色预期直径：", self.pipeline_param_widgets["Tail"]["red_diameter"], self.pipeline_param_tooltips["Tail"]["red_diameter"])
-        self.add_pipeline_param_row(form, "红色流阈值(0.4)：", self.pipeline_param_widgets["Tail"]["red_flow_threshold"], self.pipeline_param_tooltips["Tail"]["red_flow_threshold"])
-        self.add_pipeline_param_row(form, "红色概率阈值(±6)：", self.pipeline_param_widgets["Tail"]["red_cellprob_threshold"], self.pipeline_param_tooltips["Tail"]["red_cellprob_threshold"])
-        self.add_pipeline_param_row(form, "红色最小尺寸：", self.pipeline_param_widgets["Tail"]["red_min_size"], self.pipeline_param_tooltips["Tail"]["red_min_size"])
-        self.add_pipeline_param_row(form, "红色过滤圆度下限(0-1)：", self.pipeline_param_widgets["Tail"]["red_formfactor_min"], self.pipeline_param_tooltips["Tail"]["red_formfactor_min"])
-        self.add_pipeline_param_row(form, "红色等效直径上限：", self.pipeline_param_widgets["Tail"]["red_equivalent_diameter_max"], self.pipeline_param_tooltips["Tail"]["red_equivalent_diameter_max"])
-        self.add_pipeline_param_row(form, "红色头部搜索半径：", self.pipeline_param_widgets["Tail"]["red_search_radius"], self.pipeline_param_tooltips["Tail"]["red_search_radius"])
-        self.add_pipeline_param_row(form, "共定位最小绿色对象数：", self.pipeline_param_widgets["Tail"]["colocalized_child_count_min"], self.pipeline_param_tooltips["Tail"]["colocalized_child_count_min"])
-
-        return self._wrap_pipeline_param_group(group)
-
-    def create_qc_pipeline_param_page(self):
-        group = QGroupBox("质控微球管道参数")
-        form = QFormLayout(group)
-
-        self.pipeline_param_widgets["QC"] = {
-            "bead_diameter": self._make_double_spin(1, 500, 1, 0),
-            "bead_flow_threshold": self._make_double_spin(0, 10, 0.05, 2),
-            "bead_cellprob_threshold": self._make_double_spin(-6, 6, 0.1, 2),
-            "bead_min_size": self._make_double_spin(0, 100000, 1, 0),
-            "bead_formfactor_min": self._make_double_spin(0, 1, 0.01, 2),
-        }
-
-        self.add_pipeline_param_row(form, "微球预期直径：", self.pipeline_param_widgets["QC"]["bead_diameter"], self.pipeline_param_tooltips["QC"]["bead_diameter"])
-        self.add_pipeline_param_row(form, "微球流阈值(0.4)：", self.pipeline_param_widgets["QC"]["bead_flow_threshold"], self.pipeline_param_tooltips["QC"]["bead_flow_threshold"])
-        self.add_pipeline_param_row(form, "微球概率阈值(±6)：", self.pipeline_param_widgets["QC"]["bead_cellprob_threshold"], self.pipeline_param_tooltips["QC"]["bead_cellprob_threshold"])
-        self.add_pipeline_param_row(form, "微球最小尺寸：", self.pipeline_param_widgets["QC"]["bead_min_size"], self.pipeline_param_tooltips["QC"]["bead_min_size"])
-        self.add_pipeline_param_row(form, "微球过滤圆度下限(0-1)：", self.pipeline_param_widgets["QC"]["bead_formfactor_min"], self.pipeline_param_tooltips["QC"]["bead_formfactor_min"])
-
-        return self._wrap_pipeline_param_group(group)
-
-    def _wrap_pipeline_param_group(self, group: QGroupBox):
-        page = QWidget()
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(8, 8, 8, 8)
-        content_layout.addWidget(group)
-        content_layout.addStretch()
-
-        scroll.setWidget(content)
-        page_layout.addWidget(scroll, 1)
-        return page
-
-    @staticmethod
-    def _make_double_spin(min_value, max_value, step, decimals):
-        # 保留方法名，减少其他代码改动；实际控件改为纯文本数字输入框。
-        # step 参数不再使用，避免上下箭头和鼠标滚轮误触修改。
-        return PipelineParamLineEdit(min_value, max_value, decimals)
-
-    def load_pipeline_params(self):
-        try:
-            self.pipeline_param_manager.load()
-            self.pipeline_param_manager.ensure_default_params()
-        except Exception as e:
-            self.append_log(f"读取管道参数失败：{e}")
-            return
-
-        for section, widgets in getattr(self, "pipeline_param_widgets", {}).items():
-            params = self.pipeline_param_manager.get_params(section)
-            for key, widget in widgets.items():
-                try:
-                    widget.setValue(float(params.get(key, 0)))
-                except Exception:
-                    widget.setValue(0)
-
-    def collect_pipeline_params_from_ui(self):
-        data = {}
-        for section, widgets in getattr(self, "pipeline_param_widgets", {}).items():
-            data[section] = {}
-            for key, widget in widgets.items():
-                data[section][key] = widget.value()
-        return data
-
-    def save_pipeline_params_to_file(self):
-        """把界面上的管道参数保存到 pipeline_params.ini，不弹窗。"""
-        data = self.collect_pipeline_params_from_ui()
-        for section, values in data.items():
-            self.pipeline_param_manager.set_params(section, values)
-        return self.pipeline_param_manager.get_param_file()
-
-    def save_and_apply_pipeline_params(self):
-        reply = QMessageBox.question(
-            self,
-            "确认保存并应用参数",
-            "将保存当前管道参数，并生成/覆盖实际运行管道：\n\n"
-            "pipeline_params.ini\n"
-            "pipelines\\pipeline_head.cppipe\n"
-            "pipelines\\pipeline_tail.cppipe\n"
-            "如项目中存在 pipeline_qc.cppipe，也会一并处理。\n\n"
-            "生成前会自动备份当前管道到 pipelines\\backups。\n\n"
-            "保存并应用后，后续蛋白分析、批量分析和质控测试会直接使用新管道。\n\n"
-            "是否继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        try:
-            param_file = self.save_pipeline_params_to_file()
-            self.append_log(f"管道参数已保存：{param_file}")
-
-            messages = self.pipeline_param_manager.generate_all_pipelines()
-            for message in messages:
-                self.append_log(message)
-
-            QMessageBox.information(
-                self,
-                "应用完成",
-                "管道参数已保存并应用。\n\n"
-                "后续蛋白分析、批量分析和质控测试会直接读取 pipelines 目录下新生成的 .cppipe。",
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存并应用管道参数失败：\n{e}")
-
-    def reset_pipeline_params(self):
-        reply = QMessageBox.question(
-            self,
-            "确认恢复默认并应用",
-            "确定要恢复默认管道参数，并立即重新生成实际运行管道吗？\n\n"
-            "该操作会覆盖：\n"
-            "pipeline_params.ini\n"
-            "pipelines\\pipeline_head.cppipe\n"
-            "pipelines\\pipeline_tail.cppipe\n"
-            "如项目中存在 pipeline_qc.cppipe，也会一并处理。\n\n"
-            "生成前会自动备份当前管道到 pipelines\\backups。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        try:
-            self.pipeline_param_manager.reset_defaults()
-            self.load_pipeline_params()
-            self.append_log("管道参数已恢复默认。")
-
-            messages = self.pipeline_param_manager.generate_all_pipelines()
-            for message in messages:
-                self.append_log(message)
-
-            QMessageBox.information(
-                self,
-                "恢复完成",
-                "默认管道参数已恢复并应用。\n\n"
-                "后续分析会使用默认参数重新生成的 .cppipe。",
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"恢复默认并应用失败：\n{e}")
-
-    def check_pipeline_effective_status(self):
-        try:
-            # 只读比较当前界面参数与实际运行管道，不保存或生成任何文件。
-            params_by_section = self.collect_pipeline_params_from_ui()
-            messages = self.pipeline_param_manager.check_generated_pipeline_status(
-                params_by_section=params_by_section
-            )
-            for message in messages:
-                self.append_log(message)
-
-            failed = any(str(message).startswith("×") for message in messages)
-            if failed:
-                QMessageBox.warning(
-                    self,
-                    "检查完成",
-                    "当前界面参数与实际运行管道不一致。\n\n"
-                    "如果你希望当前参数真正生效，请点击“保存并应用参数”。"
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "检查完成",
-                    "当前界面参数与实际运行管道一致，后续分析会使用实际运行管道中的这些参数。"
-                )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"检查参数生效状态失败：\n{e}")
-
-
-    def validate_pipeline_templates(self):
-        reply = QMessageBox.question(
-            self,
-            "确认检查并补齐模板",
-            "该操作用于开发维护，将检查管道模板。\n\n"
-            "如果模板缺失，可能会从当前运行管道补齐模板文件，"
-            "并可能涉及 pipelines/templates 目录。\n\n"
-            "是否继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            self.append_log("已取消检查并补齐模板。")
-            return
-
-        try:
-            messages = self.pipeline_param_manager.validate_template_rules()
-            for message in messages:
-                self.append_log(message)
-
-            failed = any(str(message).startswith("×") for message in messages)
-            if failed:
-                QMessageBox.warning(
-                    self,
-                    "检查完成",
-                    "管道模板检查未通过。\n\n"
-                    "可能原因：模板管道被更换、模块编号变化、参数名称变化。\n"
-                    "请查看下方检查结果。"
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "检查完成",
-                    "管道模板检查通过，可以正常生成管道。"
-                )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"检查管道模板失败：\n{e}")
-
-
-    def restore_latest_pipeline_backup(self):
-        latest_backup = self.pipeline_param_manager.get_latest_backup_dir()
-
-        if not latest_backup:
-            QMessageBox.information(
-                self,
-                "提示",
-                "当前没有可恢复的管道备份。\n\n"
-                "点击“生成管道”后，系统会自动在 pipelines\\backups 中备份旧管道。",
-            )
-            return
-
-        reply = QMessageBox.question(
-            self,
-            "确认恢复最近备份",
-            "将恢复最近一次管道备份，并覆盖当前实际运行管道：\n\n"
-            f"{latest_backup}\n\n"
-            "恢复前系统会先自动备份当前管道，便于回退。\n\n"
-            "是否继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        try:
-            messages = self.pipeline_param_manager.restore_latest_backup()
-            for message in messages:
-                self.append_log(message)
-
-            QMessageBox.information(
-                self,
-                "恢复完成",
-                "已恢复最近一次管道备份。\n\n"
-                "后续蛋白分析、批量分析和质控测试会直接读取恢复后的 pipelines 目录下 .cppipe。",
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"恢复管道备份失败：\n{e}")
-
-
-    def open_pipeline_dir(self):
-        path = self.pipeline_param_manager.get_pipelines_dir()
-        path.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
-
-    def open_pipeline_param_file(self):
-        path = self.pipeline_param_manager.get_param_file()
-        if not path.exists():
-            self.pipeline_param_manager.ensure_default_params()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
-
     def init_workspace_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -970,10 +539,10 @@ class SettingsWindow(QWidget):
         self.use_case_tail_rate_check = QCheckBox("头部荧光强度乘当前病例唯一尾部的原始标定率")
         self.sync_positive_count_check = QCheckBox("共定位数跟随校正后的标定率同步")
 
-        self.default_tail_rate_ratio_edit = PipelineParamLineEdit(0.0, 1.0, 4)
-        self.fluorescence_result_factor_edit = PipelineParamLineEdit(0.0001, 1000.0, 4)
-        self.expression_rate_result_factor_edit = PipelineParamLineEdit(0.0001, 1000.0, 4)
-        self.result_display_decimals_edit = PipelineParamLineEdit(0, 6, 0)
+        self.default_tail_rate_ratio_edit = BoundedNumberLineEdit(0.0, 1.0, 4)
+        self.fluorescence_result_factor_edit = BoundedNumberLineEdit(0.0001, 1000.0, 4)
+        self.expression_rate_result_factor_edit = BoundedNumberLineEdit(0.0001, 1000.0, 4)
+        self.result_display_decimals_edit = BoundedNumberLineEdit(0, 6, 0)
 
         self.default_tail_rate_ratio_edit.setToolTip(
             "当前病例没有唯一有效尾部结果时使用。默认 1.0 表示头部荧光强度保持不变。"
@@ -1053,14 +622,6 @@ class SettingsWindow(QWidget):
         layout.addStretch()
 
         self.tabs.addTab(tab, "关于")
-
-    def add_pipeline_param_row(self, form: QFormLayout, label_text: str, widget: QWidget, tooltip: str):
-        """管道参数行：参数名和输入框都支持悬停说明。"""
-        label = QLabel(label_text)
-        label.setToolTip(tooltip)
-        widget.setToolTip(tooltip)
-        form.addRow(label, widget)
-
 
     def _with_button(self, line_edit: QLineEdit, button_text: str, callback, enabled: bool = True):
         widget = QWidget()
@@ -1304,6 +865,7 @@ class SettingsWindow(QWidget):
     # ------------------------------------------------------------------
     # 加载 / 保存
     # ------------------------------------------------------------------
+
     def load_config(self):
         self.config.load()
         self.config.ensure_default_config()
@@ -1363,7 +925,6 @@ class SettingsWindow(QWidget):
         self.result_display_decimals_edit.setValue(
             self.config.get_result_display_decimals()
         )
-        self.load_pipeline_params()
         self.append_log("配置已重新加载。")
 
     def save_config(self):

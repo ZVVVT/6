@@ -26,7 +26,6 @@ datas = [
     (os.path.join(project_root, "assets"), "assets"),
     (os.path.join(project_root, "pipelines"), "pipelines"),
     (os.path.join(project_root, "config.ini"), "."),
-    (os.path.join(project_root, "pipeline_params.ini"), "."),
 ]
 datas += collect_data_files("cv2")
 datas += collect_data_files("tifffile")

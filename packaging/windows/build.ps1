@@ -303,7 +303,6 @@ try {
         'packaging\windows\requirements-build.txt',
         'packaging\windows\requirements-c18b.txt',
         'config.ini',
-        'pipeline_params.ini',
         'main.py'
     )
     foreach ($relative in $RequiredPackagingFiles) {
@@ -509,7 +508,6 @@ print("C18B 独立运行时检查通过")
     Remove-OutputPythonCache (Join-Path $OutputRoot 'tools')
 
     Copy-Item -LiteralPath (Join-Path $SourceRoot 'config.ini') -Destination $OutputRoot
-    Copy-Item -LiteralPath (Join-Path $SourceRoot 'pipeline_params.ini') -Destination $OutputRoot
 
     $ConfigPath = Join-Path $OutputRoot 'config.ini'
     $ConfigText = [System.IO.File]::ReadAllText($ConfigPath)
@@ -698,7 +696,6 @@ print(value)
         '.venv-c18b\python.exe',
         '.venv-c18b\Lib\site-packages',
         'config.ini',
-        'pipeline_params.ini',
         'data',
         'reports',
         'workspace'

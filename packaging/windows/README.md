@@ -92,7 +92,6 @@ core\
 pipelines\
 tools\
 config.ini
-pipeline_params.ini
 data\
 reports\
 workspace\
