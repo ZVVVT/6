@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -7,9 +6,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from app.analysis_window import AnalysisWindow
-from tools.analysis_v2.tail_joint_promote_measure_v2 import (
-    rollback_interrupted_promotion,
-)
 from core.analysis_process_registry import AnalysisProcessRegistry
 
 
@@ -119,31 +115,6 @@ def test_exit_with_tail_calibration_window():
 
 def test_exit_during_tail_measurement():
     _run_shutdown("tail_measurement_worker")
-
-
-def test_interrupted_atomic_promotion_restores_old_results(tmp_path):
-    task_root = Path(tmp_path)
-    calibration = task_root / "calibration"
-    measurement = task_root / "measurement"
-    backup = calibration / "tail_joint_atomic_backups" / "latest"
-    (calibration / "tail").mkdir(parents=True)
-    (calibration / "tail" / "new.txt").write_text("new", encoding="utf-8")
-    (measurement / "tail").mkdir(parents=True)
-    (measurement / "tail" / "new.txt").write_text("new", encoding="utf-8")
-    (backup / "formal_tail_before").mkdir(parents=True)
-    (backup / "formal_tail_before" / "old.txt").write_text("old", encoding="utf-8")
-    (backup / "measurement_tail_before").mkdir(parents=True)
-    (backup / "measurement_tail_before" / "old.txt").write_text("old", encoding="utf-8")
-    (backup / "state_before.json").write_text('{"old": true}', encoding="utf-8")
-    (backup / "manifest_before.json").write_text('{"old": true}', encoding="utf-8")
-    (task_root / "state.json").write_text('{"new": true}', encoding="utf-8")
-    (task_root / "manifest.json").write_text('{"new": true}', encoding="utf-8")
-
-    assert rollback_interrupted_promotion(task_root) == []
-    assert (calibration / "tail" / "old.txt").read_text(encoding="utf-8") == "old"
-    assert (measurement / "tail" / "old.txt").read_text(encoding="utf-8") == "old"
-    assert (task_root / "state.json").read_text(encoding="utf-8") == '{"old": true}'
-    assert (task_root / "manifest.json").read_text(encoding="utf-8") == '{"old": true}'
 
 
 def test_registry_terminates_only_registered_process_tree():

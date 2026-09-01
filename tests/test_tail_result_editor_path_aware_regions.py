@@ -14,11 +14,11 @@ from tools.analysis_v2.tail_legacy.tail_result_editor_v2_3_draft_mvp import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EDITOR_LAUNCHER = (
+TAIL_WORKER = (
     PROJECT_ROOT
-    / "tools"
+    / "app"
     / "analysis_v2"
-    / "tail_joint_draft_editor_launcher_mvp.py"
+    / "tail_analysis_workers.py"
 )
 
 
@@ -32,8 +32,8 @@ def make_record(head_id, fragment_ids, points_xy):
 
 
 class PathAwareTailRegionTests(unittest.TestCase):
-    def test_formal_launcher_targets_v2_3_editor(self):
-        source = EDITOR_LAUNCHER.read_text(encoding="utf-8")
+    def test_c18b_worker_targets_v2_3_editor(self):
+        source = TAIL_WORKER.read_text(encoding="utf-8")
         self.assertIn('"tail_result_editor_v2_3_draft_mvp.py"', source)
         self.assertNotIn('"tail_result_editor_v2_2.py"', source)
 

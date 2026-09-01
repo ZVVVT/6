@@ -20,12 +20,12 @@ from core.analysis_v2.task_state import TaskStateStore
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANALYSIS_WINDOW = PROJECT_ROOT / "app" / "analysis_window.py"
 TAIL_WORKER = PROJECT_ROOT / "app" / "analysis_v2" / "tail_analysis_workers.py"
-TAIL_ONECLICK = PROJECT_ROOT / "tools" / "analysis_v2" / "tail_joint_oneclick_v2.py"
-TAIL_EDITOR_LAUNCHER = (
+TAIL_EDITOR = (
     PROJECT_ROOT
     / "tools"
     / "analysis_v2"
-    / "tail_joint_draft_editor_launcher_mvp.py"
+    / "tail_legacy"
+    / "tail_result_editor_v2_3_draft_mvp.py"
 )
 
 
@@ -93,23 +93,29 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         self.assertIn("self.tail_field_prepare_max_workers = 1", scheduler)
         self.assertIn("self.tail_field_prepare_queue.insert(0, field_id)", scheduler)
 
-    def test_tail_worker_runs_joint_oneclick_then_promote_measure(self):
+    def test_tail_worker_uses_only_c18b_backend_and_editor_adapter(self):
         source = TAIL_WORKER.read_text(encoding="utf-8")
-        run_source = source[source.index("    def run(self) -> None:"):]
-        oneclick = run_source.index('"tail_joint_oneclick_v2.py"')
-        promotion = run_source.index('"tail_joint_promote_measure_v2.py"')
-        first_command = run_source.index("self._run_streaming_command(", promotion)
-        second_command = run_source.index("self._run_streaming_command(", first_command + 1)
-
-        self.assertLess(oneclick, promotion)
-        self.assertLess(promotion, first_command)
-        self.assertLess(first_command, second_command)
+        self.assertIn('"c18b_score015_adapter.py"', source)
+        self.assertIn('"c18b_tail_editor_adapter.py"', source)
+        self.assertIn('"tail_result_editor_v2_3_draft_mvp.py"', source)
+        self.assertIn('"workflow": "c18b_tail_editor"', source)
+        self.assertIn('"tail_backend": "C18B"', source)
+        self.assertIn("仅支持 protein3 C18B 尾部流程", source)
         self.assertIn("str(self.python_executable)", source)
-        promotion_command = run_source[second_command:]
-        self.assertIn("str(promotion_script)", promotion_command)
-        self.assertIn('"--promote-only"', promotion_command)
         self.assertNotIn("import cv2", source)
         self.assertNotIn("TailPathService", source)
+
+    def test_tail_result_rejects_non_c18b_workflow_without_legacy_fallback(self):
+        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
+        callback = source[
+            source.index("def _on_tail_path_finished"):
+            source.index("def _on_tail_path_thread_finished")
+        ]
+        self.assertIn('payload.get("workflow") != "c18b_tail_editor"', callback)
+        self.assertIn('payload.get("tail_backend") != "C18B"', callback)
+        self.assertIn("不支持的旧尾部 workflow", callback)
+        self.assertIn("C18BTailCalibrationController(", callback)
+        self.assertNotIn("from app.analysis_v2.tail_calibration_window", source)
 
     def test_legacy_tail_stages_are_not_in_formal_call_chain(self):
         formal_sources = "\n".join(
@@ -117,8 +123,7 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
             for path in (
                 ANALYSIS_WINDOW,
                 TAIL_WORKER,
-                TAIL_ONECLICK,
-                TAIL_EDITOR_LAUNCHER,
+                TAIL_EDITOR,
             )
         )
         for retired_script in (
@@ -133,10 +138,9 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         paths = [
             ANALYSIS_WINDOW,
             TAIL_WORKER,
-            PROJECT_ROOT / "app" / "analysis_v2" / "tail_calibration_window.py",
+            PROJECT_ROOT / "app" / "analysis_v2" / "c18b_tail_calibration_window.py",
             PROJECT_ROOT / "core" / "analysis_v2" / "tail_calibration_service.py",
-            TAIL_ONECLICK,
-            TAIL_EDITOR_LAUNCHER,
+            TAIL_EDITOR,
         ]
         text = "\n".join(path.read_text(encoding="utf-8") for path in paths).lower()
         self.assertNotIn("experiments", text)

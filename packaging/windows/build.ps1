@@ -241,19 +241,6 @@ $ToolsWhitelist = @(
     'tools\analysis_v2\c18b_score015_adapter.py',
     'tools\analysis_v2\c18b_tail_editor_adapter.py',
     'tools\analysis_v2\direct_cellpose_worker.py',
-    'tools\analysis_v2\tail_joint_chain_candidate_mvp.py',
-    'tools\analysis_v2\tail_joint_draft_editor_launcher_mvp.py',
-    'tools\analysis_v2\tail_joint_draft_export_mvp.py',
-    'tools\analysis_v2\tail_joint_final_candidate_export_mvp.py',
-    'tools\analysis_v2\tail_joint_oneclick_v2.py',
-    'tools\analysis_v2\tail_joint_promote_measure_v2.py',
-    'tools\analysis_v2\tail_joint_promotion_staging_mvp.py',
-    'tools\analysis_v2\tail_joint_refine_candidate_mvp.py',
-    'tools\analysis_v2\tail_joint_region_preview_mvp.py',
-    'tools\analysis_v2\tail_joint_start_candidate_mvp.py',
-    'tools\analysis_v2\tail_legacy\tail_graph_stage1_extract.py',
-    'tools\analysis_v2\tail_legacy\tail_graph_stage1_1_topology_clean.py',
-    'tools\analysis_v2\tail_legacy\tail_graph_stage1_2_build_graph.py',
     'tools\analysis_v2\tail_legacy\tail_result_editor_v2_3_draft_mvp.py'
 )
 
@@ -610,7 +597,9 @@ print("config.ini 检查通过")
     $RequiredExternalRuntimePaths = @(
         'core',
         'core\analysis_v2\tail_measurement_service.py',
-        'tools\analysis_v2\tail_joint_promote_measure_v2.py'
+        'tools\analysis_v2\c18b_score015_adapter.py',
+        'tools\analysis_v2\c18b_tail_editor_adapter.py',
+        'tools\analysis_v2\tail_legacy\tail_result_editor_v2_3_draft_mvp.py'
     )
     foreach ($relative in $RequiredExternalRuntimePaths) {
         if (-not (Test-Path -LiteralPath (Join-Path $OutputRoot $relative))) {
@@ -620,7 +609,6 @@ print("config.ini 检查通过")
 
     $ExternalRuntimeCheck = @'
 import configparser
-import importlib
 import sys
 from pathlib import Path
 
@@ -633,19 +621,15 @@ if not parser.read(str(config_path), encoding="utf-8"):
 sys.path.insert(0, str(product_root))
 from core.analysis_v2.tail_measurement_service import TailMeasurementService
 
-module = importlib.import_module(
-    "tools.analysis_v2.tail_joint_promote_measure_v2"
-)
-resolved_root = module.find_project_root(
-    product_root / "tools" / "analysis_v2" /
-    "tail_joint_promote_measure_v2.py",
-    str(product_root),
-)
-if resolved_root != product_root:
-    raise SystemExit(
-        "find_project_root 返回异常：{} != {}".format(
-            resolved_root, product_root
-        )
+for relative_path in (
+    "tools/analysis_v2/c18b_score015_adapter.py",
+    "tools/analysis_v2/c18b_tail_editor_adapter.py",
+):
+    script_path = product_root / relative_path
+    compile(
+        script_path.read_text(encoding="utf-8-sig"),
+        str(script_path),
+        "exec",
     )
 print("MvImageID Python 外置 core/tools 导入检查通过：{}".format(product_root))
 '@

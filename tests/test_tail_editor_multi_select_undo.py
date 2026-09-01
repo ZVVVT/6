@@ -9,9 +9,6 @@ import numpy as np
 from tools.analysis_v2.tail_legacy.tail_result_editor_v2_3_draft_mvp import (
     TailResultEditor,
 )
-from tools.analysis_v2.tail_joint_final_candidate_export_mvp import (
-    build_candidate_arrays,
-)
 
 
 def make_record(head_id, offset=0.0):
@@ -180,24 +177,6 @@ class TailEditorMultiSelectUndoTests(unittest.TestCase):
             self.assertTrue(reopened.records[1].deleted)
             self.assertEqual(reopened.selected_indices, {1})
             self.assertEqual(reopened.edit_history, [])
-
-    def test_final_candidate_arrays_still_export_selected_regions(self):
-        head_labels = np.zeros((8, 8), dtype=np.uint16)
-        head_labels[1:3, 1:3] = 11
-        head_labels[1:3, 5:7] = 22
-        edited_regions = np.zeros((8, 8), dtype=np.uint16)
-        edited_regions[3:7, 1:3] = 11
-        edited_regions[3:7, 5:7] = 22
-        tail_final, tail_head_ids, positive_heads, objects = build_candidate_arrays(
-            head_labels,
-            edited_regions,
-            [11, 22],
-        )
-        self.assertEqual(sorted(np.unique(tail_final[tail_final > 0]).tolist()), [1, 2])
-        self.assertEqual(sorted(np.unique(tail_head_ids[tail_head_ids > 0]).tolist()), [11, 22])
-        self.assertEqual(sorted(np.unique(positive_heads[positive_heads > 0]).tolist()), [1, 2])
-        self.assertEqual([item["head_id"] for item in objects], [11, 22])
-
 
 if __name__ == "__main__":
     unittest.main()

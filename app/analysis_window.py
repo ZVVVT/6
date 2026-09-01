@@ -38,7 +38,6 @@ from app.analysis_v2.tail_analysis_workers import (
 from app.analysis_v2.c18b_tail_calibration_window import (
     C18BTailCalibrationController,
 )
-from app.analysis_v2.tail_calibration_window import TailCalibrationController
 from app.long_message_dialog import show_long_message_dialog
 from app.result_viewer import ResultViewer
 from core.config_manager import ConfigManager
@@ -2241,68 +2240,16 @@ class AnalysisWindow(QWidget):
             return
         try:
             payload = dict(result) if isinstance(result, dict) else {}
-            if bool(payload.get("cancelled")):
-                task_root = str(
-                    payload.get("task_root")
-                    or self.current_analysis_v2_task_root
-                    or ""
-                )
-                cancelled_field = str(
-                    payload.get("cancelled_field") or "当前视野"
-                ).strip()
-                message = str(
-                    payload.get("message")
-                    or "用户关闭人工尾部校准窗口且未保存。"
-                ).strip()
-
-                # 先设置完成标志并停止后续预准备，再显示模态提示框。
-                # 否则 QThread.finished 可能在 QMessageBox 的嵌套事件循环中
-                # 提前到达，此时完成标志尚未设置，界面将永久停留在
-                # “正在校准尾部”状态。
-                self._analysis_v2_finish_pending = True
-                self.tail_field_prepare_queue = []
-                self._tail_head_calibration_finished = False
-                self._tail_path_start_pending = False
-
-                prepare_workers = list(
-                    getattr(self, "tail_field_prepare_workers", {}).values()
-                )
-                for prepare_worker in prepare_workers:
-                    if not self._worker_is_running(prepare_worker):
-                        continue
-                    try:
-                        prepare_worker.request_cancel()
-                        self.append_log(
-                            "Analysis V2：正在停止剩余尾部后台准备任务。"
-                        )
-                    except (AttributeError, RuntimeError) as exception:
-                        self.append_log(
-                            "Analysis V2：剩余尾部后台任务将在当前步骤结束后停止：{}".format(
-                                exception
-                            )
-                        )
-
-                self.append_log(
-                    "Analysis V2：尾部人工校准已取消：{}；任务目录：{}".format(
-                        message, task_root
+            if (
+                payload.get("workflow") != "c18b_tail_editor"
+                or payload.get("tail_backend") != "C18B"
+            ):
+                raise RuntimeError(
+                    "不支持的旧尾部 workflow：{}（backend={}）。".format(
+                        payload.get("workflow") or "<missing>",
+                        payload.get("tail_backend") or "<missing>",
                     )
                 )
-                QMessageBox.information(
-                    self,
-                    "尾部校准已取消",
-                    (
-                        "{} 未保存，本次尾部分析已停止。\n\n"
-                        "自动候选、任务目录以及此前已经保存的人工结果均已保留；"
-                        "重新运行该蛋白可继续处理。\n\n任务目录：{}"
-                    ).format(cancelled_field, task_root),
-                )
-
-                # 若线程 finished 信号已在上面的模态框中提前处理，
-                # _finish_analysis_v2_ui() 已经执行，pending 会被清除；
-                # 否则这里主动收尾，确保按钮、病例切换和页面切换立即解锁。
-                if self._analysis_v2_finish_pending:
-                    self._finish_analysis_v2_ui()
-                return
             fields = list(payload.get("fields") or [])
             context = dict(self.current_analysis_v2_context or {})
             expected_count = int(context.get("field_count", 0) or 0)
@@ -2314,34 +2261,13 @@ class AnalysisWindow(QWidget):
                 )
             task_root = Path(self.current_analysis_v2_task_root).resolve()
 
-            if bool(payload.get("joint_workflow_completed")):
-                if not bool(payload.get("manual_calibration_completed")):
-                    raise RuntimeError("联合尾部流程未确认人工校准完成。")
-                if not bool(payload.get("ready_for_measurement")):
-                    raise RuntimeError("联合尾部正式标签尚未准备好，不能测量。")
-                self.append_log(
-                    "Analysis V2：联合尾部候选、人工校准和三视野原子提升完成。"
-                )
-                self._on_tail_calibration_completed(payload)
-                return
-
-            # C18B 使用独立控制器；legacy 继续使用原尾部校准控制器。
             mark_tail_stage(task_root, "tail_segmented", "全部视野尾部自动路径完成")
             mark_tail_stage(
                 task_root,
                 "tail_calibration_required",
                 "等待人工尾部校准",
             )
-            is_c18b_editor_payload = (
-                payload.get("workflow") == "c18b_tail_editor"
-                and payload.get("tail_backend") == "C18B"
-            )
-            controller_class = (
-                C18BTailCalibrationController
-                if is_c18b_editor_payload
-                else TailCalibrationController
-            )
-            controller = controller_class(
+            controller = C18BTailCalibrationController(
                 task_root=task_root,
                 field_payloads=fields,
                 parent=self,
@@ -3519,20 +3445,6 @@ class AnalysisWindow(QWidget):
         task_root_text = str(self.current_analysis_v2_task_root or "").strip()
         if task_root_text:
             task_root = Path(task_root_text).resolve()
-            lock_path = task_root / ".tail_joint_promote_measure_v2.lock"
-            try:
-                if lock_path.is_file():
-                    from tools.analysis_v2.tail_joint_promote_measure_v2 import (
-                        rollback_interrupted_promotion,
-                    )
-                    rollback_errors = rollback_interrupted_promotion(task_root)
-                    for rollback_error in rollback_errors:
-                        self.append_log("Analysis V2：{}".format(rollback_error))
-                    lock_path.unlink()
-            except BaseException as exception:
-                self.append_log(
-                    "Analysis V2：清除任务运行锁失败：{}".format(exception)
-                )
             try:
                 TaskStateStore.from_task_paths(
                     task_paths_from_root(task_root)
