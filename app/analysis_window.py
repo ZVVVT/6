@@ -27,6 +27,8 @@ from app.analysis_v2.head_analysis_workers import (
     HeadMeasurementWorker,
     HeadSegmentationWorker,
 )
+from core.analysis_v2.completion import build_completion_result
+from app.analysis_v2.workflow import run_analysis_v2, complete_automatic_tail_calibration
 from app.analysis_v2.head_calibration_window import (
     HeadCalibrationWindow,
 )
@@ -44,6 +46,7 @@ from core.config_manager import ConfigManager
 from core.analysis_v2.head_input_adapter import (
     build_head_segmentation_fields,
 )
+from core.analysis_v2.head_calibration_service import HeadCalibrationService
 from core.analysis_v2.head_result_publisher import (
     stage_head_measurement_output,
 )
@@ -141,6 +144,8 @@ class AnalysisWindow(QWidget):
         self.current_analysis_v2_task_root = None
         self.current_analysis_v2_context = None
         self._analysis_running = False
+        self.analysis_v2_completion_result = None
+        self.analysis_v2_completion_error = None
         self._analysis_v2_finish_pending = False
         self._analysis_v2_select_next_pending = False
         self.current_output_dir = None
@@ -1468,6 +1473,9 @@ class AnalysisWindow(QWidget):
         return True, ""
 
     def _clear_analysis_v2_state(self) -> None:
+        if dict(self.current_analysis_v2_context or {}).get("interactive", True) is False:
+            self._analysis_running = False
+        # Keep the completion snapshot/error available until the next run.
         self.current_analysis_v2_task_root = None
         self.current_analysis_v2_context = None
         self._analysis_v2_finish_pending = False
@@ -1484,6 +1492,9 @@ class AnalysisWindow(QWidget):
         self,
         select_next: bool = False,
     ) -> None:
+        if dict(self.current_analysis_v2_context or {}).get("interactive", True) is False:
+            self._clear_analysis_v2_state()
+            return
         self.set_running_state(False)
         self._clear_analysis_v2_state()
 
@@ -1497,6 +1508,14 @@ class AnalysisWindow(QWidget):
         detail: str,
     ) -> None:
         message = str(detail or "未知错误")
+        if dict(self.current_analysis_v2_context or {}).get("interactive", True) is False:
+            self.analysis_v2_completion_result = None
+            self.analysis_v2_completion_error = {
+                "title": title, "summary": summary, "detail": message,
+                "task_root": str(self.current_analysis_v2_task_root or ""),
+                "context": dict(self.current_analysis_v2_context or {}),
+            }
+            return
         self.append_log("{}：{}".format(title, message))
         show_long_message_dialog(
             self,
@@ -1512,6 +1531,7 @@ class AnalysisWindow(QWidget):
         protein_key: str,
         protein_name: str,
         workflow: str = "head",
+        interactive: bool = True,
     ) -> None:
         """Prepare and start Analysis V2 head segmentation."""
         if self.is_analysis_active():
@@ -1559,6 +1579,8 @@ class AnalysisWindow(QWidget):
         self.current_analysis_v2_task_root = None
         self._analysis_v2_finish_pending = False
         self._analysis_v2_select_next_pending = False
+        self.analysis_v2_completion_result = None
+        self.analysis_v2_completion_error = None
         self.current_analysis_v2_context = {
             "case": case_snapshot,
             "case_id": case_snapshot.get("id"),
@@ -1569,6 +1591,7 @@ class AnalysisWindow(QWidget):
                 "tail" if workflow == "protein3_tail" else "head"
             ),
             "workflow": str(workflow),
+            "interactive": interactive,
             "field_count": len(paired_fields),
             "project_root": str(project_root),
             "raw_image_folder": str(
@@ -1690,7 +1713,7 @@ class AnalysisWindow(QWidget):
         result: object,
         error_message: str,
     ) -> None:
-        """Open manual calibration after head segmentation."""
+        """Finalize head labels automatically or open the existing calibration UI."""
         if self._shutdown_cancel_requested:
             return
         payload = dict(result) if isinstance(result, dict) else {}
@@ -1757,6 +1780,31 @@ class AnalysisWindow(QWidget):
                 elapsed or 0.0
             )
             self.current_analysis_v2_context = context
+
+            if (
+                context.get("workflow", "head") in {"head", "protein3_tail"}
+                and context.get("interactive", True) is False
+            ):
+                self.tail_field_prepare_queue = []
+                self.tail_field_prepare_results = {}
+                self.tail_field_order = []
+                self._tail_head_calibration_finished = False
+                self._tail_path_start_pending = False
+                self.append_log("Analysis V2：自动模式，直接确认头部标签。")
+                try:
+                    calibration_result = HeadCalibrationService(
+                        task_root, interactive=False,
+                    ).complete()
+                except BaseException as exception:
+                    self._analysis_v2_finish_pending = True
+                    self._show_analysis_v2_error(
+                        "自动确认头部标签失败",
+                        "无法生成最终头部标签，旧分析结果没有被修改。",
+                        str(exception),
+                    )
+                    return
+                self._on_head_calibration_completed(calibration_result, automatic=True)
+                return
 
             is_tail_workflow = (
                 str(context.get("workflow", "") or "") == "protein3_tail"
@@ -2033,11 +2081,18 @@ class AnalysisWindow(QWidget):
     def _on_head_calibration_completed(
         self,
         result: object,
+        *,
+        automatic: bool = False,
     ) -> None:
         """Close calibration and route to head measurement or protein3 tail path."""
-        window = self.sender()
+        window = None if automatic else self.sender()
 
-        if window is not self.head_calibration_window:
+        context = dict(self.current_analysis_v2_context or {})
+        if (automatic and not (
+            context.get("workflow", "head") in {"head", "protein3_tail"}
+            and context.get("interactive", True) is False
+            and self.head_calibration_window is None
+        )) or (not automatic and window is not self.head_calibration_window):
             self.append_log(
                 "Analysis V2：忽略过期的校准完成信号。"
             )
@@ -2089,7 +2144,7 @@ class AnalysisWindow(QWidget):
             )
             self.current_analysis_v2_context = context
 
-            if not window.close():
+            if window is not None and not window.close():
                 raise RuntimeError(
                     "人工校准窗口未能安全关闭。"
                 )
@@ -2145,6 +2200,8 @@ class AnalysisWindow(QWidget):
             self.btn_run_analysis.setText("正在测量头部...")
             self.append_log(
                 "Analysis V2：人工校准完成，开始测量最终头部标签。"
+                if not automatic else
+                "Analysis V2：自动确认完成，开始测量最终头部标签。"
             )
             worker.start()
 
@@ -2272,6 +2329,12 @@ class AnalysisWindow(QWidget):
             task_root = Path(self.current_analysis_v2_task_root).resolve()
 
             mark_tail_stage(task_root, "tail_segmented", "全部视野尾部自动路径完成")
+            if context.get("interactive", True) is False:
+                mark_tail_stage(task_root, "tail_calibration_required", "开始自动尾部校准")
+                completed = complete_automatic_tail_calibration(task_root, fields)
+                self._complete_tail_calibration(completed)
+                return
+
             mark_tail_stage(
                 task_root,
                 "tail_calibration_required",
@@ -2294,6 +2357,13 @@ class AnalysisWindow(QWidget):
             controller.start()
         except BaseException as exception:
             self._analysis_v2_finish_pending = True
+            if dict(self.current_analysis_v2_context or {}).get("interactive", True) is False:
+                self._show_analysis_v2_error(
+                    "自动尾部校准失败",
+                    "尾部自动结果已保留，未启动测量。",
+                    str(exception),
+                )
+                return
             self._show_analysis_v2_error(
                 "打开尾部编辑器失败",
                 "尾部自动结果已保留，但无法开始人工尾部校准。",
@@ -2310,6 +2380,10 @@ class AnalysisWindow(QWidget):
     def _on_tail_calibration_completed(self, result: object) -> None:
         """Start the validated tail measurement after all editors are saved."""
         self.tail_calibration_controller = None
+        self._complete_tail_calibration(result)
+
+    def _complete_tail_calibration(self, result: object) -> None:
+        """Start existing measurement from a completed manual or automatic contract."""
         worker = None
 
         try:
@@ -2500,6 +2574,28 @@ class AnalysisWindow(QWidget):
         if self._shutdown_cancel_requested:
             return
         payload = dict(result) if isinstance(result, dict) else {}
+        context = dict(self.current_analysis_v2_context or {})
+        self.analysis_v2_completion_result = None
+        self.analysis_v2_completion_error = None
+        if context.get("interactive", True) is False:
+            self._analysis_v2_finish_pending = True
+            self._analysis_v2_select_next_pending = False
+            try:
+                if not success:
+                    raise RuntimeError(error_message or "测量失败。")
+                completion = build_completion_result(
+                    "tail", payload, context, self.current_analysis_v2_task_root, elapsed,
+                )
+                if not completion["summary_result"].get("success"):
+                    raise RuntimeError("测量结果解析失败。")
+                self.analysis_v2_completion_result = completion
+            except BaseException as exception:
+                self._show_analysis_v2_error(
+                    "测量完成处理失败", "自动测量未完成。", str(exception),
+                )
+            if not self._worker_is_running(self.tail_measurement_worker):
+                self._clear_analysis_v2_state()
+            return
 
         if not success:
             self._analysis_v2_finish_pending = True
@@ -2565,6 +2661,14 @@ class AnalysisWindow(QWidget):
             expected_field_count = int(
                 context.get("field_count", 0) or 0
             )
+
+            completion = build_completion_result(
+                "tail", payload, context, self.current_analysis_v2_task_root, elapsed,
+            )
+            self.analysis_v2_completion_result = completion
+            source_dir = completion["source_dir"]
+            target_dir = completion["target_dir"]
+            expected_field_count = completion["expected_field_count"]
 
             self.append_log(
                 "Analysis V2：尾部测量通过严格校验，正在安全发布正式结果。"
@@ -2852,6 +2956,28 @@ class AnalysisWindow(QWidget):
         if self._shutdown_cancel_requested:
             return
         payload = dict(result) if isinstance(result, dict) else {}
+        context = dict(self.current_analysis_v2_context or {})
+        self.analysis_v2_completion_result = None
+        self.analysis_v2_completion_error = None
+        if context.get("interactive", True) is False:
+            self._analysis_v2_finish_pending = True
+            self._analysis_v2_select_next_pending = False
+            try:
+                if not success:
+                    raise RuntimeError(error_message or "测量失败。")
+                completion = build_completion_result(
+                    "head", payload, context, self.current_analysis_v2_task_root, elapsed,
+                )
+                if not completion["summary_result"].get("success"):
+                    raise RuntimeError("测量结果解析失败。")
+                self.analysis_v2_completion_result = completion
+            except BaseException as exception:
+                self._show_analysis_v2_error(
+                    "测量完成处理失败", "自动测量未完成。", str(exception),
+                )
+            if not self._worker_is_running(self.head_measurement_worker):
+                self._clear_analysis_v2_state()
+            return
 
         if not success:
             self._analysis_v2_finish_pending = True
@@ -2916,6 +3042,14 @@ class AnalysisWindow(QWidget):
             expected_field_count = int(
                 context.get("field_count", 0) or 0
             )
+
+            completion = build_completion_result(
+                "head", payload, context, self.current_analysis_v2_task_root, elapsed,
+            )
+            self.analysis_v2_completion_result = completion
+            source_dir = completion["source_dir"]
+            target_dir = completion["target_dir"]
+            expected_field_count = completion["expected_field_count"]
 
             self.append_log(
                 "Analysis V2：测量完成，正在安全发布正式结果。"
@@ -3163,11 +3297,13 @@ class AnalysisWindow(QWidget):
                     complete_items=complete_items,
                     protein_name=protein_name,
                 )
-                self._start_head_analysis_v2(
+                run_analysis_v2(
+                    self._start_head_analysis_v2,
                     complete_items=formal_items,
                     protein_key=protein_key,
                     protein_name=protein_name,
                     workflow="protein3_tail",
+                    interactive=True,
                 )
             except BaseException as exception:
                 self._show_analysis_v2_error(
@@ -3180,10 +3316,12 @@ class AnalysisWindow(QWidget):
 
         if protein_part == "head":
             try:
-                self._start_head_analysis_v2(
+                run_analysis_v2(
+                    self._start_head_analysis_v2,
                     complete_items=complete_items,
                     protein_key=protein_key,
                     protein_name=protein_name,
+                    interactive=True,
                 )
             except BaseException as exception:
                 self._show_analysis_v2_error(

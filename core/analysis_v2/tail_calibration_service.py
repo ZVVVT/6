@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -20,6 +21,119 @@ from .label_image_io import (
 from .manifest_store import ManifestStore
 from .task_paths import AnalysisTaskPaths
 from .task_state import TaskStateStore, atomic_write_json
+
+
+def build_initial_c18b_tail_workset(
+    adapter_dir: Path,
+    head_final_labels_path: Path,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """构建全新 C18B Editor 直接保存的 Workset，不读取人工编辑状态。
+
+    输入须为绝对路径。对象全集仅取 fragments.tif；关联仅使用 Adapter
+    明确提供的可信候选及 fragment ID，不进行路径邻域推断或重新匹配。
+    """
+    from PIL import Image
+
+    directory = Path(adapter_dir)
+    head_path = Path(head_final_labels_path)
+    if not directory.is_absolute() or not head_path.is_absolute():
+        raise ValueError("Adapter 和 Head 标签路径必须是绝对路径。")
+    with Image.open(directory / "fragments.tif") as image:
+        fragments = np.asarray(image).copy()
+    with Image.open(head_path) as image:
+        heads = np.asarray(image).copy()
+    for name, labels in (("fragments", fragments), ("HeadFinalLabels", heads)):
+        if (labels.ndim != 2 or not np.issubdtype(labels.dtype, np.integer)
+                or np.any(labels < 0)):
+            raise ValueError("{} 必须是二维非负整数标签图。".format(name))
+    if heads.shape != fragments.shape:
+        raise ValueError("HeadFinalLabels 与 fragments 尺寸不一致。")
+
+    def results(filename: str) -> List[Dict[str, Any]]:
+        with (directory / filename).open("r", encoding="utf-8") as handle:
+            return list((json.load(handle) or {}).get("results", []))
+
+    entries = results("entries.json")
+    if not entries:
+        raise ValueError("没有读取到任何头部记录。")
+    paths = {int(row["head_id"]): row for row in results("paths.json")}
+    globals_by_head = {
+        int(row["head_id"]): row for row in results("global_results.json")
+    }
+    head_ids = set(int(value) for value in np.unique(heads) if value > 0)
+    associated_by_fragment = {}  # type: Dict[int, int]
+    # Editor 的 records 按 head_id 排序，同一 fragment 首个可信记录优先。
+    for entry in sorted(entries, key=lambda row: int(row["head_id"])):
+        head_id = int(entry["head_id"])
+        global_result = globals_by_head.get(head_id, {})
+        selected = global_result.get("selected_candidate") or {}
+        points = np.asarray(selected.get("points_xy") or [], dtype=np.float32)
+        if (head_id not in head_ids or entry.get("status") != "auto_confirmed"
+                or global_result.get("status") != "auto_confirmed_unique"
+                or points.ndim != 2 or points.shape[1] != 2 or len(points) < 2):
+            continue
+        rank = global_result.get("selected_rank")
+        if rank is None:
+            continue
+        candidates = sorted(
+            paths.get(head_id, {}).get("candidates", []),
+            key=lambda row: int(row.get("rank", 999)),
+        )
+        for candidate in candidates:
+            if int(candidate.get("rank", -1)) != int(rank):
+                continue
+            for value in candidate.get("selected_fragment_ids", []):
+                fragment_id = int(value)
+                if fragment_id > 0:
+                    associated_by_fragment.setdefault(fragment_id, head_id)
+            break
+
+    fragment_ids = np.unique(fragments[fragments > 0])
+    if len(fragment_ids) > np.iinfo(np.uint16).max:
+        raise ValueError("Tail Workset对象数超过uint16可表示范围。")
+    labels = np.zeros(fragments.shape, dtype=np.uint16)
+    rows = []
+    for object_id, value in enumerate(fragment_ids, start=1):
+        fragment_id = int(value)
+        head_id = associated_by_fragment.get(fragment_id)
+        labels[fragments == fragment_id] = object_id
+        rows.append({
+            "tail_object_id": object_id,
+            "workset_label_id": object_id,
+            "accepted": True,
+            "association_status": "associated" if head_id is not None else "unresolved",
+            "head_label_id": head_id,
+            "source": "auto",
+            "fragment_label_id": fragment_id,
+        })
+    return labels, {
+        "version": 1,
+        "saved_at_unix": time.time(),
+        "not_for_measurement": True,
+        "not_for_publication": True,
+        "accepted_count": len(rows),
+        "objects": rows,
+    }
+
+
+def save_initial_c18b_tail_workset(
+    adapter_dir: Path,
+    head_final_labels_path: Path,
+    output_dir: Path,
+) -> Tuple[Path, Path]:
+    """仅保存初始 Workset 的 TIFF/JSON，不发布、不更新任务或 manifest。"""
+    from PIL import Image
+
+    directory = Path(output_dir)
+    if not directory.is_absolute():
+        raise ValueError("Workset 输出路径必须是绝对路径。")
+    labels, payload = build_initial_c18b_tail_workset(adapter_dir, head_final_labels_path)
+    directory.mkdir(parents=True, exist_ok=True)
+    labels_path = directory / "TailWorksetLabels.tif"
+    json_path = directory / "tail_workset.json"
+    Image.fromarray(labels).save(labels_path)
+    atomic_write_json(json_path, payload)
+    return labels_path, json_path
 
 
 def task_paths_from_root(task_root: Path) -> AnalysisTaskPaths:
@@ -65,6 +179,23 @@ def _read_conflicts(output_dir: Path) -> List[Dict[str, Any]]:
             )
         )
     return effective
+
+
+def build_automatic_tail_final_contract(
+    field_id: str,
+    output_dir: Path,
+    head_final_labels_path: Path,
+) -> Dict[str, Any]:
+    """将已保存的自动 Workset 转为正式契约，不更新任务或 manifest。
+
+    必须同时提供 Workset TIFF/JSON；不回退到旧 Editor 区域图。
+    编号、关联验证和全部正式产物均复用正式 calibration builder。
+    """
+    directory = Path(output_dir).resolve()
+    for name in ("TailWorksetLabels.tif", "tail_workset.json"):
+        if not (directory / name).is_file():
+            raise FileNotFoundError("自动 Tail contract 缺少 Workset：{}".format(directory / name))
+    return build_tail_final_contract(field_id, directory, head_final_labels_path)
 
 
 def build_tail_final_contract(
@@ -221,7 +352,7 @@ def build_tail_final_contract(
 
     expected = list(range(1, len(objects) + 1))
     region_stats = validate_label_image(object_labels)
-    positive_stats = validate_label_image(positive_head_labels)
+    positive_stats = validate_label_image(positive_head_labels, require_objects=False)
     if region_stats["positive_labels"] != expected:
         raise ValueError("TailFinalLabels 未严格连续编号为 1...N。")
     associated_ids = [
@@ -259,6 +390,13 @@ def publish_tail_final_labels(field_payload: Dict[str, str]) -> Dict[str, str]:
     contract = build_tail_final_contract(
         payload["field_id"], output_dir, head_final_labels
     )
+    return register_tail_final_contract(payload, contract)
+
+
+def register_tail_final_contract(field_payload, contract):
+    """Register an already built contract using the shared calibration manifest roles."""
+    payload = dict(field_payload)
+    paths = task_paths_from_root(Path(payload["task_root"]))
     manifest = ManifestStore.from_task_paths(paths)
     roles = (
         ("tail_final_labels", "tail_final_labels", "image/tiff"),
@@ -281,12 +419,14 @@ def publish_tail_final_labels(field_payload: Dict[str, str]) -> Dict[str, str]:
 def complete_tail_calibration(
     task_root: Path,
     results: Sequence[Dict[str, str]],
+    *,
+    automatic: bool = False,
 ) -> Dict[str, object]:
     paths = task_paths_from_root(task_root)
     state = TaskStateStore.from_task_paths(paths).update(
         "tail_calibrated",
         "tail_calibration",
-        "全部视野人工尾部校准已完成",
+        "全部视野自动尾部校准已完成" if automatic else "全部视野人工尾部校准已完成",
     )
     return {
         "task_root": str(paths.task_root),

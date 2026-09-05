@@ -51,7 +51,8 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
         run_source = source[source.index("def run_analysis"):]
         self.assertIn('if protein_part == "head":', run_source)
-        self.assertIn("_start_head_analysis_v2(", run_source)
+        self.assertIn("run_analysis_v2(", run_source)
+        self.assertIn("self._start_head_analysis_v2,", run_source)
         self.assertNotIn("batch_analysis", run_source)
 
     def test_head_calibration_routes_protein3_to_tail_worker(self):

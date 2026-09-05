@@ -19,6 +19,7 @@ _REPLACE_RETRY_DELAYS = (0.05, 0.10, 0.20, 0.40)
 def read_label_image(
     path: Path,
     expected_shape: Optional[Tuple[int, int]] = None,
+    require_objects: bool = True,
 ) -> np.ndarray:
     """读取并验证二维 uint16 对象标签图。"""
     label_path = Path(path)
@@ -27,7 +28,7 @@ def read_label_image(
     labels = cv2.imread(str(label_path), cv2.IMREAD_UNCHANGED)
     if labels is None:
         raise ValueError("OpenCV 无法读取标签图：{}".format(label_path))
-    validate_label_image(labels, expected_shape=expected_shape)
+    validate_label_image(labels, expected_shape=expected_shape, require_objects=require_objects)
     return labels
 
 
@@ -83,6 +84,7 @@ def atomic_save_label_image(path: Path, labels: np.ndarray) -> Dict[str, Any]:
         verified = read_label_image(
             temporary_path,
             expected_shape=tuple(np.asarray(labels).shape),
+            require_objects=False,
         )
         if not np.array_equal(verified, labels):
             raise ValueError("临时标签回读内容与内存标签不一致")

@@ -44,7 +44,9 @@ class HeadCalibrationField:
 class HeadCalibrationService:
     """加载 Stage 1 任务、自动保存并生成 Stage 2A 最终输出。"""
 
-    def __init__(self, task_root: Path) -> None:
+    def __init__(self, task_root: Path, *, interactive: bool = True) -> None:
+        # Automatic completion starts from Cellpose output, not saved manual edits.
+        self.interactive = interactive
         self.task_root = Path(task_root).resolve()
         self.input_dir = self.task_root / "input"
         self.initial_dir = self.task_root / "segmentation" / "head"
@@ -66,9 +68,12 @@ class HeadCalibrationService:
         self.fields = self._discover_fields()
         self._image_cache = {}  # type: Dict[str, Dict[str, np.ndarray]]
         self._completed_field_results = {}  # type: Dict[str, Dict[str, Any]]
-        self.logger.info("head_calibration", "人工头部校准工具已打开")
+        self.logger.info(
+            "head_calibration",
+            "人工头部校准工具已打开" if self.interactive else "开始自动确认头部标签",
+        )
         self.logger.event(
-            "head_calibration_opened",
+            "head_calibration_opened" if self.interactive else "head_calibration_auto_started",
             "head_calibration",
             "opened",
             extra={"field_count": len(self.fields)},
@@ -196,12 +201,12 @@ class HeadCalibrationService:
             initial = read_label_image(field.initial_labels_path)
             revision = 0
             working = None
-            if field.working_labels_path.is_file():
+            if self.interactive and field.working_labels_path.is_file():
                 working = read_label_image(
                     field.working_labels_path,
                     expected_shape=tuple(initial.shape),
                 )
-            if field.calibration_state_path.is_file():
+            if self.interactive and field.calibration_state_path.is_file():
                 saved_state = self._read_json(field.calibration_state_path)
                 revision = int(saved_state.get("revision", 0))
             field.model = HeadCalibrationModel(
@@ -595,9 +600,12 @@ class HeadCalibrationService:
             self.state_store.update(
                 "head_calibrated",
                 "head_calibration",
-                "全部视野人工头部校准已完成",
+                "全部视野人工头部校准已完成" if self.interactive else "全部视野自动头部确认已完成",
             )
-            self.logger.info("head_calibration", "全部视野人工头部校准完成")
+            self.logger.info(
+                "head_calibration",
+                "全部视野人工头部校准完成" if self.interactive else "全部视野自动头部确认完成",
+            )
             self.logger.event(
                 "head_calibration_completed",
                 "head_calibration",
@@ -623,7 +631,7 @@ class HeadCalibrationService:
             self.logger.record_exception(
                 "head_calibration",
                 exception,
-                "完成人工头部校准失败",
+                "完成人工头部校准失败" if self.interactive else "自动确认头部标签失败",
                 event_name="head_calibration_failed",
             )
             raise

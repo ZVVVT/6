@@ -298,6 +298,7 @@ def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
         positive_array = read_label_image(
             positive_labels,
             expected_shape=tuple(tail_array.shape),
+            require_objects=associated_object_count > 0,
         )
         head_array = read_label_image(
             head_labels,
@@ -305,7 +306,9 @@ def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
         )
 
         tail_stats = validate_label_image(tail_array)
-        positive_stats = validate_label_image(positive_array)
+        positive_stats = validate_label_image(
+            positive_array, require_objects=associated_object_count > 0,
+        )
         head_stats = validate_label_image(head_array)
         expected_labels = list(range(1, tail_object_count + 1))
 

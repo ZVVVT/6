@@ -27,7 +27,8 @@ def test_protein3_head_and_all_other_head_proteins_use_head_workflow():
     legacy_worker = run_source.index("SingleProteinAnalysisWorker(", head_route)
     head_block = run_source[head_route:legacy_worker]
 
-    assert "self._start_head_analysis_v2(" in head_block
+    assert "run_analysis_v2(" in head_block
+    assert "self._start_head_analysis_v2," in head_block
     assert 'workflow="protein3_tail"' not in head_block
     assert "return" in head_block
 
