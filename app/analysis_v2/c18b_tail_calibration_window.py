@@ -51,6 +51,7 @@ class C18BTailCalibrationController(QObject):
             "--entries", self.payload["entries"],
             "--paths", self.payload["paths"],
             "--global-results", self.payload["global_results"],
+            "--unassigned-candidates", self.payload["unassigned_candidates"],
             "--output-dir", self.payload["output_dir"],
         ]
 

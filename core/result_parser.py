@@ -122,7 +122,8 @@ class ResultParser:
 
         新版 Pipeline 的口径：
         - 头部：G_colocalized.csv，使用 Math_MeanIntensity255 汇总。
-        - 尾部：G_objects.csv，使用 Math_IntegratedIntensity255 / AreaShape_Area 汇总。
+        - 尾部：G_objects.csv，历史结果使用 IntegratedIntensity / Area；
+          Analysis V2 使用 Math_MeanIntensity255，保留 AreaShape_Area 汇总。
 
         为了兼容旧结果和用户调试过程中的文件名，保留 colocalized 兜底匹配。
         """
@@ -178,7 +179,6 @@ class ResultParser:
     def parse_image_summary(self, protein_part: str = "") -> dict:
         image_csv = self.find_image_csv()
         requested_part = self._normalize_part(protein_part or self.protein_part)
-        part_was_explicit = bool(requested_part)
 
         empty_result = {
             "success": False,
@@ -221,7 +221,6 @@ class ResultParser:
         calculation_mode = self._resolve_calculation_mode(
             part=part,
             object_df=object_df,
-            part_was_explicit=part_was_explicit,
         )
         warnings = []
 
@@ -321,21 +320,7 @@ class ResultParser:
                 and calculation_mode
                 == self.CALCULATION_MODE_HEAD_EQUIVALENT
             ):
-                if (
-                    g_objects_count is not None
-                    and colocalized_count is not None
-                    and int(round(g_objects_count))
-                    != int(round(colocalized_count))
-                ):
-                    warnings.append(
-                        "视野 {} 的 Count_G_objects={} 与 "
-                        "Count_R_colocalized={} 不一致。".format(
-                            self._normalize_image_number(image_number),
-                            int(round(g_objects_count)),
-                            int(round(colocalized_count)),
-                        )
-                    )
-
+                # 尾部总数包含 unresolved，关联数可以小于尾部总数。
                 if (
                     g_objects_count is not None
                     and stats["object_count"]
@@ -446,7 +431,6 @@ class ResultParser:
         self,
         part: str,
         object_df,
-        part_was_explicit: bool,
     ) -> str:
         if part == "head":
             return self.CALCULATION_MODE_HEAD_EQUIVALENT
@@ -457,12 +441,8 @@ class ResultParser:
         if self.calculation_mode:
             return self.calculation_mode
 
-        # 旧调用只传 protein_part="tail" 时必须继续使用旧公式，
-        # 这样批量分析和历史流程不会被新功能改变。
-        if part_was_explicit:
-            return self.CALCULATION_MODE_LEGACY
-
-        # ResultViewer 等未传表达部位的读取场景，可根据对象列安全识别。
+        # 表达部位不代表结果版本；ResultViewer 重新查看时也会传 tail。
+        # 未指定计算模式时按对象列识别，含旧积分列的历史结果仍走 legacy。
         columns = set(object_df.columns) if object_df is not None else set()
         if (
             "Math_MeanIntensity255" in columns

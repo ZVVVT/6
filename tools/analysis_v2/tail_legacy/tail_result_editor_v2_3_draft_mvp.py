@@ -5,7 +5,7 @@
 
 界面原则：
 - 整张Merge图一次显示，不逐个头部翻页；
-- 白色粗轮廓表示已经纳入结果的尾部，黄色表示当前选择或手动预览；
+- 白色粗轮廓表示已经纳入结果的尾部，紫色表示待关联候选，黄色表示当前选择或手动预览；
 - 没有结果的头部不会被标成待处理，因为并非每个头部都有合格尾部；
 - 自动结果正确时无需操作；错误时点击后删除或重画；
 - 漏识别但确有合格尾部时，点击“新增 / 重画”后选择头部并绘制路径；
@@ -303,7 +303,7 @@ def _merge_same_fragment_runs(
     for label, start, end in runs:
         if merged and int(merged[-1][0]) == int(label):
             merged[-1][2] = int(end)
-        else:
+        elif hasattr(self, "workset_objects"):
             merged.append([int(label), int(start), int(end)])
     return merged
 
@@ -1375,6 +1375,76 @@ class EditorRecord:
         return None
 
 
+@dataclass
+class TailWorksetObject:
+    """人工尾部工作集对象；身份不依赖 head association。"""
+
+    tail_object_id: int
+    fragment_label_id: Optional[int]
+    accepted: bool
+    head_label_id: Optional[int]
+    association_status: str
+    source: str
+    selected_points_xy: np.ndarray
+    selected_fragment_ids: List[int]
+
+
+def build_tail_workset_labels(
+    fragment_labels: np.ndarray,
+    workset_objects: Sequence[TailWorksetObject],
+    manual_corridor_radius_px: int = 6,
+    manual_signal_support: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, List[Dict[str, int]]]:
+    """生成仅用于人工工作集的连续标签，不使用 head ID。"""
+    fragments = np.asarray(fragment_labels)
+    accepted = sorted(
+        (item for item in workset_objects if item.accepted),
+        key=lambda item: item.tail_object_id,
+    )
+    if len(accepted) > np.iinfo(np.uint16).max:
+        raise ValueError("Tail Workset对象数超过uint16可表示范围。")
+    labels = np.zeros(fragments.shape, dtype=np.uint16)
+    mapping: List[Dict[str, int]] = []
+    for workset_label_id, item in enumerate(accepted, start=1):
+        fragment_ids = list(item.selected_fragment_ids)
+        if item.fragment_label_id is not None:
+            fragment_ids.append(int(item.fragment_label_id))
+        fragment_ids = sorted(set(int(value) for value in fragment_ids if int(value) > 0))
+        if fragment_ids:
+            mask = np.isin(fragments, np.asarray(fragment_ids, dtype=fragments.dtype))
+        else:
+            mask = np.zeros(fragments.shape, dtype=bool)
+        if item.source == "manual" and len(item.selected_points_xy) >= 2:
+            mask |= path_constrained_manual_region_mask(
+                fragments,
+                fragment_ids,
+                item.selected_points_xy,
+                radius_px=int(manual_corridor_radius_px),
+                manual_signal_support=manual_signal_support,
+            )
+        labels[mask & (labels == 0)] = int(workset_label_id)
+        mapping.append({
+            "workset_label_id": int(workset_label_id),
+            "tail_object_id": int(item.tail_object_id),
+        })
+    return labels, mapping
+
+
+@dataclass
+class EditHistoryAction:
+    """一次完整编辑动作，同时保存正式结果和待关联候选快照。"""
+
+    record_snapshots: List[Tuple[int, EditorRecord]]
+    unassigned_candidates: Optional[List[Dict[str, Any]]] = None
+    workset_objects: Optional[List[TailWorksetObject]] = None
+
+    def __iter__(self):
+        return iter(self.record_snapshots)
+
+    def __len__(self) -> int:
+        return len(self.record_snapshots)
+
+
 class TailResultEditor:
     """整图所见即所得尾部结果编辑器。"""
 
@@ -1395,6 +1465,7 @@ class TailResultEditor:
         manual_margin_px: int,
         manual_fragment_radius_px: int,
         display_max_dim: int = 1400,
+        unassigned_candidates_payload: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.merge_rgb = merge_rgb
         self.probability = probability
@@ -1435,6 +1506,14 @@ class TailResultEditor:
             path_payload,
             global_payload,
         )
+        self.unassigned_tail_candidates = self._load_unassigned_candidates(
+            unassigned_candidates_payload
+        )
+        self.unassigned_candidate_ids = [
+            int(item["fragment_label_id"])
+            for item in self.unassigned_tail_candidates
+        ]
+        self.workset_objects = self._build_initial_workset()
         self.record_by_head = {
             record.head_id: record
             for record in self.records
@@ -1474,6 +1553,7 @@ class TailResultEditor:
         # 整图编辑状态：不再按头部逐个翻页。
         self.selected_index: Optional[int] = None
         self.selected_indices: Set[int] = set()
+        self.selected_unassigned_candidate_id: Optional[int] = None
         self.mode = "idle"  # idle / await_head / drawing
         self.manual_target_index: Optional[int] = None
         self.manual_points: List[Tuple[float, float]] = []
@@ -1485,7 +1565,7 @@ class TailResultEditor:
         self.message = ""
         self.show_fragments = False
         # 每一项代表一次完整编辑动作；多选删除可包含多个记录快照。
-        self.edit_history: List[List[Tuple[int, EditorRecord]]] = []
+        self.edit_history: List[EditHistoryAction] = []
 
         self.result_owner_image = np.zeros(
             self.fragment_labels.shape,
@@ -1546,6 +1626,15 @@ class TailResultEditor:
         self.display_fragment_rgba[display_fragment_boundary] = (
             0.0, 0.9, 1.0, 0.40
         )
+        unassigned_mask = np.isin(
+            self.display_fragment_labels,
+            np.asarray(self.unassigned_candidate_ids, dtype=np.uint32),
+        )
+        self.display_unassigned_rgba = self._display_boundary_rgba(
+            unassigned_mask,
+            color=(0.78, 0.20, 1.0),
+            alpha=1.0,
+        )
 
         # 所有头部的真实标签轮廓：橙色细线，黑色外沿增强对比。
         display_head_binary = self.display_head_labels > 0
@@ -1573,6 +1662,8 @@ class TailResultEditor:
 
         self.state_path = self.output_dir / "editor_state_v2_3_draft_mvp.json"
         self._load_existing_state()
+        self._sync_unassigned_candidates_from_workset()
+        self._refresh_unassigned_display()
 
         self.figure: Any = None
         self.axis: Any = None
@@ -1582,6 +1673,150 @@ class TailResultEditor:
 
         self._setup_figure()
         self.redraw()
+
+    def _load_unassigned_candidates(
+        self,
+        payload: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if payload is None:
+            return []
+        candidates = list(payload.get("candidates", []))
+        fragment_ids = set(int(value) for value in np.unique(self.fragment_labels) if value > 0)
+        seen: Set[int] = set()
+        normalized: List[Dict[str, Any]] = []
+        for item in candidates:
+            fragment_id = int(item["fragment_label_id"])
+            if fragment_id not in fragment_ids:
+                raise ValueError(f"待关联候选ID不在fragments中：{fragment_id}")
+            if fragment_id in seen:
+                raise ValueError(f"待关联候选ID重复：{fragment_id}")
+            seen.add(fragment_id)
+            normalized.append(deepcopy(item))
+        return normalized
+
+    def _build_initial_workset(self) -> List[TailWorksetObject]:
+        """把每个自动 fragment 接纳为一个独立工作集对象。"""
+        associated_by_fragment: Dict[int, EditorRecord] = {}
+        for record in self.records:
+            if not self._has_result(record):
+                continue
+            for fragment_id in record.selected_fragment_ids:
+                value = int(fragment_id)
+                if value > 0 and value not in associated_by_fragment:
+                    associated_by_fragment[value] = record
+
+        candidate_by_fragment = {
+            int(item["fragment_label_id"]): item
+            for item in self.unassigned_tail_candidates
+        }
+        objects: List[TailWorksetObject] = []
+        for tail_object_id, fragment_id in enumerate(
+            sorted(int(value) for value in np.unique(self.fragment_labels) if value > 0),
+            start=1,
+        ):
+            record = associated_by_fragment.get(fragment_id)
+            if record is None:
+                objects.append(TailWorksetObject(
+                    tail_object_id=tail_object_id,
+                    fragment_label_id=fragment_id,
+                    accepted=True,
+                    head_label_id=None,
+                    association_status="unresolved",
+                    source="auto",
+                    selected_points_xy=np.zeros((0, 2), dtype=np.float32),
+                    selected_fragment_ids=[fragment_id],
+                ))
+            else:
+                objects.append(TailWorksetObject(
+                    tail_object_id=tail_object_id,
+                    fragment_label_id=fragment_id,
+                    accepted=True,
+                    head_label_id=int(record.head_id),
+                    association_status="associated",
+                    source="auto",
+                    selected_points_xy=record.selected_points_xy.copy(),
+                    selected_fragment_ids=[fragment_id],
+                ))
+            candidate_by_fragment.pop(fragment_id, None)
+        if candidate_by_fragment:
+            raise ValueError("待关联候选包含fragments中不存在的对象。")
+        return objects
+
+    def _sync_unassigned_candidates_from_workset(self) -> None:
+        metadata_by_fragment = {
+            int(item["fragment_label_id"]): item
+            for item in getattr(self, "unassigned_tail_candidates", [])
+        }
+        candidates = []
+        for item in getattr(self, "workset_objects", []):
+            if (
+                item.accepted
+                and item.association_status == "unresolved"
+                and item.fragment_label_id is not None
+            ):
+                metadata = deepcopy(metadata_by_fragment.get(
+                    int(item.fragment_label_id),
+                    {"fragment_label_id": int(item.fragment_label_id)},
+                ))
+                candidates.append(metadata)
+        self.unassigned_tail_candidates = candidates
+        self.unassigned_candidate_ids = [
+            int(item["fragment_label_id"]) for item in candidates
+        ]
+
+    def _workset_object_for_fragment(
+        self,
+        fragment_label_id: int,
+    ) -> Optional[TailWorksetObject]:
+        for item in getattr(self, "workset_objects", []):
+            if item.fragment_label_id == int(fragment_label_id):
+                return item
+        return None
+
+    def _ensure_workset_model(self) -> None:
+        if not hasattr(self, "workset_objects"):
+            self.workset_objects = self._build_initial_workset()
+
+    def _workset_objects_for_head(self, head_id: int) -> List[TailWorksetObject]:
+        return [
+            item for item in getattr(self, "workset_objects", [])
+            if item.head_label_id == int(head_id)
+            and item.association_status == "associated"
+        ]
+
+    def _accepted_workset_objects(self) -> List[TailWorksetObject]:
+        return [
+            item for item in getattr(self, "workset_objects", [])
+            if item.accepted
+        ]
+
+    def add_manual_workset_tail(
+        self,
+        selected_points_xy: np.ndarray,
+        selected_fragment_ids: Sequence[int],
+        head_label_id: Optional[int] = None,
+    ) -> TailWorksetObject:
+        """新增人工尾部；没有明确 head 时保持 unresolved。"""
+        next_id = 1 + max(
+            [item.tail_object_id for item in getattr(self, "workset_objects", [])]
+            or [0]
+        )
+        item = TailWorksetObject(
+            tail_object_id=next_id,
+            fragment_label_id=None,
+            accepted=True,
+            head_label_id=(int(head_label_id) if head_label_id is not None else None),
+            association_status=(
+                "associated" if head_label_id is not None else "unresolved"
+            ),
+            source="manual",
+            selected_points_xy=ensure_points(
+                np.asarray(selected_points_xy).tolist()
+            ).copy(),
+            selected_fragment_ids=[int(value) for value in selected_fragment_ids],
+        )
+        self.workset_objects.append(item)
+        return item
 
     def _build_records(
         self,
@@ -1774,6 +2009,69 @@ class TailResultEditor:
             if source_path != self.state_path:
                 print(f"已从旧版状态迁移：{source_path}")
 
+        saved_unassigned = payload.get("unassigned_tail_candidates")
+        if isinstance(saved_unassigned, list):
+            valid_ids = {
+                int(item["fragment_label_id"])
+                for item in getattr(self, "unassigned_tail_candidates", [])
+            }
+            self.unassigned_tail_candidates = [
+                deepcopy(item)
+                for item in saved_unassigned
+                if int(item.get("fragment_label_id", -1)) in valid_ids
+            ]
+            self.unassigned_candidate_ids = [
+                int(item["fragment_label_id"])
+                for item in self.unassigned_tail_candidates
+            ]
+
+        saved_workset = payload.get("tail_workset")
+        if isinstance(saved_workset, list) and hasattr(self, "workset_objects"):
+            initial_by_id = {
+                item.tail_object_id: item for item in self.workset_objects
+            }
+            restored = []
+            for saved in saved_workset:
+                tail_object_id = int(saved["tail_object_id"])
+                initial = initial_by_id.get(tail_object_id)
+                fragment_value = saved.get("fragment_label_id")
+                fragment_label_id = (
+                    int(fragment_value) if fragment_value is not None else None
+                )
+                if initial is not None and initial.fragment_label_id != fragment_label_id:
+                    continue
+                head_value = saved.get("head_label_id")
+                restored.append(TailWorksetObject(
+                    tail_object_id=tail_object_id,
+                    fragment_label_id=fragment_label_id,
+                    accepted=bool(saved.get("accepted", True)),
+                    head_label_id=(int(head_value) if head_value is not None else None),
+                    association_status=str(saved.get(
+                        "association_status", "unresolved"
+                    )),
+                    source=str(saved.get("source", "auto")),
+                    selected_points_xy=ensure_points(
+                        saved.get("selected_points_xy", [])
+                    ),
+                    selected_fragment_ids=[
+                        int(value)
+                        for value in saved.get("selected_fragment_ids", [])
+                        if int(value) > 0
+                    ],
+                ))
+            if restored:
+                self.workset_objects = sorted(
+                    restored, key=lambda item: item.tail_object_id
+                )
+        elif hasattr(self, "workset_objects"):
+            # 旧状态没有 workset；仅迁移明确删除的已关联正式记录。
+            for item in self.workset_objects:
+                if item.head_label_id is None:
+                    continue
+                record = self.record_by_head.get(int(item.head_label_id))
+                if record is not None and not self._has_result(record):
+                    item.accepted = False
+
     def _setup_figure(self) -> None:
         plt.rcParams["toolbar"] = "None"
         self.figure = plt.figure(figsize=(16, 10))
@@ -1789,7 +2087,7 @@ class TailResultEditor:
         self.axis.set_ylim(self.image_height, 0)
         self.axis.set_axis_off()
         self.axis.set_title(
-            "精子尾部结果校准  |  橙色＝头部真实轮廓  白色＝已保存尾部  黄色＝当前选择/预览",
+            "精子尾部结果校准  |  橙色＝头部真实轮廓  白色＝已关联尾部  紫色＝未关联尾部  黄色＝当前选择/预览",
             fontsize=12,
         )
 
@@ -1815,6 +2113,12 @@ class TailResultEditor:
             extent=self.display_extent,
             interpolation="nearest",
             zorder=5,
+        )
+        self.artists["unassigned_candidates"] = self.axis.imshow(
+            self.display_unassigned_rgba,
+            extent=self.display_extent,
+            interpolation="nearest",
+            zorder=6,
         )
         self.artists["selected_tail"] = self.axis.imshow(
             empty_rgba.copy(),
@@ -1931,6 +2235,40 @@ class TailResultEditor:
         rgba[boundary] = (*color, alpha)
         return rgba
 
+    def _refresh_unassigned_display(self) -> None:
+        if hasattr(self, "workset_objects"):
+            self._sync_unassigned_candidates_from_workset()
+        self.unassigned_candidate_ids = [
+            int(item["fragment_label_id"])
+            for item in self.unassigned_tail_candidates
+        ]
+        values = np.asarray(self.unassigned_candidate_ids, dtype=np.uint32)
+        mask = np.isin(self.display_fragment_labels, values)
+        self.display_unassigned_rgba = self._display_boundary_rgba(
+            mask,
+            color=(0.78, 0.20, 1.0),
+            alpha=1.0,
+        )
+        boundary = self._label_boundary(
+            np.where(mask, self.display_fragment_labels, 0)
+        )
+        boundary_y, boundary_x = np.nonzero(boundary)
+        self.unassigned_boundary_tree: Optional[cKDTree] = None
+        self.unassigned_boundary_ids = np.zeros((0,), dtype=np.int32)
+        if len(boundary_x):
+            original_xy = np.column_stack([
+                boundary_x.astype(np.float32) / float(self.display_scale),
+                boundary_y.astype(np.float32) / float(self.display_scale),
+            ])
+            self.unassigned_boundary_tree = cKDTree(original_xy)
+            self.unassigned_boundary_ids = self.display_fragment_labels[
+                boundary_y, boundary_x
+            ].astype(np.int32)
+        if "unassigned_candidates" in getattr(self, "artists", {}):
+            self.artists["unassigned_candidates"].set_data(
+                self.display_unassigned_rgba
+            )
+
     @property
     def selected_record(self) -> Optional[EditorRecord]:
         if self.selected_index is None:
@@ -1959,6 +2297,10 @@ class TailResultEditor:
 
     def _accepted_records(self) -> List[EditorRecord]:
         return [record for record in self.records if self._has_result(record)]
+
+    def _save_success_message(self) -> str:
+        accepted_count = len(self._accepted_workset_objects())
+        return f"已保存{accepted_count}条尾部结果到：{self.output_dir}"
 
     def _build_result_owner(self) -> None:
         """Build interaction cache at display resolution; full labels are deferred to save."""
@@ -2156,6 +2498,9 @@ class TailResultEditor:
 
         self.artists["fragments"].set_visible(bool(self.show_fragments))
         self.artists["accepted"].set_data(self.display_accepted_rgba)
+        self.artists["unassigned_candidates"].set_data(
+            self.display_unassigned_rgba
+        )
 
         empty_rgba = np.zeros(
             (self.display_height, self.display_width, 4),
@@ -2164,13 +2509,27 @@ class TailResultEditor:
         selected_tail_rgba = empty_rgba
         selected_path = None
         selected = self.selected_record
+        if self.selected_unassigned_candidate_id is not None:
+            candidate_mask = (
+                self.display_fragment_labels
+                == int(self.selected_unassigned_candidate_id)
+            )
+            selected_tail_rgba = self._display_boundary_rgba(
+                candidate_mask,
+                color=(1.0, 0.9, 0.0),
+                alpha=1.0,
+            )
         selected_head_ids = [
             self.records[index].head_id
             for index in sorted(self.selected_indices)
             if 0 <= index < len(self.records)
             and self._has_result(self.records[index])
         ]
-        if selected_head_ids and self.mode == "idle":
+        if (
+            selected_head_ids
+            and self.mode == "idle"
+            and self.selected_unassigned_candidate_id is None
+        ):
             selected_mask = np.isin(
                 self.display_result_owner_image,
                 np.asarray(selected_head_ids, dtype=np.uint16),
@@ -2264,7 +2623,18 @@ class TailResultEditor:
         )
 
     def _update_status_text(self) -> None:
-        recognized_count = len(self._accepted_records())
+        if hasattr(self, "workset_objects"):
+            accepted_objects = self._accepted_workset_objects()
+            recognized_count = len(accepted_objects)
+            associated_count = sum(
+                item.association_status == "associated"
+                for item in accepted_objects
+            )
+            unresolved_count = recognized_count - associated_count
+        else:
+            recognized_count = len(self._accepted_records())
+            associated_count = recognized_count
+            unresolved_count = len(self.unassigned_tail_candidates)
         selected = self.selected_record
 
         if self.mode == "await_head":
@@ -2288,6 +2658,11 @@ class TailResultEditor:
                 f"已选择 {len(self.selected_indices)} 条已有尾部；"
                 "Ctrl+左键可继续加入或取消选择，点击“删除所选”可一次删除。"
             )
+        elif self.selected_unassigned_candidate_id is not None:
+            instruction = (
+                f"已选中未关联尾部 {self.selected_unassigned_candidate_id}；"
+                "可直接删除，或再点击一个橙色头部完成可选关联。"
+            )
         elif selected is None:
             instruction = (
                 "白色轮廓是已有结果：点击后可直接删除或重画。"
@@ -2305,7 +2680,11 @@ class TailResultEditor:
                 "确有合格尾部时直接开始点击尾部路径，没有尾部则取消即可。"
             )
 
-        text = f"已有尾部结果：{recognized_count} 条\n{instruction}"
+        text = (
+            f"当前保留尾部：{recognized_count}\n"
+            f"其中已关联：{associated_count}  未关联：{unresolved_count}\n"
+            f"{instruction}"
+        )
         if self.message:
             text += f"\n{self.message}"
         self.status_text.set_text(text)
@@ -2320,6 +2699,22 @@ class TailResultEditor:
             "version": VERSION,
             "saved_at_unix": time.time(),
             "current_head_id": selected_head_id,
+            "unassigned_tail_candidates": deepcopy(
+                getattr(self, "unassigned_tail_candidates", [])
+            ),
+            "tail_workset": [
+                {
+                    "tail_object_id": item.tail_object_id,
+                    "fragment_label_id": item.fragment_label_id,
+                    "accepted": item.accepted,
+                    "head_label_id": item.head_label_id,
+                    "association_status": item.association_status,
+                    "source": item.source,
+                    "selected_points_xy": item.selected_points_xy.tolist(),
+                    "selected_fragment_ids": item.selected_fragment_ids,
+                }
+                for item in getattr(self, "workset_objects", [])
+            ],
             "records": [
                 {
                     "head_id": record.head_id,
@@ -2340,7 +2735,11 @@ class TailResultEditor:
             encoding="utf-8",
         )
 
-    def _push_history(self, indices: Any) -> None:
+    def _push_history(
+        self,
+        indices: Any,
+        include_unassigned: bool = False,
+    ) -> None:
         if isinstance(indices, int):
             action_indices = [indices]
         else:
@@ -2349,9 +2748,24 @@ class TailResultEditor:
             (index, deepcopy(self.records[index]))
             for index in action_indices
         ]
-        if not snapshots:
+        if not snapshots and not include_unassigned:
             return
-        self.edit_history.append(snapshots)
+        self.edit_history.append(
+            EditHistoryAction(
+                record_snapshots=snapshots,
+                unassigned_candidates=(
+                    deepcopy(self.unassigned_tail_candidates)
+                    if include_unassigned
+                    and hasattr(self, "unassigned_tail_candidates")
+                    else None
+                ),
+                workset_objects=(
+                    deepcopy(self.workset_objects)
+                    if include_unassigned and hasattr(self, "workset_objects")
+                    else None
+                ),
+            )
+        )
         if len(self.edit_history) > 20:
             self.edit_history.pop(0)
 
@@ -2375,10 +2789,154 @@ class TailResultEditor:
     def _select_head_id(self, head_id: int) -> None:
         for index, record in enumerate(self.records):
             if record.head_id == int(head_id):
+                self.selected_unassigned_candidate_id = None
                 self.selected_index = index
                 self.selected_indices = {index}
                 self.message = ""
                 return
+
+    def _hit_test_unassigned_candidate(
+        self,
+        point: Tuple[float, float],
+    ) -> Optional[int]:
+        x, y = point
+        xi = int(round(x))
+        yi = int(round(y))
+        height, width = self.fragment_labels.shape
+        candidate_ids = set(getattr(self, "unassigned_candidate_ids", []))
+        if 0 <= xi < width and 0 <= yi < height:
+            fragment_id = int(self.fragment_labels[yi, xi])
+            if fragment_id in candidate_ids:
+                return fragment_id
+        tree = getattr(self, "unassigned_boundary_tree", None)
+        boundary_ids = getattr(
+            self,
+            "unassigned_boundary_ids",
+            np.zeros((0,), dtype=np.int32),
+        )
+        if tree is not None and len(boundary_ids):
+            distance, index = tree.query(
+                np.asarray(point, dtype=np.float32), k=1
+            )
+            if float(distance) <= 8.0:
+                return int(boundary_ids[int(index)])
+        return None
+
+    def _head_id_at_point(
+        self,
+        point: Tuple[float, float],
+    ) -> Optional[int]:
+        x, y = point
+        xi = int(round(x))
+        yi = int(round(y))
+        height, width = self.head_labels.shape
+        if 0 <= xi < width and 0 <= yi < height:
+            head_id = int(self.head_labels[yi, xi])
+            if head_id > 0:
+                return head_id
+        if self.head_boundary_tree is not None and len(self.head_boundary_ids):
+            distance, index = self.head_boundary_tree.query(
+                np.asarray(point, dtype=np.float32), k=1
+            )
+            if float(distance) <= 8.0:
+                return int(self.head_boundary_ids[int(index)])
+        distance, index = self.head_tree.query(
+            np.asarray(point, dtype=np.float32), k=1
+        )
+        if float(distance) <= 45.0:
+            return int(self.records[int(index)].head_id)
+        return None
+
+    def _confirm_replace_existing_tail(self, head_id: int) -> bool:
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+
+            application = QApplication.instance()
+            if application is None:
+                application = QApplication([])
+            answer = QMessageBox.question(
+                None,
+                "确认替换尾部",
+                "该头部已有尾部结果，是否用当前候选替换？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            return answer == QMessageBox.Yes
+        except Exception as exc:
+            self.message = f"无法显示替换确认框，已取消替换：{exc}"
+            return False
+
+    def _candidate_path_for_head(
+        self,
+        fragment_label_id: int,
+        head_label_id: int,
+    ) -> np.ndarray:
+        from tools.analysis_v2.c18b_tail_editor_adapter import ordered_centerline
+
+        points = ordered_centerline(
+            self.fragment_labels == int(fragment_label_id),
+            self.head_labels == int(head_label_id),
+        )
+        return ensure_points(points)
+
+    def _associate_selected_candidate(self, head_label_id: int) -> bool:
+        fragment_id = self.selected_unassigned_candidate_id
+        if fragment_id is None:
+            return False
+        self._ensure_workset_model()
+        index = next(
+            (
+                index
+                for index, record in enumerate(self.records)
+                if record.head_id == int(head_label_id)
+            ),
+            None,
+        )
+        if index is None:
+            self.message = f"Head {head_label_id} 不在当前正式记录中。"
+            return False
+        record = self.records[index]
+        if self._has_result(record) and not self._confirm_replace_existing_tail(
+            int(head_label_id)
+        ):
+            if not self.message:
+                self.message = "已取消替换，原尾部结果保持不变。"
+            return False
+
+        path = self._candidate_path_for_head(fragment_id, int(head_label_id))
+        if len(path) < 2:
+            self.message = "该候选无法生成有效正式路径，未执行关联。"
+            return False
+
+        self._push_history(index, include_unassigned=True)
+        for existing in self._workset_objects_for_head(int(head_label_id)):
+            if existing.accepted:
+                existing.accepted = False
+        workset_item = self._workset_object_for_fragment(fragment_id)
+        if workset_item is None:
+            self.message = f"工作集中不存在尾部 {fragment_id}。"
+            return False
+        workset_item.accepted = True
+        workset_item.head_label_id = int(head_label_id)
+        workset_item.association_status = "associated"
+        workset_item.selected_points_xy = path.copy()
+        record.selected_points_xy = path
+        record.selected_fragment_ids = [int(fragment_id)]
+        record.selected_rank = None
+        record.selected_source = "manual_unassigned_candidate"
+        record.current_status = "user_accepted"
+        record.accepted_by_user = True
+        record.deleted = False
+        record.edit_note = f"人工关联待关联候选 {fragment_id}"
+        self._sync_unassigned_candidates_from_workset()
+        self.selected_unassigned_candidate_id = None
+        self.selected_index = index
+        self.selected_indices = {index}
+        self._refresh_unassigned_display()
+        self._mark_result_cache_dirty()
+        self.message = f"尾部 {fragment_id} 已人工关联到 Head {head_label_id}。"
+        self._autosave_state()
+        return True
 
     def _toggle_result_selection(self, index: int) -> None:
         if index in self.selected_indices:
@@ -2398,7 +2956,7 @@ class TailResultEditor:
         point: Tuple[float, float],
         toggle_result: bool = False,
     ) -> str:
-        """返回 result / head / none；HeadFinalLabels实体和真实轮廓优先。"""
+        """返回 candidate / result / head / none。"""
         x, y = point
         xi = int(round(x))
         yi = int(round(y))
@@ -2406,6 +2964,16 @@ class TailResultEditor:
         self._ensure_result_cache()
 
         point_array = np.asarray(point, dtype=np.float32)
+
+        candidate_id = self._hit_test_unassigned_candidate(point)
+        if candidate_id is not None and not toggle_result:
+            self.selected_unassigned_candidate_id = int(candidate_id)
+            self.selected_index = None
+            self.selected_indices.clear()
+            self.message = (
+                f"已选中待关联候选 {candidate_id}，请点击橙色头部。"
+            )
+            return "candidate"
 
         # Ctrl 多选已有尾部时，尾部命中优先于邻近的头部轮廓。
         if toggle_result:
@@ -2501,10 +3069,12 @@ class TailResultEditor:
 
         self.selected_index = None
         self.selected_indices.clear()
+        self.selected_unassigned_candidate_id = None
         self.message = "未选中已有尾部或头部。"
         return "none"
 
     def _start_drawing(self, index: int) -> None:
+        self.selected_unassigned_candidate_id = None
         self.selected_index = index
         self.selected_indices = {index}
         self.manual_target_index = index
@@ -2705,8 +3275,15 @@ class TailResultEditor:
             return
 
         index = self.manual_target_index
-        self._push_history(index)
+        self._push_history(index, include_unassigned=True)
         record = self.records[index]
+        existing_workset = next(
+            (
+                item for item in self._workset_objects_for_head(record.head_id)
+                if item.accepted
+            ),
+            None,
+        )
         record.selected_points_xy = self.manual_preview.copy()
         record.selected_fragment_ids = list(self.manual_preview_fragment_ids)
         record.selected_rank = None
@@ -2717,6 +3294,19 @@ class TailResultEditor:
         record.edit_note = (
             f"人工新增/重画，导向点数={len(self.manual_points)}"
         )
+        if existing_workset is None:
+            self.add_manual_workset_tail(
+                self.manual_preview,
+                self.manual_preview_fragment_ids,
+                head_label_id=record.head_id,
+            )
+        else:
+            existing_workset.accepted = True
+            existing_workset.selected_points_xy = self.manual_preview.copy()
+            existing_workset.selected_fragment_ids = list(
+                self.manual_preview_fragment_ids
+            )
+            existing_workset.source = "manual"
         self.selected_index = index
         head_id = record.head_id
         self._clear_manual_operation()
@@ -2735,12 +3325,35 @@ class TailResultEditor:
             if 0 <= index < len(self.records)
             and self._has_result(self.records[index])
         ]
-        if not selected_indices:
+        selected_fragment_id = getattr(
+            self, "selected_unassigned_candidate_id", None
+        )
+        workset_targets: List[TailWorksetObject] = []
+        if hasattr(self, "workset_objects"):
+            if selected_fragment_id is not None:
+                item = self._workset_object_for_fragment(selected_fragment_id)
+                if item is not None and item.accepted:
+                    workset_targets.append(item)
+            for index in selected_indices:
+                workset_targets.extend(
+                    item
+                    for item in self._workset_objects_for_head(
+                        self.records[index].head_id
+                    )
+                    if item.accepted
+                )
+            workset_targets = list({
+                item.tail_object_id: item for item in workset_targets
+            }.values())
+        if not selected_indices and not workset_targets:
             self.message = "请先点击需要删除的已有尾部。"
             self.redraw()
             return
 
-        self._push_history(selected_indices)
+        self._push_history(selected_indices, include_unassigned=True)
+        # Workset层只有一种删除状态迁移，与是否关联head无关。
+        for item in workset_targets:
+            item.accepted = False
         for index in selected_indices:
             record = self.records[index]
             record.current_status = "deleted"
@@ -2751,9 +3364,15 @@ class TailResultEditor:
             record.accepted_by_user = False
             record.deleted = True
             record.edit_note = "人工删除"
-        deleted_count = len(selected_indices)
+        deleted_count = (
+            len(workset_targets) if hasattr(self, "workset_objects")
+            else len(selected_indices)
+        )
         self.selected_index = None
         self.selected_indices.clear()
+        self.selected_unassigned_candidate_id = None
+        if hasattr(self, "workset_objects"):
+            self._refresh_unassigned_display()
         self._mark_result_cache_dirty()
         self.message = f"已删除选中的 {deleted_count} 条尾部"
         self._autosave_state()
@@ -2788,6 +3407,16 @@ class TailResultEditor:
                 self.records[index] = snapshot
                 self.record_by_head[snapshot.head_id] = snapshot
                 restored_indices.append(index)
+            if isinstance(action, EditHistoryAction):
+                if action.unassigned_candidates is not None:
+                    self.unassigned_tail_candidates = deepcopy(
+                        action.unassigned_candidates
+                    )
+                    self._refresh_unassigned_display()
+                if action.workset_objects is not None:
+                    self.workset_objects = deepcopy(action.workset_objects)
+                    self._refresh_unassigned_display()
+            self.selected_unassigned_candidate_id = None
             self.selected_indices = set(restored_indices)
             self.selected_index = (
                 restored_indices[-1] if restored_indices else None
@@ -2815,6 +3444,7 @@ class TailResultEditor:
         else:
             self.selected_index = None
             self.selected_indices.clear()
+            self.selected_unassigned_candidate_id = None
             self.message = "已取消当前选择。"
         self.redraw()
 
@@ -2833,6 +3463,25 @@ class TailResultEditor:
         if event.xdata is None or event.ydata is None:
             return
         point = (float(event.xdata), float(event.ydata))
+
+        if (
+            self.mode == "idle"
+            and self.selected_unassigned_candidate_id is not None
+        ):
+            head_id = self._head_id_at_point(point)
+            if head_id is None:
+                candidate_id = self._hit_test_unassigned_candidate(point)
+                if candidate_id is not None:
+                    self.selected_unassigned_candidate_id = candidate_id
+                    self.message = (
+                        f"已改选待关联候选 {candidate_id}，请点击橙色头部。"
+                    )
+                else:
+                    self.message = "请点击一个橙色头部完成候选关联。"
+            else:
+                self._associate_selected_candidate(head_id)
+            self.redraw()
+            return
 
         if self.mode == "await_head":
             distance, head_index = self.head_tree.query(
@@ -2940,8 +3589,51 @@ class TailResultEditor:
             )
         return overlay
 
+    def save_tail_workset(self) -> Tuple[Path, Path]:
+        """保存实验性工作集；该输出明确不进入测量和发布。"""
+        labels, mapping = build_tail_workset_labels(
+            self.fragment_labels,
+            self.workset_objects,
+            manual_corridor_radius_px=self.manual_fragment_radius_px,
+            manual_signal_support=self.manual_region_support,
+        )
+        label_id_by_tail = {
+            int(item["tail_object_id"]): int(item["workset_label_id"])
+            for item in mapping
+        }
+        rows = []
+        for item in sorted(
+            self.workset_objects, key=lambda value: value.tail_object_id
+        ):
+            rows.append({
+                "tail_object_id": int(item.tail_object_id),
+                "workset_label_id": label_id_by_tail.get(item.tail_object_id),
+                "accepted": bool(item.accepted),
+                "association_status": item.association_status,
+                "head_label_id": item.head_label_id,
+                "source": item.source,
+                "fragment_label_id": item.fragment_label_id,
+            })
+        payload = {
+            "version": 1,
+            "saved_at_unix": time.time(),
+            "not_for_measurement": True,
+            "not_for_publication": True,
+            "accepted_count": len(self._accepted_workset_objects()),
+            "objects": rows,
+        }
+        labels_path = self.output_dir / "TailWorksetLabels.tif"
+        json_path = self.output_dir / "tail_workset.json"
+        Image.fromarray(labels).save(labels_path)
+        json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return labels_path, json_path
+
     def save_all(self, _event: Any = None) -> None:
         self._autosave_state()
+        self.save_tail_workset()
 
         # 先生成最终区域标签，再按该TIFF的实际像素数写JSON/CSV。
         # V2.7以后人工路径会补充“碎片标签为0但存在真实绿色信号”的
@@ -3053,10 +3745,7 @@ class TailResultEditor:
             encoding="utf-8",
         )
 
-        recognized_count = len(self._accepted_records())
-        self.message = (
-            f"已保存{recognized_count}条尾部结果到：{self.output_dir}"
-        )
+        self.message = self._save_success_message()
         self.redraw()
         print(self.message)
 
@@ -3115,6 +3804,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stage 2.3 global_selection_results.json",
     )
     parser.add_argument(
+        "--unassigned-candidates",
+        help="待关联尾部候选JSON；仅显示，不写入正式结果",
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
     )
@@ -3156,6 +3849,11 @@ def main() -> int:
     entries_path = resolve_required(args.entries)
     paths_path = resolve_required(args.paths)
     global_results_path = resolve_required(args.global_results)
+    unassigned_candidates_path = (
+        resolve_required(args.unassigned_candidates)
+        if args.unassigned_candidates
+        else None
+    )
     output_dir = Path(args.output_dir).expanduser().resolve()
 
     merge_rgb = to_uint8_rgb(read_image(merge_path))
@@ -3173,6 +3871,11 @@ def main() -> int:
     entries_payload = load_json(entries_path)
     path_payload = load_json(paths_path)
     global_payload = load_json(global_results_path)
+    unassigned_candidates_payload = (
+        load_json(unassigned_candidates_path)
+        if unassigned_candidates_path is not None
+        else None
+    )
 
     if probability.shape != merge_rgb.shape[:2]:
         raise ValueError(
@@ -3229,6 +3932,7 @@ def main() -> int:
         entries_payload=entries_payload,
         path_payload=path_payload,
         global_payload=global_payload,
+        unassigned_candidates_payload=unassigned_candidates_payload,
         output_dir=output_dir,
         manual_margin_px=int(args.manual_margin),
         manual_fragment_radius_px=int(args.manual_radius),

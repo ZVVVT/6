@@ -51,8 +51,12 @@ class MainWindow(QMainWindow):
         "系统设置": "settings_s.svg",
     }
 
-    def __init__(self):
+    def __init__(self, candidate_path_mode="graph_preserving"):
         super().__init__()
+
+        self.c18b_candidate_path_mode = str(
+            candidate_path_mode or "graph_preserving"
+        )
 
         # 项目根目录：F:\sperm_protein_analyzer
         self.project_root = get_application_root()
@@ -240,7 +244,10 @@ class MainWindow(QMainWindow):
         # -------------------------
         self.page_cases = CaseManagerWindow(self.database)
         self.page_detail = CaseDetailWindow(self.database)
-        self.page_analysis = AnalysisWindow(self.database)
+        self.page_analysis = AnalysisWindow(
+            self.database,
+            c18b_candidate_path_mode=self.c18b_candidate_path_mode,
+        )
         self.page_reports = ReportWindow(self.database)
         self.page_settings = SettingsWindow()
 

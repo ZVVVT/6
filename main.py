@@ -1,5 +1,6 @@
 import re
 import sys
+import argparse
 from pathlib import Path
 from typing import Optional
 
@@ -180,7 +181,25 @@ def apply_app_branding(app: QApplication, root: Path, config_manager: ConfigMana
             app.setWindowIcon(icon)
 
 
+def parse_startup_args(argv=None):
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--c18b-candidate-path-mode",
+        choices=("graph_preserving", "ordered"),
+        default="graph_preserving",
+    )
+    parser.add_argument("--experimental-c18b-graph-preserving", action="store_true")
+    startup_args, qt_args = parser.parse_known_args(argv)
+    candidate_path_mode = startup_args.c18b_candidate_path_mode
+    if startup_args.experimental_c18b_graph_preserving:
+        candidate_path_mode = "graph_preserving"
+    return candidate_path_mode, qt_args
+
+
 def main():
+    candidate_path_mode, qt_args = parse_startup_args()
+    sys.argv = [sys.argv[0]] + qt_args
+    print("C18B: candidate_path_mode={}".format(candidate_path_mode))
     if not acquire_single_instance_lock():
         sys.exit(0)
 
@@ -194,7 +213,7 @@ def main():
     apply_global_stylesheet(app, custom_font_family)
     apply_app_branding(app, root, config_manager)
 
-    window = MainWindow()
+    window = MainWindow(candidate_path_mode=candidate_path_mode)
     window.show()
 
     sys.exit(app.exec())

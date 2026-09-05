@@ -36,6 +36,16 @@ def crossing_number(skel: np.ndarray) -> np.ndarray:
                for i in range(8)) // 2
 
 
+def branch_cut_mask(branch_mask: np.ndarray, mode: str = "dilate3") -> np.ndarray:
+    """Return the frozen branch cut, or the one-off raw-pixel A/B variant."""
+    if mode == "dilate3":
+        return cv2.dilate(branch_mask.astype(np.uint8),
+                          np.ones((3, 3), np.uint8)) > 0
+    if mode == "raw":
+        return branch_mask.astype(bool).copy()
+    raise ValueError("Unknown branch cut mode: {}".format(mode))
+
+
 def clustered_points(mask: np.ndarray):
     n, lab = cv2.connectedComponents(mask.astype(np.uint8), 8)
     result = []
@@ -205,7 +215,7 @@ def main():
     endpoints, branches = clustered_points(endpoint_mask), clustered_points(branch_mask)
     # Remove each whole branch cluster and its one-pixel contact ring so arms
     # become clean independent graph edges.
-    cut = cv2.dilate(branch_mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    cut = branch_cut_mask(branch_mask)
     split = skel & ~cut
     n, labels, stats, _ = cv2.connectedComponentsWithStats(split.astype(np.uint8), 8)
     paths = []

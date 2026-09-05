@@ -48,3 +48,5 @@ Thumbs.db
 pipelines/backups/
 pipelines/last_generate_report.txt
 pipelines/last_restore_report.txt
+.venv-c18b/
+.venv-c18b_backup/

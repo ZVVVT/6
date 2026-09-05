@@ -130,6 +130,75 @@ def _field_ids_from_manifest_or_files(
     })
 
 
+def _load_tail_objects_contract(path: Path) -> Dict[str, Any]:
+    """读取 schema v1/v2，并归一化对象与两类计数。"""
+    with Path(path).open("r", encoding="utf-8") as handle:
+        payload = json.load(handle) or {}
+    raw_objects = payload.get("objects") or []
+    if not isinstance(raw_objects, list):
+        raise ValueError("TailFinalObjects 的 objects 必须是数组。")
+
+    objects: List[Dict[str, Any]] = []
+    for raw in raw_objects:
+        item = dict(raw)
+        tail_value = item.get("tail_object_id", item.get("object_id"))
+        head_value = item.get("head_label_id", item.get("head_id"))
+        if tail_value is None:
+            raise ValueError("TailFinalObjects 对象缺少 tail object ID。")
+        status = str(item.get("association_status") or "").strip()
+        if not status:
+            status = "associated" if head_value is not None else "unresolved"
+        if status not in {"associated", "unresolved"}:
+            raise ValueError("未知 association_status：{}".format(status))
+        if status == "associated" and head_value is None:
+            raise ValueError("associated tail 不允许 head_label_id=null。")
+        if status == "unresolved" and head_value is not None:
+            raise ValueError("unresolved tail 不允许携带 head_label_id。")
+        objects.append({
+            "tail_object_id": int(tail_value),
+            "head_label_id": None if head_value is None else int(head_value),
+            "association_status": status,
+            "pixel_count": item.get("pixel_count"),
+            "source": item.get("source"),
+            "fragment_label_id": item.get("fragment_label_id"),
+        })
+
+    tail_count = int(
+        payload.get("tail_object_count", payload.get("object_count", len(objects)))
+        or 0
+    )
+    associated_ids = sorted(
+        item["tail_object_id"]
+        for item in objects
+        if item["association_status"] == "associated"
+    )
+    unresolved_ids = sorted(
+        item["tail_object_id"]
+        for item in objects
+        if item["association_status"] == "unresolved"
+    )
+    if len(objects) != tail_count:
+        raise ValueError("TailFinalObjects 对象行数与 tail_object_count 不一致。")
+    if sorted(item["tail_object_id"] for item in objects) != list(
+        range(1, tail_count + 1)
+    ):
+        raise ValueError("TailFinalObjects 的 tail_object_id 不是连续 1...N。")
+    declared_associated = payload.get("associated_object_count")
+    declared_unresolved = payload.get("unresolved_object_count")
+    if declared_associated is not None and int(declared_associated) != len(associated_ids):
+        raise ValueError("associated_object_count 与 objects 不一致。")
+    if declared_unresolved is not None and int(declared_unresolved) != len(unresolved_ids):
+        raise ValueError("unresolved_object_count 与 objects 不一致。")
+    return {
+        "tail_object_count": tail_count,
+        "associated_object_count": len(associated_ids),
+        "unresolved_object_count": len(unresolved_ids),
+        "associated_ids": associated_ids,
+        "unresolved_ids": unresolved_ids,
+        "objects": objects,
+    }
+
+
 def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
     """收集每个视野的 G/R、头部标签和两类尾部标签。"""
     root = Path(task_root).resolve()
@@ -216,12 +285,11 @@ def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
             == exact_names["tail_final_objects"].casefold(),
         )
 
-        with objects_path.open("r", encoding="utf-8") as handle:
-            expected_object_count = int(
-                (json.load(handle) or {}).get("object_count") or 0
-            )
+        contract = _load_tail_objects_contract(objects_path)
+        tail_object_count = int(contract["tail_object_count"])
+        associated_object_count = int(contract["associated_object_count"])
 
-        if expected_object_count <= 0:
+        if tail_object_count <= 0:
             raise ValueError(
                 "视野 {} 的尾部对象数量不大于 0。".format(field_id)
             )
@@ -239,7 +307,7 @@ def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
         tail_stats = validate_label_image(tail_array)
         positive_stats = validate_label_image(positive_array)
         head_stats = validate_label_image(head_array)
-        expected_labels = list(range(1, expected_object_count + 1))
+        expected_labels = list(range(1, tail_object_count + 1))
 
         if tail_stats["positive_labels"] != expected_labels:
             raise ValueError(
@@ -247,15 +315,18 @@ def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
                     field_id
                 )
             )
-        if positive_stats["positive_labels"] != expected_labels:
+        positive_ids = positive_stats["positive_labels"]
+        if not set(positive_ids).issubset(set(expected_labels)):
             raise ValueError(
-                "视野 {} 的 TailPositiveHeadLabels 不是连续 1...N。".format(
+                "视野 {} 的 TailPositiveHeadLabels 包含非法 tail ID。".format(
                     field_id
                 )
             )
-        if len(head_stats["positive_labels"]) < expected_object_count:
+        if positive_ids != contract["associated_ids"]:
             raise ValueError(
-                "视野 {} 的完整头部数小于有效尾部数。".format(field_id)
+                "视野 {} 的 TailPositiveHeadLabels 与 associated tail IDs 不一致。".format(
+                    field_id
+                )
             )
 
         fields.append({
@@ -266,7 +337,11 @@ def collect_tail_measurement_fields(task_root: Path) -> List[Dict[str, Any]]:
             "tail_labels": tail_labels,
             "positive_labels": positive_labels,
             "objects": objects_path,
-            "expected_object_count": expected_object_count,
+            "tail_object_count": tail_object_count,
+            "associated_object_count": associated_object_count,
+            "unresolved_object_count": int(contract["unresolved_object_count"]),
+            # 兼容尚未切换的内部调用方；语义仅为全部 tail 数。
+            "expected_object_count": tail_object_count,
             "head_object_count": len(head_stats["positive_labels"]),
         })
 
@@ -381,6 +456,12 @@ def prepare_standardized_tail_input(
                 destinations["positive_labels"]
             ),
             "expected_object_count": int(field["expected_object_count"]),
+            "tail_object_count": int(
+                field.get("tail_object_count", field["expected_object_count"])
+            ),
+            "associated_object_count": int(
+                field.get("associated_object_count", field["expected_object_count"])
+            ),
             "head_object_count": int(field["head_object_count"]),
         })
 
@@ -499,6 +580,7 @@ def validate_tail_measurement_output(
     total_sperm = 0
     total_positive = 0
     expected_total_objects = 0
+    expected_total_associated = 0
     overlay_paths: List[str] = []
 
     for index, (field, row) in enumerate(
@@ -513,8 +595,14 @@ def validate_tail_measurement_output(
                 )
             )
 
-        expected_count = int(field["expected_object_count"])
-        expected_total_objects += expected_count
+        tail_object_count = int(
+            field.get("tail_object_count", field["expected_object_count"])
+        )
+        associated_object_count = int(
+            field.get("associated_object_count", field["expected_object_count"])
+        )
+        expected_total_objects += tail_object_count
+        expected_total_associated += associated_object_count
         g_count = _integer_number(row.get("Count_G_objects"), "Count_G_objects")
         positive_count = _integer_number(
             row.get("Count_R_colocalized"),
@@ -535,12 +623,14 @@ def validate_tail_measurement_output(
                     field["field_id"]
                 )
             )
-        if g_count != expected_count or positive_count != expected_count:
+        if g_count != tail_object_count or positive_count != associated_object_count:
             raise ValueError(
-                "视野 {} 的尾部数量不一致：期望 {}，"
-                "Count_G_objects={}，Count_R_colocalized={}。".format(
+                "视野 {} 的尾部计数不一致：tail_object_count={}，"
+                "associated_object_count={}，Count_G_objects={}，"
+                "Count_R_colocalized={}。".format(
                     field["field_id"],
-                    expected_count,
+                    tail_object_count,
+                    associated_object_count,
                     g_count,
                     positive_count,
                 )
@@ -561,11 +651,11 @@ def validate_tail_measurement_output(
             )
 
         current_objects = grouped_objects.get(image_number, [])
-        if len(current_objects) != expected_count:
+        if len(current_objects) != tail_object_count:
             raise ValueError(
                 "视野 {} 的 G_objects.csv 行数不一致：期望 {}，实际 {}。".format(
                     field["field_id"],
-                    expected_count,
+                    tail_object_count,
                     len(current_objects),
                 )
             )
@@ -600,7 +690,7 @@ def validate_tail_measurement_output(
                 )
             field_mean255 += mean255
 
-        if sorted(object_numbers) != list(range(1, expected_count + 1)):
+        if sorted(object_numbers) != list(range(1, tail_object_count + 1)):
             raise ValueError(
                 "视野 {} 的 ObjectNumber 不是连续 1...N。".format(
                     field["field_id"]
@@ -628,6 +718,8 @@ def validate_tail_measurement_output(
             "image_number": image_number,
             "sperm_count": sperm_count,
             "positive_count": positive_count,
+            "tail_object_count": tail_object_count,
+            "associated_object_count": associated_object_count,
             "mean255_sum": round(field_mean255, 4),
             "mean_intensity_raw": round(field_mean255 / sperm_count, 4),
             "expression_rate": round(expected_rate * 100, 2),
@@ -654,10 +746,20 @@ def validate_tail_measurement_output(
         )
     if parser_result.get("calculation_mode") != CALCULATION_MODE:
         raise ValueError("ResultParser 未使用 head_equivalent 模式。")
-    if parser_result.get("warnings"):
+    parser_warnings = list(parser_result.get("warnings") or [])
+    remaining_warnings = [
+        warning
+        for warning in parser_warnings
+        if not (
+            "Count_G_objects=" in str(warning)
+            and "Count_R_colocalized=" in str(warning)
+            and "不一致" in str(warning)
+        )
+    ]
+    if remaining_warnings:
         raise ValueError(
             "ResultParser 一致性检查未通过：{}".format(
-                parser_result.get("warnings")
+                remaining_warnings
             )
         )
 
@@ -684,6 +786,8 @@ def validate_tail_measurement_output(
         "rate_formula": "sum(Count_R_colocalized) / sum(Count_R_objects)",
         "field_count": len(ordered_fields),
         "expected_object_count": expected_total_objects,
+        "tail_object_count": expected_total_objects,
+        "associated_object_count": expected_total_associated,
         "image_csv_path": str(image_csv),
         "g_objects_csv_path": str(object_csv),
         "overlay_paths": overlay_paths,

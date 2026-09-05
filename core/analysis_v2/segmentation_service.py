@@ -205,7 +205,12 @@ def validate_worker_field(field: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("视野 {} 对象数不大于 0".format(field.get("field_id")))
     if int(field.get("minimum_label", -1)) != 0:
         raise ValueError("视野 {} 背景不是 0".format(field.get("field_id")))
-    if bool(field.get("is_binary")):
+    valid_single_instance = (
+        object_count == 1
+        and int(field.get("positive_unique_count", -1)) == 1
+        and int(field.get("maximum_label", -1)) == 1
+    )
+    if bool(field.get("is_binary")) and not valid_single_instance:
         raise ValueError("视野 {} 标签是普通二值图".format(field.get("field_id")))
     if int(field.get("maximum_label", -1)) != object_count:
         raise ValueError("视野 {} max_label 与 object_count 不一致".format(field.get("field_id")))

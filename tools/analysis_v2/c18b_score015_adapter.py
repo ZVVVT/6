@@ -201,6 +201,7 @@ def run_adapter(
     head_labels_path: Path,
     output_dir: Path,
     c18b_output_dir: Path,
+    candidate_path_mode: str = "ordered",
 ) -> Dict[str, Any]:
     started = time.perf_counter()
     c18b_dir = (Path(__file__).resolve().parent / "c18b_score015").resolve()
@@ -227,6 +228,7 @@ def run_adapter(
             c18b_output_dir,
             {key: value for key, value in config.items() if not key.startswith("_")},
             return_enhanced=True,
+            candidate_path_mode=candidate_path_mode,
         )
     finally:
         try:
@@ -276,6 +278,7 @@ def run_adapter(
         "schema_version": 1,
         "adapter_version": ADAPTER_VERSION,
         "candidate_backend": "c18b_score015",
+        "candidate_path_mode": candidate_path_mode,
         "stage1_source": "C18B",
         "green_path": str(green_path),
         "head_labels_path": str(head_labels_path),
@@ -342,6 +345,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-labels", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--c18b-output-dir", required=True)
+    parser.add_argument(
+        "--candidate-path-mode",
+        choices=("ordered", "graph_preserving"),
+        default="ordered",
+    )
     return parser
 
 
@@ -352,6 +360,7 @@ def main() -> int:
         head_labels_path=Path(args.head_labels),
         output_dir=Path(args.output_dir),
         c18b_output_dir=Path(args.c18b_output_dir),
+        candidate_path_mode=args.candidate_path_mode,
     )
     print("C18B score015 adapter 完成。")
     print(json.dumps(result, ensure_ascii=False, indent=2))

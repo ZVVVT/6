@@ -14,10 +14,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from candidate_scoring import line_points, ordered_candidate, path_length
+from candidate_scoring import candidate_path, line_points, path_length
 from tail_graph_experiment import (
-    candidate_groups, connection_candidates, crossing_number, ordered_segment,
-    read_binary, select_links,
+    branch_cut_mask, candidate_groups, connection_candidates, crossing_number,
+    ordered_segment, read_binary, select_links,
 )
 
 
@@ -79,7 +79,7 @@ def reconstruct(args, fitc, performance_timings=None):
     if mask.shape != skel.shape or fitc.shape != skel.shape:
         raise ValueError("FITC, mask, and skeleton sizes differ")
     branch = skel & (crossing_number(skel) >= 3)
-    cut = cv2.dilate(branch.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    cut = branch_cut_mask(branch, getattr(args, "branch_cut_mode", "dilate3"))
     n, labels, stats, _ = cv2.connectedComponentsWithStats((skel & ~cut).astype(np.uint8), 8)
     paths = [ordered_segment(labels == i) for i in range(1, n)
              if stats[i, cv2.CC_STAT_AREA] >= args.min_segment_length]
@@ -98,7 +98,10 @@ def reconstruct(args, fitc, performance_timings=None):
 
     rows, polylines = [], []
     for cid, group in enumerate(groups, 1):
-        points = ordered_candidate(group, paths, links)
+        points = candidate_path(
+            group, paths, links,
+            mode=getattr(args, "candidate_path_mode", "ordered"),
+        )
         poly = np.asarray(points, np.int32)
         glinks = [e for e in links if e.a in group and e.b in group]
         if glinks:
@@ -130,7 +133,7 @@ def reconstruct(args, fitc, performance_timings=None):
                      "final_score": final})
         polylines.append(poly)
     if performance_timings is not None:
-        performance_timings["validation"] = (
+        performance_timings["candidate_scoring"] = (
             time.perf_counter() - validation_started
         )
     return rows, polylines

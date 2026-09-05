@@ -7,6 +7,7 @@ generation/merging.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -64,7 +65,9 @@ def diagnose(labels: np.ndarray, groups: list[list[np.ndarray]]) -> list[Instanc
     return rows
 
 
-def _path_geometry(path: np.ndarray, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _path_geometry(path: np.ndarray, shape: tuple[int, int],
+                   coordinate_grid: Optional[np.ndarray] = None
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Distance and nearest-path tangent for every image pixel."""
     seed = np.zeros(shape, np.uint8)
     tangent_x = np.zeros(shape, np.float32)
@@ -88,11 +91,19 @@ def _path_geometry(path: np.ndarray, shape: tuple[int, int]) -> tuple[np.ndarray
     lut_tx = np.zeros(len(xs) + 1, np.float32); lut_ty = np.zeros(len(xs) + 1, np.float32)
     lut_x[1:], lut_y[1:] = xs, ys
     lut_tx[1:], lut_ty[1:] = tangent_x[ys, xs], tangent_y[ys, xs]
-    safe = np.minimum(nearest, len(xs))
-    vx = np.indices(shape, dtype=np.float32)[1] - lut_x[safe]
-    vy = np.indices(shape, dtype=np.float32)[0] - lut_y[safe]
-    align = np.abs(vx * lut_tx[safe] + vy * lut_ty[safe]) / np.maximum(distance, 1.)
-    return distance.astype(np.float32), np.clip(align, 0., 1.), seed
+    np.minimum(nearest, len(xs), out=nearest)
+    if coordinate_grid is None:
+        vx = np.indices(shape, dtype=np.float32)[1] - lut_x[nearest]
+        vy = np.indices(shape, dtype=np.float32)[0] - lut_y[nearest]
+    else:
+        if coordinate_grid.shape != (2,) + shape:
+            raise ValueError("coordinate_grid shape does not match image shape")
+        vx = coordinate_grid[1] - lut_x[nearest]
+        vy = coordinate_grid[0] - lut_y[nearest]
+    align = (np.abs(vx * lut_tx[nearest] + vy * lut_ty[nearest]) /
+             np.maximum(distance, 1.))
+    np.clip(align, 0., 1., out=align)
+    return distance, align, seed
 
 
 def _axis_angle(a: np.ndarray, b: np.ndarray) -> float:
@@ -221,6 +232,7 @@ def separate(labels: np.ndarray, fitc: np.ndarray, groups: list[list[np.ndarray]
     out = np.zeros_like(labels, dtype=np.uint16)
     split_map: dict[int, list[int]] = {}
     next_id = 1
+    coordinate_grid = np.indices(fitc.shape, dtype=np.float32)
     for row, group in zip(diagnostics, groups):
         region = labels == row.instance_id
         if not row.abnormal or len(group) < 2:
@@ -239,7 +251,10 @@ def separate(labels: np.ndarray, fitc: np.ndarray, groups: list[list[np.ndarray]
         costs = []
         cluster_seeds = []
         for cluster in clusters:
-            geometries = [_path_geometry(group[k], fitc.shape) for k in cluster]
+            geometries = [
+                _path_geometry(group[k], fitc.shape, coordinate_grid)
+                for k in cluster
+            ]
             distance = np.min(np.stack([g[0] for g in geometries]), axis=0)
             nearest = np.argmin(np.stack([g[0] for g in geometries]), axis=0)
             direction = np.take_along_axis(np.stack([g[1] for g in geometries]), nearest[None], axis=0)[0]

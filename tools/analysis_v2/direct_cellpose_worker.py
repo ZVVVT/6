@@ -309,7 +309,12 @@ def validate_saved_labels(path: Path, source_shape: Sequence[int], object_count:
         raise ValueError("标签背景不是 0")
     if object_count <= 0 or stats["positive_unique_count"] <= 0:
         raise ValueError("没有正标签对象")
-    if stats["is_binary"]:
+    valid_single_instance = (
+        object_count == 1
+        and stats["positive_unique_count"] == 1
+        and stats["maximum_label"] == 1
+    )
+    if stats["is_binary"] and not valid_single_instance:
         raise ValueError("标签是普通二值图")
     if stats["maximum_label"] != object_count or stats["positive_unique_count"] != object_count:
         raise ValueError("标签数量与对象数量不一致")

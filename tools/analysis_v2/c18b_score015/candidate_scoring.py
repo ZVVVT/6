@@ -64,6 +64,75 @@ def ordered_candidate(group, paths, links):
     return order
 
 
+def graph_preserving_candidate(group, paths, links):
+    """Reconstruct a branched candidate as its longest start-anchored path."""
+    adjacency = {index: [] for index in group}
+    for edge in links:
+        if edge.a in adjacency and edge.b in adjacency:
+            adjacency[edge.a].append((edge.b, edge.a_start))
+            adjacency[edge.b].append((edge.a, edge.b_start))
+    if all(len(edges) <= 2 for edges in adjacency.values()):
+        return ordered_candidate(group, paths, links)
+
+    ends = sorted(node for node, edges in adjacency.items() if len(edges) <= 1)
+    starts = ends or sorted(adjacency)
+    chains = []
+
+    def visit(node, target, used, chain):
+        if node == target:
+            chains.append(chain)
+            return
+        for neighbor, unused in adjacency[node]:
+            if neighbor not in used:
+                visit(neighbor, target, used | {neighbor}, chain + [neighbor])
+
+    for offset, start in enumerate(starts):
+        for target in starts[offset + 1:]:
+            visit(start, target, {start}, [start])
+    if not chains:
+        chains = [[node] for node in sorted(adjacency)]
+
+    formal_start = min((node for node in group if len(adjacency[node]) <= 1),
+                       default=min(group))
+    chains = [chain for chain in chains
+              if chain[0] == formal_start or chain[-1] == formal_start]
+    chains = [chain if chain[0] == formal_start else list(reversed(chain))
+              for chain in chains]
+
+    alternatives = []
+    for chain in chains:
+        output = []
+        for position, node in enumerate(chain):
+            previous = chain[position - 1] if position else None
+            following = chain[position + 1] if position + 1 < len(chain) else None
+            incoming = (next(value for neighbor, value in adjacency[node]
+                             if neighbor == previous)
+                        if previous is not None else None)
+            outgoing = (next(value for neighbor, value in adjacency[node]
+                             if neighbor == following)
+                        if following is not None else None)
+            points = list(paths[node])
+            if incoming is not None:
+                if not incoming:
+                    points.reverse()
+            elif outgoing is True:
+                points.reverse()
+            if output:
+                output.extend(line_points(output[-1], points[0]))
+            output.extend(points if not output or output[-1] != points[0]
+                          else points[1:])
+        alternatives.append(output)
+    return max(alternatives, key=path_length)
+
+
+def candidate_path(group, paths, links, mode="ordered"):
+    if mode == "ordered":
+        return ordered_candidate(group, paths, links)
+    if mode == "graph_preserving":
+        return graph_preserving_candidate(group, paths, links)
+    raise ValueError("Unsupported candidate_path_mode: {}".format(mode))
+
+
 def path_length(points):
     p = np.asarray(points, float)
     return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0

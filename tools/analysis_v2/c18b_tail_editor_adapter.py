@@ -537,6 +537,35 @@ def path_length(points_xy: Sequence[Sequence[float]]) -> float:
     return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
 
 
+def build_unassigned_tail_candidates(
+    unmatched: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build a display-only handoff; these rows are not editor tail entries."""
+    candidates: List[Dict[str, Any]] = []
+    for item in unmatched:
+        candidate = {
+            "fragment_label_id": int(item["c18b_instance_id"]),
+            "label_reference": "fragments.tif",
+            "association_failure_reason": str(item["reason"]),
+            "best_candidate_head_id": (
+                int(item["best_candidate_head_id"])
+                if item.get("best_candidate_head_id") is not None
+                else None
+            ),
+            "matching_distance_px": (
+                float(item["matching_distance_px"])
+                if item.get("matching_distance_px") is not None
+                else None
+            ),
+        }
+        candidates.append(candidate)
+    return {
+        "schema_version": 1,
+        "purpose": "仅供Editor显示的待关联尾部候选，不属于正式尾部结果",
+        "candidates": candidates,
+    }
+
+
 def validate_outputs(
     fragments_path: Path,
     probability_path: Path,
@@ -685,6 +714,7 @@ def run_adapter(
         "entries": output_dir / "entries.json",
         "paths": output_dir / "paths.json",
         "global_results": output_dir / "global_results.json",
+        "unassigned_candidates": output_dir / "unassigned_tail_candidates.json",
         "manifest": output_dir / "manifest.json",
     }
     write_image_atomic(output_paths["fragments"], instances)
@@ -696,6 +726,10 @@ def run_adapter(
     write_json_atomic(
         output_paths["global_results"],
         {"version": 1, "results": global_results},
+    )
+    write_json_atomic(
+        output_paths["unassigned_candidates"],
+        build_unassigned_tail_candidates(unmatched),
     )
 
     validation = validate_outputs(

@@ -104,10 +104,18 @@ class SingleProteinAnalysisWorker(QThread):
 class AnalysisWindow(QWidget):
     analysis_activity_changed = Signal(bool)
 
-    def __init__(self, database, parent=None):
+    def __init__(
+        self,
+        database,
+        c18b_candidate_path_mode="graph_preserving",
+        parent=None,
+    ):
         super().__init__(parent)
 
         self.database = database
+        self.c18b_candidate_path_mode = str(
+            c18b_candidate_path_mode or "graph_preserving"
+        )
         self.config = ConfigManager()
         self.config.ensure_default_config()
 
@@ -1876,6 +1884,7 @@ class AnalysisWindow(QWidget):
                 python_executable=Path(self.config.get_python_exe()),
                 field_id=field_id,
                 display_max_dim=1400,
+                candidate_path_mode=self.c18b_candidate_path_mode,
                 parent=self,
             )
             worker.log_signal.connect(self.append_log)
@@ -2193,6 +2202,7 @@ class AnalysisWindow(QWidget):
             project_root=project_root,
             task_root=task_root,
             python_executable=Path(self.config.get_python_exe()),
+            candidate_path_mode=self.c18b_candidate_path_mode,
             parent=self,
         )
         worker.log_signal.connect(self.append_log)
@@ -2474,7 +2484,7 @@ class AnalysisWindow(QWidget):
             f"{protein_name} 结果已保存到数据库："
             f"视野数 {total.get('field_count', 0)}，"
             f"精子总数 {total.get('sperm_count', 0)}，"
-            f"有效尾部数 {total.get('positive_count', 0)}，"
+            f"关联尾部数 {total.get('positive_count', 0)}，"
             f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
             f"C 荧光强度 {total.get('mean_intensity_raw', total.get('mean_intensity', 0))}。"
         )
@@ -2564,6 +2574,7 @@ class AnalysisWindow(QWidget):
                 source_dir=source_dir,
                 target_dir=target_dir,
                 expected_field_count=expected_field_count,
+                measurement_contract=validation,
             )
 
             save_message = self._save_tail_analysis_v2_to_database(
@@ -2625,6 +2636,11 @@ class AnalysisWindow(QWidget):
             )
             # publication 已提交并释放，使用严格验证的解析结果显示。
             total = dict(parsed_result.get("total") or {})
+            tail_total_count = validation.get(
+                "tail_object_count",
+                validation.get("expected_object_count", total.get("positive_count", 0)),
+            )
+            associated_count = total.get("positive_count", 0)
 
             self._analysis_v2_select_next_pending = True
             self._analysis_v2_finish_pending = True
@@ -2638,14 +2654,18 @@ class AnalysisWindow(QWidget):
                 "总用时（含人工校准）：{:.2f} 秒\n\n"
                 "视野数：{}\n"
                 "精子总数：{}\n"
-                "有效尾部数：{}\n"
+                "识别尾部数：{}\n"
+                "关联尾部数：{}\n"
+                "未关联尾部数：{}\n"
                 "C 荧光强度：{}\n"
                 "标定率：{}%\n\n"
                 "正式输出：\n{}\n\n{}".format(
                     total_elapsed,
                     total.get("field_count", 0),
                     total.get("sperm_count", 0),
-                    total.get("positive_count", 0),
+                    tail_total_count,
+                    associated_count,
+                    tail_total_count - associated_count,
                     total.get(
                         "mean_intensity_raw",
                         total.get("mean_intensity", 0),

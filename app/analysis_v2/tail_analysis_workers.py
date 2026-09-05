@@ -71,6 +71,13 @@ def _c18b_instances_path(task_root: Path, field_id: str) -> Path:
     ).resolve()
 
 
+def _c18b_filtered_instances_path(task_root: Path, field_id: str) -> Path:
+    return (
+        _c18b_instances_path(task_root, field_id).parent
+        / "07_extreme_fragment_filtered_labels.tif"
+    ).resolve()
+
+
 class TailPathWorker(QThread):
     """Prepare the formal C18B editor payload for protein3 tail analysis."""
 
@@ -82,12 +89,16 @@ class TailPathWorker(QThread):
         project_root: Path,
         task_root: Path,
         python_executable: Path,
+        candidate_path_mode: str = "graph_preserving",
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.project_root = Path(project_root).resolve()
         self.task_root = Path(task_root).resolve()
         self.python_executable = Path(python_executable).resolve()
+        self.candidate_path_mode = str(
+            candidate_path_mode or "graph_preserving"
+        )
         self._cancel_requested = False
         self._process = None
 
@@ -195,6 +206,12 @@ class TailPathWorker(QThread):
         return output, return_code
 
     def _ensure_c18b_result(self, field_id, log_handle):
+        message = "C18B: field={} candidate_path_mode={}".format(
+            field_id, self.candidate_path_mode
+        )
+        self.log_signal.emit(message)
+        log_handle.write(message + "\n")
+        log_handle.flush()
         instances_path = _c18b_instances_path(self.task_root, field_id)
         if instances_path.is_file() and instances_path.stat().st_size > 0:
             message = "[C18B backend] {} 使用已有实例结果：{}".format(
@@ -243,6 +260,8 @@ class TailPathWorker(QThread):
                 str(compatibility_dir),
                 "--c18b-output-dir",
                 str(_c18b_output_dir(self.task_root, field_id)),
+                "--candidate-path-mode",
+                self.candidate_path_mode,
             ],
             "{} C18B backend".format(field_id),
             log_handle,
@@ -252,6 +271,37 @@ class TailPathWorker(QThread):
         return instances_path
 
     def _prepare_c18b_editor_payload(self, field_id, instances_path, log_handle):
+        filter_script = (
+            self.project_root
+            / "tools"
+            / "analysis_v2"
+            / "c18b_score015"
+            / "extreme_fragment_filter.py"
+        ).resolve()
+        if not filter_script.is_file():
+            raise FileNotFoundError(
+                "C18B极短碎片过滤器不存在：{}".format(filter_script)
+            )
+        self._run_streaming_command(
+            [
+                str(self.python_executable),
+                "-u",
+                str(filter_script),
+                str(Path(instances_path).resolve().parent),
+            ],
+            "{} C18B extreme fragment filter".format(field_id),
+            log_handle,
+        )
+        filtered_instances_path = _c18b_filtered_instances_path(
+            self.task_root, field_id
+        )
+        if (not filtered_instances_path.is_file()
+                or filtered_instances_path.stat().st_size <= 0):
+            raise FileNotFoundError(
+                "C18B极短碎片过滤未生成labels：{}".format(
+                    filtered_instances_path
+                )
+            )
         adapter = (
             self.project_root
             / "tools"
@@ -290,7 +340,7 @@ class TailPathWorker(QThread):
                 str(self.python_executable),
                 "-u",
                 str(adapter),
-                "--instances", str(instances_path),
+                "--instances", str(filtered_instances_path),
                 "--head-labels", str(head_labels),
                 "--fitc", str(fitc_path),
                 "--merge", str(merge_path),
@@ -311,9 +361,14 @@ class TailPathWorker(QThread):
             "entries": str((output_dir / "entries.json").resolve()),
             "paths": str((output_dir / "paths.json").resolve()),
             "global_results": str((output_dir / "global_results.json").resolve()),
+            "unassigned_candidates": str(
+                (output_dir / "unassigned_tail_candidates.json").resolve()
+            ),
             "output_dir": str(output_dir.resolve()),
             "python_executable": str(self.python_executable),
             "editor_script": str(editor_script),
+            "c18b_baseline_instances": str(Path(instances_path).resolve()),
+            "c18b_filtered_instances": str(filtered_instances_path),
         }
 
     def _run_c18b_workflow(self, fields, log_handle, started):
@@ -404,6 +459,7 @@ class TailFieldPrepareWorker(QThread):
         python_executable: Path,
         field_id: str,
         display_max_dim: int = 1400,
+        candidate_path_mode: str = "graph_preserving",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -412,6 +468,9 @@ class TailFieldPrepareWorker(QThread):
         self.python_executable = Path(python_executable).resolve()
         self.field_id = str(field_id or "").strip()
         self.display_max_dim = max(600, int(display_max_dim))
+        self.candidate_path_mode = str(
+            candidate_path_mode or "graph_preserving"
+        )
         self._cancel_requested = False
         self._process = None
 
@@ -494,6 +553,11 @@ class TailFieldPrepareWorker(QThread):
                 raise RuntimeError(
                     "TailFieldPrepareWorker 仅支持 protein3 C18B 尾部流程。"
                 )
+            self.log_signal.emit(
+                "C18B: field={} candidate_path_mode={}".format(
+                    self.field_id, self.candidate_path_mode
+                )
+            )
             instances_path = _c18b_instances_path(
                 self.task_root,
                 self.field_id,
@@ -540,6 +604,8 @@ class TailFieldPrepareWorker(QThread):
                 ),
                 "--c18b-output-dir",
                 str(_c18b_output_dir(self.task_root, self.field_id)),
+                "--candidate-path-mode",
+                self.candidate_path_mode,
             ]
 
             log_path = (

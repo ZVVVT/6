@@ -249,6 +249,7 @@ $C18BPipelineFiles = @(
     'tools\analysis_v2\c18b_score015\candidate_merging.py',
     'tools\analysis_v2\c18b_score015\candidate_scoring.py',
     'tools\analysis_v2\c18b_score015\candidate_validation.py',
+    'tools\analysis_v2\c18b_score015\extreme_fragment_filter.py',
     'tools\analysis_v2\c18b_score015\fitc_processing.py',
     'tools\analysis_v2\c18b_score015\graph_constrained_instance_separation.py',
     'tools\analysis_v2\c18b_score015\graph_seeded_region_growing.py',

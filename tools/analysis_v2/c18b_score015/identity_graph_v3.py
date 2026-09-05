@@ -55,9 +55,25 @@ def cluster(nodes, edges, resolution, seed):
     return {node: cid for cid, group in enumerate(groups, 1) for node in group}, groups
 
 
+def _streaming_argmin(cost_maps):
+    """Return the first minimum index per pixel without stacking cost maps."""
+    iterator = iter(cost_maps)
+    try:
+        best_cost = next(iterator).copy()
+    except StopIteration:
+        raise ValueError("at least one cost map is required")
+    winner = np.zeros(best_cost.shape, dtype=np.intp)
+    for index, cost in enumerate(iterator, 1):
+        better = cost < best_cost
+        best_cost[better] = cost[better]
+        winner[better] = index
+    return winner
+
+
 def reconstruct(grown, fitc, groups, membership, intensity_weight, direction_weight):
     """Compete identity communities within each grown parent region."""
     final = np.zeros_like(grown, np.uint16)
+    coordinate_grid = np.indices(fitc.shape, dtype=np.float32)
     for parent_id, group in enumerate(groups, 1):
         region = grown == parent_id
         by_community = defaultdict(list)
@@ -67,20 +83,23 @@ def reconstruct(grown, fitc, groups, membership, intensity_weight, direction_wei
         if len(ids) == 1:
             final[region] = ids[0]
             continue
-        costs = []
-        for cid in ids:
-            geoms = [_path_geometry(path, fitc.shape) for path in by_community[cid]]
-            distances = np.stack([g[0] for g in geoms])
-            nearest = np.argmin(distances, axis=0)
-            distance = np.min(distances, axis=0)
-            direction = np.take_along_axis(
-                np.stack([g[1] for g in geoms]), nearest[None], axis=0)[0]
-            seed_mask = np.maximum.reduce([g[2] for g in geoms]) > 0
-            level = max(float(np.median(fitc[seed_mask])), 1.0)
-            intensity = np.abs(fitc-level) / level
-            costs.append(distance + intensity_weight*intensity*np.maximum(distance, 1) +
-                         direction_weight*direction*np.maximum(distance, 1))
-        winner = np.argmin(np.stack(costs), axis=0)
+        def community_costs():
+            for cid in ids:
+                geoms = [
+                    _path_geometry(path, fitc.shape, coordinate_grid)
+                    for path in by_community[cid]
+                ]
+                distances = np.stack([g[0] for g in geoms])
+                nearest = np.argmin(distances, axis=0)
+                distance = np.min(distances, axis=0)
+                direction = np.take_along_axis(
+                    np.stack([g[1] for g in geoms]), nearest[None], axis=0)[0]
+                seed_mask = np.maximum.reduce([g[2] for g in geoms]) > 0
+                level = max(float(np.median(fitc[seed_mask])), 1.0)
+                intensity = np.abs(fitc-level) / level
+                yield (distance + intensity_weight*intensity*np.maximum(distance, 1) +
+                       direction_weight*direction*np.maximum(distance, 1))
+        winner = _streaming_argmin(community_costs())
         for k, cid in enumerate(ids):
             final[region & (winner == k)] = cid
     dense = np.zeros_like(final)

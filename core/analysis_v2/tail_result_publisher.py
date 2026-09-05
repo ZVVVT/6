@@ -88,6 +88,7 @@ def _count_overlay_files(directory: Path) -> Dict[str, int]:
 def validate_tail_result_directory(
     output_dir: Path,
     expected_field_count: Optional[int] = None,
+    measurement_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Validate a formal tail directory with the head-equivalent contract."""
     directory = Path(output_dir).resolve()
@@ -113,6 +114,13 @@ def validate_tail_result_directory(
         )
 
     warnings = list(summary.get("warnings") or [])
+    if measurement_contract:
+        _validate_measurement_contract(summary, measurement_contract)
+        warnings = [
+            warning for warning in warnings
+            if not _is_legacy_tail_count_warning(warning)
+        ]
+        summary["warnings"] = warnings
     if warnings:
         raise TailResultPublishError(
             "尾部结果存在一致性警告：{}".format(
@@ -155,9 +163,11 @@ def validate_tail_result_directory(
 
     total_sperm = int(total.get("sperm_count", 0) or 0)
     total_positive = int(total.get("positive_count", 0) or 0)
+    # Count_G_objects matches tail_object_count after contract validation.
+    total_tail = sum(int(row.get("g_objects_count", 0) or 0) for row in rows)
     if total_sperm <= 0:
         raise TailResultPublishError("尾部结果精子总数无效。")
-    if total_positive <= 0:
+    if total_tail <= 0:
         raise TailResultPublishError("尾部结果有效尾部数无效。")
     if total_positive > total_sperm:
         raise TailResultPublishError(
@@ -177,6 +187,106 @@ def validate_tail_result_directory(
             )
 
     return summary
+
+
+def _is_legacy_tail_count_warning(warning: Any) -> bool:
+    text = str(warning)
+    return (
+        "Count_G_objects=" in text
+        and "Count_R_colocalized=" in text
+        and "不一致" in text
+    )
+
+
+def _contract_count(value: Any, name: str) -> int:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise TailResultPublishError(
+            "尾部测量 contract 的 {} 不是有效计数：{}。".format(name, value)
+        )
+    count = int(round(number))
+    if count < 0 or abs(number - count) > 1e-6:
+        raise TailResultPublishError(
+            "尾部测量 contract 的 {} 不是非负整数：{}。".format(name, value)
+        )
+    return count
+
+
+def _validate_measurement_contract(
+    summary: Dict[str, Any],
+    measurement_contract: Dict[str, Any],
+) -> None:
+    """Match published CSV counts to the formal per-field measurement contract."""
+    contract_fields = list(measurement_contract.get("fields") or [])
+    if not contract_fields:
+        raise TailResultPublishError("尾部测量 contract 缺少视野计数。")
+
+    rows_by_image = {
+        int(row.get("image_number", 0) or 0): row
+        for row in list(summary.get("rows") or [])
+    }
+    if len(rows_by_image) != len(contract_fields):
+        raise TailResultPublishError(
+            "尾部测量 contract 视野数与发布结果不一致。"
+        )
+
+    for field in contract_fields:
+        image_number = _contract_count(field.get("image_number"), "image_number")
+        row = rows_by_image.get(image_number)
+        if row is None:
+            raise TailResultPublishError(
+                "尾部测量 contract 的视野 {} 在发布结果中不存在。".format(
+                    image_number
+                )
+            )
+
+        tail_count = _contract_count(
+            field.get("tail_object_count"), "tail_object_count"
+        )
+        associated_count = _contract_count(
+            field.get("associated_object_count"), "associated_object_count"
+        )
+        if associated_count > tail_count:
+            raise TailResultPublishError(
+                "视野 {} 的 associated_object_count={} 大于 "
+                "tail_object_count={}。".format(
+                    image_number, associated_count, tail_count
+                )
+            )
+
+        unresolved_value = field.get("unresolved_object_count")
+        if unresolved_value is not None:
+            unresolved_count = _contract_count(
+                unresolved_value, "unresolved_object_count"
+            )
+            if unresolved_count != tail_count - associated_count:
+                raise TailResultPublishError(
+                    "视野 {} 的 unresolved_object_count={} 与 "
+                    "tail_object_count-associated_object_count={} 不一致。".format(
+                        image_number,
+                        unresolved_count,
+                        tail_count - associated_count,
+                    )
+                )
+
+        g_count = _contract_count(row.get("g_objects_count"), "Count_G_objects")
+        colocalized_count = _contract_count(
+            row.get("positive_count"), "Count_R_colocalized"
+        )
+        if g_count != tail_count:
+            raise TailResultPublishError(
+                "视野 {} 的 Count_G_objects={} 与 tail_object_count={} 不一致。".format(
+                    image_number, g_count, tail_count
+                )
+            )
+        if colocalized_count != associated_count:
+            raise TailResultPublishError(
+                "视野 {} 的 Count_R_colocalized={} 与 "
+                "associated_object_count={} 不一致。".format(
+                    image_number, colocalized_count, associated_count
+                )
+            )
 
 
 @dataclass
@@ -254,6 +364,7 @@ def stage_tail_measurement_output(
     source_dir: Path,
     target_dir: Path,
     expected_field_count: Optional[int] = None,
+    measurement_contract: Optional[Dict[str, Any]] = None,
 ) -> TailResultPublication:
     """Install a complete validated tail result and retain rollback backup."""
     source = Path(source_dir).resolve()
@@ -271,6 +382,7 @@ def stage_tail_measurement_output(
     source_summary = validate_tail_result_directory(
         source,
         expected_field_count=expected_field_count,
+        measurement_contract=measurement_contract,
     )
     source_manifest = _directory_manifest(source)
 
@@ -305,6 +417,7 @@ def stage_tail_measurement_output(
         validate_tail_result_directory(
             staging,
             expected_field_count=expected_field_count,
+            measurement_contract=measurement_contract,
         )
 
         if had_previous_output:
@@ -322,6 +435,7 @@ def stage_tail_measurement_output(
         published_summary = validate_tail_result_directory(
             target,
             expected_field_count=expected_field_count,
+            measurement_contract=measurement_contract,
         )
 
         return TailResultPublication(

@@ -72,50 +72,126 @@ def build_tail_final_contract(
     output_dir: Path,
     head_final_labels_path: Path,
 ) -> Dict[str, Any]:
-    """从编辑器 head_id 区域图生成可测量的连续对象标签契约。"""
+    """从 Tail Workset（优先）或旧 head_id 区域图生成正式标签契约。"""
     directory = Path(output_dir).resolve()
+    workset_labels_path = directory / "TailWorksetLabels.tif"
+    workset_json_path = directory / "tail_workset.json"
     source = directory / "edited_tail_regions_head_id_uint16.tif"
-    if not source.is_file():
+    has_workset = workset_labels_path.is_file() and workset_json_path.is_file()
+    if not has_workset and not source.is_file():
         raise FileNotFoundError("请在尾部编辑器中点击保存结果")
-    _read_conflicts(directory)
 
-    head_id_labels = read_label_image(source)
-    head_labels = read_label_image(
-        Path(head_final_labels_path).resolve(),
-        expected_shape=tuple(head_id_labels.shape),
-    )
-    head_ids = [
-        int(value)
-        for value in np.unique(head_id_labels[head_id_labels > 0]).tolist()
-    ]
-    if not head_ids:
-        raise ValueError("视野 {} 没有人工接受的尾部，拒绝进入测量。".format(field_id))
-
-    available_head_ids = set(
-        int(value)
-        for value in np.unique(head_labels[head_labels > 0]).tolist()
-    )
-    missing = [head_id for head_id in head_ids if head_id not in available_head_ids]
-    if missing:
-        raise ValueError(
-            "视野 {} 的尾部 head_id 在 HeadFinalLabels 中不存在：{}".format(
-                field_id, missing
-            )
+    if has_workset:
+        workset_labels = read_label_image(workset_labels_path)
+        head_labels = read_label_image(
+            Path(head_final_labels_path).resolve(),
+            expected_shape=tuple(workset_labels.shape),
         )
+        with workset_json_path.open("r", encoding="utf-8") as handle:
+            workset_payload = json.load(handle) or {}
+        rows = [
+            dict(item)
+            for item in (workset_payload.get("objects") or [])
+            if bool(item.get("accepted"))
+        ]
+        rows.sort(key=lambda item: int(item.get("tail_object_id") or 0))
+        if not rows:
+            raise ValueError(
+                "视野 {} 没有人工接受的尾部，拒绝进入测量。".format(field_id)
+            )
 
-    object_labels, head_to_object = relabel_consecutive(head_id_labels)
-    positive_head_labels = np.zeros(head_labels.shape, dtype=np.uint16)
-    objects = []
-    for head_id in head_ids:
-        object_id = int(head_to_object[head_id])
-        positive_head_labels[head_labels == head_id] = object_id
-        objects.append({
-            "object_id": object_id,
-            "head_id": head_id,
-            "pixel_count": int(np.count_nonzero(head_id_labels == head_id)),
-            "source": "edited_tail_regions_head_id_uint16.tif",
-            "accepted": True,
-        })
+        available_head_ids = set(
+            int(value)
+            for value in np.unique(head_labels[head_labels > 0]).tolist()
+        )
+        object_labels = np.zeros(workset_labels.shape, dtype=np.uint16)
+        head_id_labels = np.zeros(workset_labels.shape, dtype=np.uint16)
+        positive_head_labels = np.zeros(head_labels.shape, dtype=np.uint16)
+        objects = []
+        used_workset_ids = set()
+        used_head_ids = set()
+        for object_id, row in enumerate(rows, start=1):
+            workset_id = int(row.get("workset_label_id") or 0)
+            if workset_id <= 0 or workset_id in used_workset_ids:
+                raise ValueError("Tail Workset 的 accepted object label 非法或重复。")
+            used_workset_ids.add(workset_id)
+            mask = workset_labels == workset_id
+            if not np.any(mask):
+                raise ValueError(
+                    "Tail Workset label {} 不存在。".format(workset_id)
+                )
+
+            status = str(row.get("association_status") or "").strip()
+            head_value = row.get("head_label_id")
+            if status == "associated":
+                if head_value is None:
+                    raise ValueError("associated tail 不允许 head_label_id=null。")
+                head_id = int(head_value)
+                if head_id not in available_head_ids:
+                    raise ValueError(
+                        "视野 {} 的尾部 head_label_id 在 HeadFinalLabels 中不存在：{}".format(
+                            field_id, head_id
+                        )
+                    )
+                if head_id in used_head_ids:
+                    raise ValueError("多个 accepted tail 不允许关联同一 head_label_id。")
+                used_head_ids.add(head_id)
+                positive_head_labels[head_labels == head_id] = object_id
+                head_id_labels[mask] = head_id
+            elif status == "unresolved":
+                if head_value is not None:
+                    raise ValueError("unresolved tail 不允许携带 head_label_id。")
+                head_id = None
+            else:
+                raise ValueError("未知 association_status：{}".format(status))
+
+            object_labels[mask] = object_id
+            objects.append({
+                "tail_object_id": object_id,
+                "head_label_id": head_id,
+                "association_status": status,
+                "pixel_count": int(np.count_nonzero(mask)),
+                "source": row.get("source"),
+                "fragment_label_id": row.get("fragment_label_id"),
+            })
+    else:
+        _read_conflicts(directory)
+        head_id_labels = read_label_image(source)
+        head_labels = read_label_image(
+            Path(head_final_labels_path).resolve(),
+            expected_shape=tuple(head_id_labels.shape),
+        )
+        head_ids = [
+            int(value)
+            for value in np.unique(head_id_labels[head_id_labels > 0]).tolist()
+        ]
+        if not head_ids:
+            raise ValueError("视野 {} 没有人工接受的尾部，拒绝进入测量。".format(field_id))
+        available_head_ids = set(
+            int(value)
+            for value in np.unique(head_labels[head_labels > 0]).tolist()
+        )
+        missing = [head_id for head_id in head_ids if head_id not in available_head_ids]
+        if missing:
+            raise ValueError(
+                "视野 {} 的尾部 head_id 在 HeadFinalLabels 中不存在：{}".format(
+                    field_id, missing
+                )
+            )
+        object_labels, head_to_object = relabel_consecutive(head_id_labels)
+        positive_head_labels = np.zeros(head_labels.shape, dtype=np.uint16)
+        objects = []
+        for head_id in head_ids:
+            object_id = int(head_to_object[head_id])
+            positive_head_labels[head_labels == head_id] = object_id
+            objects.append({
+                "tail_object_id": object_id,
+                "head_label_id": head_id,
+                "association_status": "associated",
+                "pixel_count": int(np.count_nonzero(head_id_labels == head_id)),
+                "source": "edited_tail_regions_head_id_uint16.tif",
+                "fragment_label_id": None,
+            })
 
     head_id_path = directory / "{}_TailFinalHeadIdLabels.tif".format(field_id)
     region_path = directory / "{}_TailFinalLabels.tif".format(field_id)
@@ -124,9 +200,17 @@ def build_tail_final_contract(
     atomic_save_label_image(head_id_path, head_id_labels)
     atomic_save_label_image(region_path, object_labels)
     atomic_save_label_image(positive_path, positive_head_labels)
+    associated_count = sum(
+        item["association_status"] == "associated" for item in objects
+    )
+    unresolved_count = len(objects) - associated_count
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "field_id": field_id,
+        "tail_object_count": len(objects),
+        "associated_object_count": associated_count,
+        "unresolved_object_count": unresolved_count,
+        # object_count 保留为旧 reader 的兼容别名。
         "object_count": len(objects),
         "objects": objects,
         "region_label_path": str(region_path),
@@ -140,15 +224,27 @@ def build_tail_final_contract(
     positive_stats = validate_label_image(positive_head_labels)
     if region_stats["positive_labels"] != expected:
         raise ValueError("TailFinalLabels 未严格连续编号为 1...N。")
-    if positive_stats["positive_labels"] != expected:
-        raise ValueError("TailPositiveHeadLabels 未严格连续编号为 1...N。")
+    associated_ids = [
+        int(item["tail_object_id"])
+        for item in objects
+        if item["association_status"] == "associated"
+    ]
+    if positive_stats["positive_labels"] != associated_ids:
+        raise ValueError("TailPositiveHeadLabels 与 associated tail IDs 不一致。")
     return {
         "tail_final_labels": str(region_path),
         "tail_final_head_id_labels": str(head_id_path),
         "tail_positive_head_labels": str(positive_path),
         "tail_final_objects": str(objects_path),
         "object_count": len(objects),
-        "head_ids": head_ids,
+        "tail_object_count": len(objects),
+        "associated_object_count": associated_count,
+        "unresolved_object_count": unresolved_count,
+        "head_ids": [
+            int(item["head_label_id"])
+            for item in objects
+            if item["head_label_id"] is not None
+        ],
     }
 
 

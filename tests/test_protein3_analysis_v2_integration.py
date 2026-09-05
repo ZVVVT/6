@@ -27,6 +27,9 @@ TAIL_EDITOR = (
     / "tail_legacy"
     / "tail_result_editor_v2_3_draft_mvp.py"
 )
+TAIL_CONTROLLER = (
+    PROJECT_ROOT / "app" / "analysis_v2" / "c18b_tail_calibration_window.py"
+)
 
 
 class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
@@ -104,6 +107,31 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         self.assertIn("str(self.python_executable)", source)
         self.assertNotIn("import cv2", source)
         self.assertNotIn("TailPathService", source)
+
+    def test_production_worker_passes_unassigned_candidates_to_editor(self):
+        worker_source = TAIL_WORKER.read_text(encoding="utf-8")
+        controller_source = TAIL_CONTROLLER.read_text(encoding="utf-8")
+        self.assertIn(
+            '"unassigned_candidates": str(',
+            worker_source,
+        )
+        self.assertIn(
+            '(output_dir / "unassigned_tail_candidates.json").resolve()',
+            worker_source,
+        )
+        self.assertIn(
+            '"--unassigned-candidates", self.payload["unassigned_candidates"]',
+            controller_source,
+        )
+
+    def test_calibration_and_measurement_workers_do_not_publish_or_write_database(self):
+        formal_source = "\n".join((
+            TAIL_WORKER.read_text(encoding="utf-8"),
+            TAIL_CONTROLLER.read_text(encoding="utf-8"),
+        ))
+        self.assertNotIn("tail_result_publisher", formal_source)
+        self.assertNotIn("stage_tail_measurement_output", formal_source)
+        self.assertNotIn("save_protein_result", formal_source)
 
     def test_tail_result_rejects_non_c18b_workflow_without_legacy_fallback(self):
         source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
