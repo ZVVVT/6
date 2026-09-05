@@ -35,6 +35,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+# 独立子进程的工作目录可能不是项目根目录。
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 try:
     import cv2
     import matplotlib.pyplot as plt
