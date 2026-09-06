@@ -36,23 +36,14 @@ class TailPublicationWiringTests(unittest.TestCase):
         self.assertNotIn("save_protein_analysis(", block)
         self.assertNotIn("save_field_result(", block)
 
-    def test_legacy_tail_route_remains_after_protein3_route(self):
+    def test_analysis_window_has_no_legacy_tail_route(self):
         source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
         run_start = source.index("def run_analysis")
-        protein3_index = source.index(
-            'if protein_key == "protein3" and protein_part == "tail":',
-            run_start,
-        )
-        legacy_comment = source.index(
-            "# 尾部仍使用已验证的旧 ProteinAnalysisService 流程。",
-            protein3_index,
-        )
-        legacy_worker = source.index(
-            "SingleProteinAnalysisWorker(",
-            legacy_comment,
-        )
-        self.assertLess(protein3_index, legacy_comment)
-        self.assertLess(legacy_comment, legacy_worker)
+        run_end = source.index("def imported_images_match_current_protein", run_start)
+        run_source = source[run_start:run_end]
+
+        self.assertIn("FORMAL_PROTEIN_PARTS.get(protein_key)", run_source)
+        self.assertNotIn("SingleProteinAnalysisWorker(", run_source)
 
 
 if __name__ == "__main__":

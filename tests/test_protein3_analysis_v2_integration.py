@@ -34,18 +34,18 @@ TAIL_CONTROLLER = (
 
 
 class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
-    def test_protein3_tail_routes_before_legacy_single_worker(self):
+    def test_protein3_tail_routes_without_legacy_single_worker(self):
         source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
         run_source = source[source.index("def run_analysis"):]
         route_condition = (
             'if protein_key == "protein3" and protein_part == "tail":'
         )
         protein3_route = run_source.index(route_condition)
-        legacy_worker = run_source.index("SingleProteinAnalysisWorker(", protein3_route)
-        self.assertLess(protein3_route, legacy_worker)
-        route_block = run_source[protein3_route:legacy_worker]
+        route_end = run_source.index("def imported_images_match_current_protein")
+        route_block = run_source[protein3_route:route_end]
         self.assertIn('workflow="protein3_tail"', route_block)
         self.assertIn("return", route_block)
+        self.assertNotIn("SingleProteinAnalysisWorker(", run_source[:route_end])
         self.assertNotIn('if protein_key == "protein3":', run_source)
 
     def test_head_route_and_batch_file_remain_separate(self):

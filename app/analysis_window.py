@@ -28,6 +28,7 @@ from app.analysis_v2.head_analysis_workers import (
     HeadSegmentationWorker,
 )
 from core.analysis_v2.completion import build_completion_result
+from core.analysis_v2.batch_input_adapter import FORMAL_PROTEIN_PARTS
 from app.analysis_v2.workflow import run_analysis_v2, complete_automatic_tail_calibration
 from app.analysis_v2.head_calibration_window import (
     HeadCalibrationWindow,
@@ -3024,12 +3025,21 @@ class AnalysisWindow(QWidget):
             QMessageBox.warning(self, "提示", "当前蛋白配置为空，无法运行分析。")
             return
 
-        if protein_part not in {"head", "tail"}:
+        formal_protein = FORMAL_PROTEIN_PARTS.get(protein_key)
+        expected_part = formal_protein[1] if formal_protein else ""
+        if not expected_part or protein_part != expected_part:
+            expected_text = expected_part or "不支持的蛋白"
+            message = (
+                "当前 protein / part 不受正式 Analysis V2 支持："
+                "{} / {}（正式配置：{}）。"
+            ).format(protein_key, protein_part or "未配置", expected_text)
+            self.append_log(message)
             QMessageBox.warning(
                 self,
-                "提示",
-                "当前蛋白表达部位未正确配置为 head 或 tail。",
+                "Analysis V2 配置错误",
+                message,
             )
+            self.set_running_state(False)
             return
 
         if not self.current_raw_image_folder or not Path(self.current_raw_image_folder).exists():
@@ -3123,19 +3133,6 @@ class AnalysisWindow(QWidget):
                 )
                 self._finish_analysis_v2_ui()
             return
-
-        # 尾部仍使用已验证的旧 ProteinAnalysisService 流程。
-        self.set_running_state(True)
-        self.analysis_worker = SingleProteinAnalysisWorker(
-            case_data=self.current_case,
-            protein_key=protein_key,
-            protein_name=protein_name,
-            config=self.config,
-        )
-        self.analysis_worker.log_signal.connect(self.append_log)
-        self.analysis_worker.finished_signal.connect(self.on_analysis_finished)
-        self.analysis_worker.finished.connect(self.on_analysis_thread_finished)
-        self.analysis_worker.start()
 
     def imported_images_match_current_protein(self, image_items, protein_key: str):
         """兼容旧调用。
