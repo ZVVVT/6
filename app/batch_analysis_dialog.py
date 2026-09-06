@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from app.long_message_dialog import show_long_message_dialog
 from core.analysis_v2.batch_input_adapter import (
     AnalysisV2BatchInputError,
+    FORMAL_PROTEIN_PARTS,
     build_batch_task_request,
 )
 from core.analysis_v2.result_completion_service import (
@@ -66,6 +67,31 @@ PROTEIN_DISPLAY_FALLBACK: Dict[str, str] = {
     "protein4": "Q8IYV9",
     "protein5": "W5XKT8",
 }
+
+ANALYSIS_V2_HEAD_ASSETS: Tuple[Tuple[str, str], ...] = (
+    ("Head Measurement pipeline", "pipelines/analysis_v2/measure_head_from_labels.cppipe"),
+    ("Direct Cellpose worker", "tools/analysis_v2/direct_cellpose_worker.py"),
+)
+
+ANALYSIS_V2_TAIL_ASSETS: Tuple[Tuple[str, str], ...] = (
+    ("Tail Measurement pipeline", "pipelines/analysis_v2/measure_tail_from_labels.cppipe"),
+    ("C18B Python", ".venv-c18b/python.exe"),
+    ("C18B adapter", "tools/analysis_v2/c18b_score015_adapter.py"),
+    ("C18B editor adapter", "tools/analysis_v2/c18b_tail_editor_adapter.py"),
+    ("C18B tail editor", "tools/analysis_v2/tail_legacy/tail_result_editor_v2_3_draft_mvp.py"),
+    ("C18B __init__", "tools/analysis_v2/c18b_score015/__init__.py"),
+    ("C18B candidate merging", "tools/analysis_v2/c18b_score015/candidate_merging.py"),
+    ("C18B candidate scoring", "tools/analysis_v2/c18b_score015/candidate_scoring.py"),
+    ("C18B candidate validation", "tools/analysis_v2/c18b_score015/candidate_validation.py"),
+    ("C18B extreme fragment filter", "tools/analysis_v2/c18b_score015/extreme_fragment_filter.py"),
+    ("C18B FITC processing", "tools/analysis_v2/c18b_score015/fitc_processing.py"),
+    ("C18B graph separation", "tools/analysis_v2/c18b_score015/graph_constrained_instance_separation.py"),
+    ("C18B graph region growing", "tools/analysis_v2/c18b_score015/graph_seeded_region_growing.py"),
+    ("C18B identity graph", "tools/analysis_v2/c18b_score015/identity_graph_v3.py"),
+    ("C18B pipeline runner", "tools/analysis_v2/c18b_score015/run_pipeline.py"),
+    ("C18B graph experiment", "tools/analysis_v2/c18b_score015/tail_graph_experiment.py"),
+    ("C18B frozen parameters", "tools/analysis_v2/c18b_score015/config/frozen_parameters.json"),
+)
 
 MODERN_MESSAGE_BOX_QSS = """
     QMessageBox#ModernMessageBox {
@@ -829,7 +855,7 @@ class BatchAnalysisDialog(QDialog):
         hint = QLabel(
             "说明：软件会根据内部编号、显示名称和“匹配规则”自动识别子文件夹；"
             "如果自动匹配不对，可以直接在“匹配文件夹”列手动选择。"
-            "预检查会同时检查 R/G 图片、Pipeline、MvImageID 环境和插件目录。"
+            "预检查会同时检查 R/G 图片、Analysis V2 资源、MvImageID 环境和插件目录。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666666;")
@@ -847,7 +873,7 @@ class BatchAnalysisDialog(QDialog):
 
         self.table = QTableWidget()
         self.table.setColumnCount(9)
-        self.table.setHorizontalHeaderLabels(["蛋白", "匹配文件夹", "G", "R", "DIC", "Merge", "Pipeline", "环境", "状态"])
+        self.table.setHorizontalHeaderLabels(["蛋白", "匹配文件夹", "G", "R", "DIC", "Merge", "V2资源", "环境", "状态"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -1269,17 +1295,16 @@ class BatchAnalysisDialog(QDialog):
         return FolderAliasStore.normalize_text(text)
 
     def get_protein_items(self) -> List[dict]:
-        items = self.config.get_protein_items()
         fixed_items = []
-        for item in items:
-            key = str(item.get("key", "") or "").strip()
+        for configured_key in self.config.get_protein_keys():
+            key = str(configured_key or "").strip()
             if not key:
                 continue
-            name = str(item.get("name", "") or "").strip() or PROTEIN_DISPLAY_FALLBACK.get(key, key)
-            fixed = dict(item)
-            fixed["key"] = key
-            fixed["name"] = name
-            fixed_items.append(fixed)
+            name = str(self.config.get_protein_display_name(key) or "").strip()
+            fixed_items.append({
+                "key": key,
+                "name": name or PROTEIN_DISPLAY_FALLBACK.get(key, key),
+            })
         return fixed_items
 
     def build_folder_alias_map(self) -> Dict[str, List[str]]:
@@ -1390,20 +1415,56 @@ class BatchAnalysisDialog(QDialog):
         return self.get_project_root() / path
 
     def check_pipeline_for_protein(self, protein_key: str) -> dict:
-        pipeline_path = self.resolve_project_path(self.config.get_pipeline_by_protein(protein_key))
-        if not str(pipeline_path).strip():
-            return {"ok": False, "text": "未配置", "path": "", "detail": "未配置 Pipeline。"}
-        if pipeline_path.exists() and pipeline_path.is_file():
-            return {"ok": True, "text": "正常", "path": str(pipeline_path), "detail": str(pipeline_path)}
-        return {"ok": False, "text": "缺失", "path": str(pipeline_path), "detail": f"Pipeline 文件不存在：{pipeline_path}"}
+        key = str(protein_key or "").strip()
+        formal = FORMAL_PROTEIN_PARTS.get(key)
+        display_name = formal[0] if formal is not None else key or "<empty>"
+        if formal is None:
+            return {
+                "ok": False,
+                "text": "缺失",
+                "path": "",
+                "detail": "{}（{}）：不支持的正式 protein_key。".format(display_name, key),
+            }
+
+        assets = list(ANALYSIS_V2_HEAD_ASSETS)
+        if formal[1] == "tail":
+            assets.extend(ANALYSIS_V2_TAIL_ASSETS)
+
+        project_root = self.get_project_root()
+        missing = []
+        checked_paths = []
+        for label, relative_path in assets:
+            path = project_root / Path(relative_path)
+            checked_paths.append(str(path))
+            if not path.is_file():
+                missing.append("缺少 {}：{}".format(label, path))
+
+        if missing:
+            return {
+                "ok": False,
+                "text": "缺失",
+                "path": "",
+                "detail": "{}（{}）：{}".format(display_name, key, "；".join(missing)),
+            }
+        return {
+            "ok": True,
+            "text": "正常",
+            "path": "；".join(checked_paths),
+            "detail": "{}（{}）：Analysis V2 运行资源正常。".format(display_name, key),
+        }
 
     def check_mvimageid_environment(self) -> dict:
         source_dir = self.config.get_source_project_dir()
         python_exe = self.config.get_python_exe()
         plugins_dir = self.config.get_plugins_directory()
+        module_name = str(self.config.get_module_name() or "").strip()
 
         details: List[str] = []
         ok = True
+
+        if not module_name:
+            ok = False
+            details.append("MvImageID module_name 未配置")
 
         source_path = Path(str(source_dir or "")).expanduser()
         if not source_path.exists():
@@ -1419,7 +1480,7 @@ class BatchAnalysisDialog(QDialog):
             runner = MvImageIDRunner(
                 source_project_dir=str(source_dir),
                 python_exe=str(python_exe),
-                module_name=self.config.get_module_name(),
+                module_name=module_name,
                 plugins_directory=str(plugins_dir),
                 log_file="",
             )
@@ -1432,6 +1493,14 @@ class BatchAnalysisDialog(QDialog):
             details.append(str(e))
 
         plugins_text = str(plugins_dir or "").strip()
+        get_mvimageid = getattr(self.config, "get_mvimageid", None)
+        if get_mvimageid is not None:
+            configured_plugins = str(
+                get_mvimageid("plugins_directory", "") or ""
+            ).strip()
+            if not configured_plugins:
+                ok = False
+                details.append("MvImageID plugins_directory 未配置")
         if plugins_text:
             plugins_path = Path(plugins_text).expanduser()
             if not plugins_path.exists():
@@ -1542,7 +1611,7 @@ class BatchAnalysisDialog(QDialog):
             return "缺少G或R"
 
         if pipeline_check is not None and not pipeline_check.get("ok", False):
-            return "Pipeline缺失"
+            return "V2资源缺失"
         if env_check is not None and not env_check.get("ok", False):
             return "环境异常"
         return "可分析"
@@ -1797,7 +1866,7 @@ class BatchAnalysisDialog(QDialog):
             item.setForeground(Qt.darkGreen)
         elif status in ["分析中"]:
             item.setForeground(Qt.blue)
-        elif status in ["失败", "缺少G或R", "图片重复", "Pipeline缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
+        elif status in ["失败", "缺少G或R", "图片重复", "V2资源缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
             item.setForeground(Qt.red)
         else:
             item.setForeground(Qt.gray)
@@ -1860,7 +1929,7 @@ class BatchAnalysisDialog(QDialog):
 
         tasks = self.get_ready_tasks()
         if not tasks:
-            show_batch_information(self, "提示", "没有可分析的蛋白文件夹。请检查文件夹匹配、R/G 图片、Pipeline 文件和 MvImageID 环境。")
+            show_batch_information(self, "提示", "没有可分析的蛋白文件夹。请检查文件夹匹配、R/G 图片、Analysis V2 运行资源和 MvImageID 环境。")
             return
 
         existing_names = self.get_existing_protein_names(tasks)
