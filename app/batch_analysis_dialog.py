@@ -29,11 +29,22 @@ from PySide6.QtWidgets import (
 )
 
 from app.long_message_dialog import show_long_message_dialog
+from core.analysis_v2.batch_input_adapter import (
+    AnalysisV2BatchInputError,
+    build_batch_task_request,
+)
+from core.analysis_v2.result_completion_service import (
+    AnalysisV2CompletionPublishError,
+    publish_measured_completion,
+)
+from core.analysis_v2.task_runner import (
+    AnalysisV2TaskCancelled,
+    AnalysisV2TaskError,
+    AnalysisV2TaskRunner,
+)
 from core.config_manager import ConfigManager
 from core.image_channel_matcher import ImageChannelMatcher
 from core.mvimageid_runner import MvImageIDRunner
-from core.protein_analysis_service import ProteinAnalysisService
-from core.result_parser import ResultParser
 
 
 # =========================
@@ -609,16 +620,21 @@ class BatchProteinWorker(QThread):
     task_status_signal = Signal(str, str)
     finished_signal = Signal(list, list)
 
-    def __init__(self, case_data: dict, tasks: List[dict], config: ConfigManager, parent=None):
+    def __init__(self, case_data: dict, tasks: List[dict], config: ConfigManager, database, parent=None):
         super().__init__(parent)
         self.case_data = case_data
         self.tasks = tasks
         self.config = config
+        self.database = database
         self.cancel_after_current = False
+        self.current_runner: Optional[AnalysisV2TaskRunner] = None
 
     def request_cancel_after_current(self):
         self.cancel_after_current = True
-        self.log_signal.emit("已请求取消后续分析：当前正在运行的蛋白会尽量完成，后续未开始项目将跳过。")
+        runner = self.current_runner
+        if runner is not None:
+            runner.cancel()
+        self.log_signal.emit("已请求取消批量分析：正在停止当前蛋白，后续未开始项目将跳过。")
 
     def run(self):
         results = []
@@ -630,13 +646,8 @@ class BatchProteinWorker(QThread):
             protein_name = task["protein_name"]
 
             if self.cancel_after_current:
-                self.task_status_signal.emit(protein_key, "已取消")
-                errors.append({
-                    "protein_key": protein_key,
-                    "protein_name": protein_name,
-                    "message": "用户取消后续分析。",
-                })
-                continue
+                self._append_cancelled_tasks(errors, index - 1)
+                break
 
             self.progress_signal.emit(index, total, protein_name)
             self.task_status_signal.emit(protein_key, "分析中")
@@ -647,43 +658,105 @@ class BatchProteinWorker(QThread):
                 results.append(result)
                 self.task_status_signal.emit(protein_key, "已完成")
                 self.log_signal.emit(f"{protein_name} 分析完成。")
-            except Exception as e:
-                message = str(e)
-                self.task_status_signal.emit(protein_key, "失败")
+            except AnalysisV2TaskCancelled:
+                self.cancel_after_current = True
+                self.task_status_signal.emit(protein_key, "已取消")
                 errors.append({
                     "protein_key": protein_key,
                     "protein_name": protein_name,
-                    "message": message,
+                    "message": "用户取消分析。",
+                    "kind": "cancelled",
                 })
-                self.log_signal.emit(f"{protein_name} 分析失败：{message}")
+                self.log_signal.emit(f"{protein_name} 分析已取消。")
+                self._append_cancelled_tasks(errors, index)
+                break
+            except AnalysisV2BatchInputError as e:
+                self._append_failure(errors, task, "输入错误", e)
+            except AnalysisV2CompletionPublishError as e:
+                label = "数据库失败" if e.stage == "database" else "发布失败"
+                self._append_failure(errors, task, label, e)
+            except AnalysisV2TaskError as e:
+                self._append_failure(errors, task, "分析失败", e)
+            except Exception as e:
+                self._append_failure(errors, task, "分析失败", e)
 
         self.finished_signal.emit(results, errors)
 
-    def run_one_protein(self, task: dict) -> dict:
+    def _append_cancelled_tasks(self, errors: list, start_index: int) -> None:
+        for task in self.tasks[start_index:]:
+            self.task_status_signal.emit(task["protein_key"], "已取消")
+            errors.append({
+                "protein_key": task["protein_key"],
+                "protein_name": task["protein_name"],
+                "message": "用户取消后续分析。",
+                "kind": "cancelled",
+            })
+
+    def _append_failure(self, errors: list, task: dict, label: str, error: Exception) -> None:
+        message = "{}：{}".format(label, error)
+        self.task_status_signal.emit(task["protein_key"], "失败")
+        errors.append({
+            "protein_key": task["protein_key"],
+            "protein_name": task["protein_name"],
+            "message": message,
+            "kind": "failed",
+        })
+        self.log_signal.emit("{} {}".format(task["protein_name"], message))
+
+    def run_one_protein(self, task: dict):
         """
         批量分析中的单个蛋白执行入口。
 
-        第三步开始，不再在批量窗口里维护另一套导入、清理、运行、解析逻辑，
-        而是统一交给 core.protein_analysis_service.ProteinAnalysisService。
-
-        批量分析 = 按顺序多次调用同一个单蛋白分析服务。
+        使用现有 Batch 匹配结果构造 Analysis V2 请求，在当前 Batch worker
+        线程同步完成分析与公共发布。这里不创建第二层 QThread。
         """
         protein_key = task["protein_key"]
-        protein_name = task["protein_name"]
         source_folder = task["folder"]
 
-        service = ProteinAnalysisService(self.config)
-
-        # “取消后续分析”只在当前蛋白结束后生效，不强行中断正在运行的 MvImageID。
-        return service.run_one_protein(
+        request = build_batch_task_request(
             case_data=self.case_data,
             protein_key=protein_key,
-            protein_name=protein_name,
-            source_folder=source_folder,
-            overwrite=True,
-            log_callback=self.log_signal.emit,
-            cancel_callback=None,
+            protein_folder=source_folder,
+            config=self.config,
         )
+        runner = AnalysisV2TaskRunner(self.config, log_callback=self.log_signal.emit)
+        self.current_runner = runner
+        run_error = None
+        try:
+            if self.cancel_after_current:
+                runner.cancel()
+            completion = runner.run(request)
+            if completion.get("status") != "measured":
+                raise AnalysisV2TaskError(
+                    "Analysis V2 未返回 measured CompletionResult。",
+                    stage="completion",
+                    case_no=request.case_no,
+                    protein_key=request.protein_key,
+                )
+            if self.cancel_after_current:
+                raise AnalysisV2TaskCancelled(
+                    "Analysis V2 task cancelled",
+                    stage="completion",
+                    case_no=request.case_no,
+                    protein_key=request.protein_key,
+                )
+            published = publish_measured_completion(completion, self.database)
+            self.log_signal.emit(published.database_message)
+            if published.cleanup_warning:
+                self.log_signal.emit("结果发布清理提示：{}".format(published.cleanup_warning))
+            return published
+        except BaseException as error:
+            run_error = error
+            raise
+        finally:
+            try:
+                runner.shutdown()
+            except Exception as shutdown_error:
+                if run_error is None:
+                    raise
+                self.log_signal.emit("Analysis V2 runner 清理失败：{}".format(shutdown_error))
+            finally:
+                self.current_runner = None
 
 
 # =========================
@@ -1820,7 +1893,7 @@ class BatchAnalysisDialog(QDialog):
         self.progress_bar.setValue(0)
         self.progress_label.setText("开始批量分析...")
 
-        self.worker = BatchProteinWorker(self.case_data, tasks, self.config, self)
+        self.worker = BatchProteinWorker(self.case_data, tasks, self.config, self.database, self)
         self.worker.log_signal.connect(self.append_log)
         self.worker.progress_signal.connect(self.on_progress)
         self.worker.task_status_signal.connect(self.on_task_status)
@@ -1860,19 +1933,8 @@ class BatchAnalysisDialog(QDialog):
         self.refresh_table()
 
     def on_finished(self, results: list, errors: list):
-        saved_count = 0
-        for result in results:
-            ok, message = self.save_result_to_database(result)
-            if ok:
-                saved_count += 1
-                self.append_log(message)
-            else:
-                errors.append({
-                    "protein_key": result.get("protein_key", ""),
-                    "protein_name": result.get("protein_name", ""),
-                    "message": message,
-                })
-                self.append_log(f"结果入库失败：{message}")
+        # Analysis V2 worker 只有在公共 publication 与数据库事务成功后才返回结果。
+        saved_count = len(results)
 
         self.set_running_state(False)
         self.progress_bar.setValue(100)
