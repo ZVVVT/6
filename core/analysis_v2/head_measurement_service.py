@@ -511,7 +511,9 @@ class HeadMeasurementService:
             {"schema_version": 2, "fields": prepared["records"]},
         )
 
-    def run(self) -> Dict[str, Any]:
+    def run(self, process_context=None) -> Dict[str, Any]:
+        if process_context is not None:
+            process_context.check_cancelled()
         try:
             current = self.state.load()
             calibrated_before = any(
@@ -562,9 +564,12 @@ class HeadMeasurementService:
                     STAGE,
                     str(message),
                 ),
+                **({"process_context": process_context} if process_context is not None else {}),
                 cancel_callback=None,
                 log_file="",
             )
+            if process_context is not None:
+                process_context.check_cancelled()
             run_payload = {
                 "command": run_result.command,
                 "return_code": run_result.return_code,
@@ -584,12 +589,15 @@ class HeadMeasurementService:
                 extra=run_payload,
             )
             if not run_result.success:
-                raise RuntimeError(
+                error = RuntimeError(
                     run_result.error_message
                     or "MvImageID 测量失败，退出码 {}".format(
                         run_result.return_code
                     )
                 )
+                error.return_code = run_result.return_code
+                error.log_path = run_result.log_file
+                raise error
 
             field_ids = [item["field_id"] for item in fields]
             validation = validate_head_measurement_output(
@@ -667,6 +675,8 @@ class HeadMeasurementService:
                 "result": validation,
             }
         except BaseException as exception:
+            if process_context is not None:
+                process_context.check_cancelled()
             self.logger.record_exception(STAGE, exception)
             self.state.mark_failed(
                 STAGE,

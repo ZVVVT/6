@@ -594,9 +594,15 @@ class HeadCalibrationService:
         )
         return dict(result)
 
-    def complete(self) -> Dict[str, Any]:
+    def complete(self, process_context=None) -> Dict[str, Any]:
         try:
-            results = [self.complete_field(field.field_id) for field in self.fields]
+            results = []
+            for field in self.fields:
+                if process_context is not None:
+                    process_context.check_cancelled()
+                results.append(self.complete_field(field.field_id))
+            if process_context is not None:
+                process_context.check_cancelled()
             self.state_store.update(
                 "head_calibrated",
                 "head_calibration",
@@ -628,6 +634,8 @@ class HeadCalibrationService:
                 "manifest": self.manifest_store.load(),
             }
         except BaseException as exception:
+            if process_context is not None:
+                process_context.check_cancelled()
             self.logger.record_exception(
                 "head_calibration",
                 exception,

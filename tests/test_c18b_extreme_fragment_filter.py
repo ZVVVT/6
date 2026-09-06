@@ -175,8 +175,8 @@ class C18BExtremeFragmentFilterTests(unittest.TestCase):
 
 class C18BExtremeFragmentWiringTests(unittest.TestCase):
     def test_editor_adapter_receives_filtered_labels(self):
-        source = (PROJECT_ROOT / "app" / "analysis_v2"
-                  / "tail_analysis_workers.py").read_text(encoding="utf-8")
+        source = (PROJECT_ROOT / "core" / "analysis_v2"
+                  / "c18b_execution.py").read_text(encoding="utf-8")
         prepare = source[source.index("def _prepare_c18b_editor_payload"):
                          source.index("def _run_c18b_workflow")]
         filter_call = prepare.index("extreme_fragment_filter.py")

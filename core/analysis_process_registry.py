@@ -40,7 +40,7 @@ class AnalysisProcessRegistry:
             return sorted(self._processes)
 
     @staticmethod
-    def _terminate_tree(pid, process=None):
+    def _terminate_tree(pid, process=None, timeout=None):
         if pid <= 0:
             return
         if os.name == "nt":
@@ -49,6 +49,7 @@ class AnalysisProcessRegistry:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                timeout=timeout,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             return

@@ -74,7 +74,7 @@ class C18BExperimentalStartupModeTests(unittest.TestCase):
             "main.py": "--c18b-candidate-path-mode",
             "app/main_window.py": "c18b_candidate_path_mode",
             "app/analysis_window.py": "candidate_path_mode=self.c18b_candidate_path_mode",
-            "app/analysis_v2/tail_analysis_workers.py": '"--candidate-path-mode"',
+            "core/analysis_v2/c18b_execution.py": '"--candidate-path-mode"',
             "tools/analysis_v2/c18b_score015_adapter.py": "candidate_path_mode=args.candidate_path_mode",
             "tools/analysis_v2/c18b_score015/run_pipeline.py": "candidate_path_mode=candidate_path_mode",
             "tools/analysis_v2/c18b_score015/candidate_validation.py": "candidate_path(",
@@ -89,7 +89,11 @@ class C18BExperimentalStartupModeTests(unittest.TestCase):
         worker_source = (
             PROJECT_ROOT / "app" / "analysis_v2" / "tail_analysis_workers.py"
         ).read_text(encoding="utf-8")
-        self.assertGreaterEqual(worker_source.count('"--candidate-path-mode"'), 2)
+        execution_source = (PROJECT_ROOT / "core" / "analysis_v2" / "c18b_execution.py").read_text(encoding="utf-8")
+        self.assertEqual(execution_source.count('"--candidate-path-mode"'), 1)
+        self.assertNotIn('"--candidate-path-mode"', worker_source)
+        self.assertIn("class TailPathWorker(QThread, C18BExecution)", worker_source)
+        self.assertIn("execution._ensure_c18b_result", worker_source)
         self.assertNotIn("C18B EXPERIMENT:", worker_source)
 
 

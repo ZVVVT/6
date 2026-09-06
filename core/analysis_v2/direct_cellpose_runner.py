@@ -64,7 +64,11 @@ class DirectCellposeRunner:
         logs_dir: Path,
         worker_result_path: Path,
         timeout_seconds: Optional[float] = None,
+        process_context=None,
     ) -> DirectCellposeRunResult:
+        registry = process_context or analysis_process_registry
+        if process_context is not None:
+            process_context.check_cancelled()
         timeout = self.timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         if timeout < 120.0:
             raise ValueError("直接 Cellpose timeout 不得小于 120 秒")
@@ -108,7 +112,9 @@ class DirectCellposeRunner:
         try:
             with stdout_path.open("w", encoding="utf-8", newline="\n") as stdout_handle:
                 with stderr_path.open("w", encoding="utf-8", newline="\n") as stderr_handle:
-                    process = analysis_process_registry.register(subprocess.Popen(
+                    if process_context is not None:
+                        process_context.check_cancelled()
+                    process = registry.register(subprocess.Popen(
                         command,
                         cwd=str(self.project_root),
                         env=environment,
@@ -117,13 +123,17 @@ class DirectCellposeRunner:
                         creationflags=creationflags,
                     ))
                     try:
+                        if process_context is not None:
+                            process_context.check_cancelled()
                         return_code = int(process.wait(timeout=timeout))
-                    except subprocess.TimeoutExpired:
+                        if process_context is not None:
+                            process_context.check_cancelled()
+                    except BaseException:
                         analysis_process_registry._terminate_tree(process.pid, process)
                         process.wait()
                         raise
                     finally:
-                        analysis_process_registry.unregister(process)
+                        registry.unregister(process)
         finally:
             duration = time.perf_counter() - started
             ended_at = datetime.now().astimezone().isoformat(timespec="milliseconds")

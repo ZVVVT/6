@@ -183,7 +183,11 @@ class MvImageIDRunner:
         log_callback: LogCallback = None,
         cancel_callback: CancelCallback = None,
         log_file: str = "",
+        process_context=None,
     ) -> MvImageIDRunResult:
+        registry = process_context or analysis_process_registry
+        if process_context is not None:
+            process_context.check_cancelled()
         start_time = time.time()
         pipeline_path = Path(str(pipeline_file or "")).expanduser().resolve()
         input_path = Path(str(input_dir or "")).expanduser().resolve()
@@ -227,7 +231,9 @@ class MvImageIDRunner:
                 log_fp.write("=" * 60 + "\n\n")
                 log_fp.flush()
 
-                process = analysis_process_registry.register(subprocess.Popen(
+                if process_context is not None:
+                    process_context.check_cancelled()
+                process = registry.register(subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -239,8 +245,10 @@ class MvImageIDRunner:
                     **self._get_subprocess_window_options(),
                 ))
 
-                assert process.stdout is not None
                 try:
+                    if process_context is not None:
+                        process_context.check_cancelled()
+                    assert process.stdout is not None
                     for line in process.stdout:
                         if cancel_callback and cancel_callback():
                             # 第一阶段只做温和终止；批量“取消后续分析”仍由上层控制。
@@ -263,13 +271,18 @@ class MvImageIDRunner:
                             log_callback(line)
 
                     return_code = process.wait()
+                    if process_context is not None:
+                        process_context.check_cancelled()
                 except BaseException:
                     if process.poll() is None:
-                        process.kill()
+                        if process_context is not None:
+                            analysis_process_registry._terminate_tree(process.pid, process)
+                        else:
+                            process.kill()
                     process.wait()
                     raise
                 finally:
-                    analysis_process_registry.unregister(process)
+                    registry.unregister(process)
                 elapsed = time.time() - start_time
                 log_fp.write("\n" + "=" * 60 + "\n")
                 log_fp.write(f"ExitCode: {return_code}\n")
@@ -302,6 +315,8 @@ class MvImageIDRunner:
             )
 
         except Exception as e:
+            if process_context is not None:
+                process_context.check_cancelled()
             elapsed = time.time() - start_time
             message = f"MvImageID 执行异常：{e}"
             try:

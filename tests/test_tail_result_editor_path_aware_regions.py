@@ -16,9 +16,9 @@ from tools.analysis_v2.tail_legacy.tail_result_editor_v2_3_draft_mvp import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TAIL_WORKER = (
     PROJECT_ROOT
-    / "app"
+    / "core"
     / "analysis_v2"
-    / "tail_analysis_workers.py"
+    / "c18b_execution.py"
 )
 
 

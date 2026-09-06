@@ -20,6 +20,7 @@ from core.analysis_v2.task_state import TaskStateStore
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANALYSIS_WINDOW = PROJECT_ROOT / "app" / "analysis_window.py"
 TAIL_WORKER = PROJECT_ROOT / "app" / "analysis_v2" / "tail_analysis_workers.py"
+C18B_EXECUTION = PROJECT_ROOT / "core" / "analysis_v2" / "c18b_execution.py"
 TAIL_EDITOR = (
     PROJECT_ROOT
     / "tools"
@@ -98,7 +99,7 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         self.assertIn("self.tail_field_prepare_queue.insert(0, field_id)", scheduler)
 
     def test_tail_worker_uses_only_c18b_backend_and_editor_adapter(self):
-        source = TAIL_WORKER.read_text(encoding="utf-8")
+        source = TAIL_WORKER.read_text(encoding="utf-8") + C18B_EXECUTION.read_text(encoding="utf-8")
         self.assertIn('"c18b_score015_adapter.py"', source)
         self.assertIn('"c18b_tail_editor_adapter.py"', source)
         self.assertIn('"tail_result_editor_v2_3_draft_mvp.py"', source)
@@ -110,7 +111,7 @@ class Protein3AnalysisV2IntegrationTests(unittest.TestCase):
         self.assertNotIn("TailPathService", source)
 
     def test_production_worker_passes_unassigned_candidates_to_editor(self):
-        worker_source = TAIL_WORKER.read_text(encoding="utf-8")
+        worker_source = TAIL_WORKER.read_text(encoding="utf-8") + C18B_EXECUTION.read_text(encoding="utf-8")
         controller_source = TAIL_CONTROLLER.read_text(encoding="utf-8")
         self.assertIn(
             '"unassigned_candidates": str(',

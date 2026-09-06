@@ -125,6 +125,7 @@ class AnalysisTaskPaths:
         case_no: str,
         protein_key: str,
         run_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
     ) -> "AnalysisTaskPaths":
         """创建正式病例任务路径。
 
@@ -144,10 +145,11 @@ class AnalysisTaskPaths:
             "run_id",
         )
 
+        cases_root = Path(workspace_root) if workspace_root is not None else root / "workspace" / "cases"
+        if not cases_root.is_absolute():
+            cases_root = root / cases_root
         task_root = (
-            root
-            / "workspace"
-            / "cases"
+            cases_root.resolve()
             / clean_case_no
             / "analysis_v2"
             / clean_protein_key

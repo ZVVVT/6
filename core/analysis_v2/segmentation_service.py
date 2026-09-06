@@ -47,6 +47,7 @@ def _validate_field_id(field_id: str) -> str:
 def _copy_fields(
     paired_fields: Sequence[Dict[str, Any]],
     paths: AnalysisTaskPaths,
+    process_context=None,
 ) -> List[Dict[str, str]]:
     if not paired_fields:
         raise ValueError("\u81f3\u5c11\u9700\u8981\u4e00\u4e2a\u914d\u5bf9\u89c6\u91ce")
@@ -55,6 +56,8 @@ def _copy_fields(
     seen = set()
 
     for source in paired_fields:
+        if process_context is not None:
+            process_context.check_cancelled()
         field_id = _validate_field_id(source["field_id"])
 
         if field_id.lower() in seen:
@@ -66,6 +69,8 @@ def _copy_fields(
         item = {"field_id": field_id}
 
         for channel in ("tritc", "fitc"):
+            if process_context is not None:
+                process_context.check_cancelled()
             source_value = str(
                 source.get("{}_path".format(channel), "") or ""
             ).strip()
@@ -232,14 +237,17 @@ def run_head_segmentation(
     timeout_seconds: float = 120.0,
     case_no: Optional[str] = None,
     protein_key: Optional[str] = None,
+    process_context=None,
 ) -> Dict[str, Any]:
     """复制输入并在一个 worker 进程中完成一个批次的全部 TRITC。"""
+    if process_context is not None:
+        process_context.check_cancelled()
     paths.create_directories()
     logger = StageLogger.from_task_paths(paths, case_no=case_no, protein_key=protein_key)
     state = TaskStateStore.from_task_paths(paths)
     manifest = ManifestStore.from_task_paths(paths)
     try:
-        copied_fields = _copy_fields(paired_fields, paths)
+        copied_fields = _copy_fields(paired_fields, paths, process_context=process_context)
         state.initialize(case_no=case_no, protein_key=protein_key)
         manifest.initialize(case_no=case_no, protein_key=protein_key)
         state.update("input_ready", "head_segmentation", "配对视野已复制到任务 input")
@@ -286,11 +294,15 @@ def run_head_segmentation(
             input_json_path=worker_input_path,
             logs_dir=paths.logs_dir,
             worker_result_path=worker_result_path,
+            **({"process_context": process_context} if process_context is not None else {}),
         )
         if not run_result.success:
-            raise RuntimeError(
+            error = RuntimeError(
                 "直接 Cellpose worker 失败，return_code={}".format(run_result.return_code)
             )
+            error.return_code = run_result.return_code
+            error.log_path = run_result.stderr_path
+            raise error
         with worker_result_path.open("r", encoding="utf-8") as handle:
             worker_result = json.load(handle)
         if not worker_result.get("success"):
@@ -342,6 +354,8 @@ def run_head_segmentation(
             "fields": validated_fields,
         }
     except BaseException as exception:
+        if process_context is not None:
+            process_context.check_cancelled()
         logger.record_exception("head_segmentation", exception, "头部识别阶段失败")
         if state.exists():
             try:
