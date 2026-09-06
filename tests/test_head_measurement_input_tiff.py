@@ -5,6 +5,7 @@ import tifffile
 from PIL import Image
 
 from core.analysis_v2.head_measurement_service import (
+    _prepare_measurement_channel_image,
     prepare_standardized_head_input,
 )
 
@@ -79,6 +80,45 @@ def test_real_tiff_is_preserved_without_unnecessary_pixel_change(tmp_path):
     target = output / "xxx_G.tif"
     _assert_true_tiff(target, pixels)
     assert target.read_bytes() == source_bytes
+
+
+def test_jpeg_compressed_tiff_uses_formal_head_prepare_path(tmp_path):
+    pixels = np.arange(18 * 24 * 3, dtype=np.uint8).reshape(18, 24, 3)
+    source = tmp_path / "jpeg_compressed.tif"
+    destination = tmp_path / "prepared.tif"
+    tifffile.imwrite(str(source), pixels, compression="jpeg", photometric="rgb")
+
+    with tifffile.TiffFile(str(source)) as tif:
+        assert tif.pages[0].compression.name == "JPEG"
+
+    expected = tifffile.imread(str(source))
+    _prepare_measurement_channel_image(source, destination)
+    actual = tifffile.imread(str(destination))
+
+    assert destination.read_bytes() == source.read_bytes()
+    assert np.array_equal(actual, expected)
+
+
+def test_packaging_contract_collects_imagecodecs_and_runs_exe_smoke():
+    project_root = Path(__file__).resolve().parents[1]
+    requirements = (
+        project_root / "packaging/windows/requirements-build.txt"
+    ).read_text(encoding="utf-8")
+    spec = (
+        project_root / "packaging/windows/SpermProteinAnalyzer.spec"
+    ).read_text(encoding="utf-8")
+    build = (
+        project_root / "packaging/windows/build.ps1"
+    ).read_text(encoding="utf-8-sig")
+
+    assert "imagecodecs==2023.3.16" in requirements
+    assert 'collect_all(\n    "imagecodecs"\n)' in spec
+    assert "imagecodecs_binaries" in spec
+    assert '"imagecodecs",' in build
+    assert "_jpeg8*.pyd" in build
+    assert "--packaging-smoke-jpeg-tiff" in build
+    assert "verify_batch_readiness.py" in build
+    assert '(("protein1", "Q9BYW3"), ("protein3", "Q96P56"))' in build
 
 
 def test_uint16_head_labels_are_copied_without_any_change(tmp_path):

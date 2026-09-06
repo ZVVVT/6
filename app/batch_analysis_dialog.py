@@ -43,7 +43,7 @@ from core.analysis_v2.task_runner import (
     AnalysisV2TaskError,
     AnalysisV2TaskRunner,
 )
-from core.config_manager import ConfigManager
+from core.config_manager import ConfigManager, get_application_root
 from core.image_channel_matcher import ImageChannelMatcher
 from core.mvimageid_runner import MvImageIDRunner
 
@@ -1403,7 +1403,7 @@ class BatchAnalysisDialog(QDialog):
     # ---------- Pipeline / 环境预检查 ----------
 
     def get_project_root(self) -> Path:
-        return Path(__file__).resolve().parents[1]
+        return get_application_root()
 
     def resolve_project_path(self, path_value) -> Path:
         text = str(path_value or "").strip()

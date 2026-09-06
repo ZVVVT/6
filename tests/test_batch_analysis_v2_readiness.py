@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -52,6 +53,56 @@ def test_protein3_requires_head_tail_and_c18b_assets(tmp_path):
     assert ".venv-c18b\\python.exe" in result["path"]
     assert "frozen_parameters.json" in result["path"]
     assert "graph_constrained_instance_separation.py" in result["path"]
+
+
+def test_source_runtime_root_uses_shared_application_root():
+    harness = SimpleNamespace()
+    harness.get_project_root = lambda: (
+        batch.BatchAnalysisDialog.get_project_root(harness)
+    )
+
+    assert batch.BatchAnalysisDialog.get_project_root(harness) == PROJECT_ROOT
+    assert batch.BatchAnalysisDialog.check_pipeline_for_protein(
+        harness, "protein1",
+    )["ok"] is True
+
+
+def test_frozen_external_assets_use_executable_root_not_meipass(
+    tmp_path, monkeypatch,
+):
+    product_root = tmp_path / "product"
+    internal_root = product_root / "_internal"
+    internal_root.mkdir(parents=True)
+    executable = product_root / "SpermProteinAnalyzer.exe"
+    executable.touch()
+    create_assets(product_root, "protein3")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(internal_root), raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    harness = SimpleNamespace()
+    harness.get_project_root = lambda: (
+        batch.BatchAnalysisDialog.get_project_root(harness)
+    )
+
+    assert batch.BatchAnalysisDialog.get_project_root(harness) == product_root
+    assert batch.BatchAnalysisDialog.check_pipeline_for_protein(
+        harness, "protein1",
+    )["ok"] is True
+    assert batch.BatchAnalysisDialog.check_pipeline_for_protein(
+        harness, "protein3",
+    )["ok"] is True
+
+    (product_root / "pipelines/analysis_v2/measure_head_from_labels.cppipe").unlink()
+    assert batch.BatchAnalysisDialog.check_pipeline_for_protein(
+        harness, "protein1",
+    )["ok"] is False
+
+    create_assets(product_root, "protein3")
+    (product_root / ".venv-c18b/python.exe").unlink()
+    assert batch.BatchAnalysisDialog.check_pipeline_for_protein(
+        harness, "protein3",
+    )["ok"] is False
 
 
 @pytest.mark.parametrize(

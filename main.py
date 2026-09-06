@@ -196,7 +196,31 @@ def parse_startup_args(argv=None):
     return candidate_path_mode, qt_args
 
 
+def run_packaging_jpeg_tiff_smoke(argv=None) -> bool:
+    """在冻结运行时通过正式 Head 输入路径验证 JPEG-compressed TIFF。"""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--packaging-smoke-jpeg-tiff",
+        nargs=2,
+        metavar=("SOURCE", "DESTINATION"),
+    )
+    smoke_args, _remaining = parser.parse_known_args(argv)
+    if smoke_args.packaging_smoke_jpeg_tiff is None:
+        return False
+
+    from core.analysis_v2.head_measurement_service import (
+        _prepare_measurement_channel_image,
+    )
+
+    source, destination = smoke_args.packaging_smoke_jpeg_tiff
+    _prepare_measurement_channel_image(Path(source), Path(destination))
+    return True
+
+
 def main():
+    if run_packaging_jpeg_tiff_smoke():
+        return
+
     candidate_path_mode, qt_args = parse_startup_args()
     sys.argv = [sys.argv[0]] + qt_args
     print("C18B: candidate_path_mode={}".format(candidate_path_mode))

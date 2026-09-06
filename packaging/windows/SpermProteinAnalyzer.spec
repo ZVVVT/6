@@ -3,6 +3,7 @@
 import os
 
 from PyInstaller.utils.hooks import (
+    collect_all,
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
@@ -22,6 +23,11 @@ hiddenimports += collect_submodules("cv2")
 hiddenimports += collect_submodules("tifffile")
 hiddenimports += collect_submodules("openpyxl")
 
+imagecodecs_datas, imagecodecs_binaries, imagecodecs_hiddenimports = collect_all(
+    "imagecodecs"
+)
+hiddenimports += imagecodecs_hiddenimports
+
 datas = [
     (os.path.join(project_root, "assets"), "assets"),
     (os.path.join(project_root, "pipelines"), "pipelines"),
@@ -30,8 +36,10 @@ datas = [
 datas += collect_data_files("cv2")
 datas += collect_data_files("tifffile")
 datas += collect_data_files("openpyxl")
+datas += imagecodecs_datas
 
 binaries = collect_dynamic_libs("cv2")
+binaries += imagecodecs_binaries
 
 a = Analysis(
     [os.path.join(project_root, "main.py")],

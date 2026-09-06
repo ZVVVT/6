@@ -3,6 +3,7 @@ param(
     [string]$PythonExe = '',
     [string]$PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple',
     [string]$PythonEmbedUrl = 'https://www.python.org/ftp/python/3.8.3/python-3.8.3-embed-amd64.zip',
+    [string]$BuildRoot = '',
     [string]$OutputRoot = ''
 )
 
@@ -10,7 +11,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
 $BuildDate = Get-Date -Format "yyyyMMdd"
-$BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
+if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
+    $BuildRoot = "F:\sperm_protein_analyzer_pack_$BuildDate"
+}
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = "F:\sperm_protein_analyzer_Test_$BuildDate"
 }
@@ -226,12 +229,37 @@ if ($LASTEXITCODE -ne 0 -or $PythonVersion -ne '3.8.3') {
     throw "需要 Python 3.8.3，当前检测结果：$PythonVersion"
 }
 
-$Status = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot status --porcelain=v1)
+$UntrackedFiles = @(& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" `
+    -C $RepoRoot ls-files --others --exclude-standard)
 if ($LASTEXITCODE -ne 0) {
-    throw '无法检查 Git 工作区状态。'
+    throw '无法检查 Git 未跟踪文件。'
 }
-if ($Status) {
-    throw 'Git 工作区不是 clean，停止打包。'
+if ($UntrackedFiles) {
+    throw "工作区含未跟踪文件，停止打包：`r`n$($UntrackedFiles -join "`r`n")"
+}
+
+$StagedFiles = @(& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" `
+    -C $RepoRoot diff --cached --name-only)
+if ($LASTEXITCODE -ne 0) {
+    throw '无法检查 Git 暂存区。'
+}
+if ($StagedFiles) {
+    throw "工作区含已暂存修改，停止打包：`r`n$($StagedFiles -join "`r`n")"
+}
+
+$DeletedTrackedFiles = @(& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" `
+    -C $RepoRoot diff --name-only --diff-filter=D HEAD --)
+if ($LASTEXITCODE -ne 0) {
+    throw '无法检查 Git 已删除文件。'
+}
+if ($DeletedTrackedFiles) {
+    throw "工作区含已删除文件，停止打包：`r`n$($DeletedTrackedFiles -join "`r`n")"
+}
+
+$ModifiedTrackedFiles = @(& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" `
+    -C $RepoRoot diff --name-only --diff-filter=ACMRTUXB HEAD --)
+if ($LASTEXITCODE -ne 0) {
+    throw '无法读取 Git 工作树修改清单。'
 }
 
 $Branch = (& git -c "safe.directory=$($RepoRoot.Replace('\','/'))" -C $RepoRoot branch --show-current).Trim()
@@ -298,6 +326,18 @@ try {
     )
     Invoke-Git $ArchiveArgs
     Expand-Archive -LiteralPath $ArchivePath -DestinationPath $SourceRoot
+
+    # 不创建临时提交；将经过上述安全约束的已跟踪修改覆盖到隔离构建源码。
+    foreach ($relative in $ModifiedTrackedFiles) {
+        $workingFile = Join-Path $RepoRoot $relative
+        if (-not (Test-Path -LiteralPath $workingFile -PathType Leaf)) {
+            throw "工作树覆盖文件不存在：$relative"
+        }
+        $snapshotFile = Join-Path $SourceRoot $relative
+        $snapshotParent = Split-Path -Parent $snapshotFile
+        New-Item -ItemType Directory -Path $snapshotParent -Force | Out-Null
+        Copy-Item -LiteralPath $workingFile -Destination $snapshotFile -Force
+    }
 
     $RequiredPackagingFiles = @(
         'packaging\windows\SpermProteinAnalyzer.spec',
@@ -368,6 +408,7 @@ modules = [
     "reportlab",
     "cv2",
     "tifffile",
+    "imagecodecs",
 ]
 
 for name in modules:
@@ -385,6 +426,35 @@ for name in modules:
     & $BuildPython $ImportSmokePath
     if ($LASTEXITCODE -ne 0) {
         throw '构建环境关键模块导入检查失败。'
+    }
+
+    $JpegTiffSmoke = @'
+import sys
+
+import numpy
+import tifffile
+
+path = sys.argv[1]
+pixels = numpy.arange(24 * 32 * 3, dtype=numpy.uint8).reshape(24, 32, 3)
+tifffile.imwrite(path, pixels, compression="jpeg", photometric="rgb")
+with tifffile.TiffFile(path) as tif:
+    if tif.pages[0].compression.name != "JPEG":
+        raise SystemExit("smoke TIFF 不是 JPEG compression")
+decoded = tifffile.imread(path)
+if decoded.shape != pixels.shape:
+    raise SystemExit("JPEG TIFF 解码尺寸异常：{}".format(decoded.shape))
+print("JPEG-compressed TIFF 构建环境读取检查通过：{}".format(path))
+'@
+    $JpegTiffSmokePath = Join-Path $BuildRoot 'verify_jpeg_tiff.py'
+    $JpegTiffSourcePath = Join-Path $BuildRoot 'jpeg_compressed_smoke.tif'
+    [System.IO.File]::WriteAllText(
+        $JpegTiffSmokePath,
+        $JpegTiffSmoke,
+        $Utf8NoBomForChecks
+    )
+    & $BuildPython $JpegTiffSmokePath $JpegTiffSourcePath
+    if ($LASTEXITCODE -ne 0) {
+        throw '构建环境无法读取 JPEG-compressed TIFF。'
     }
 
     $EnvironmentFile = Join-Path $BuildRoot 'build_environment.txt'
@@ -422,6 +492,38 @@ for name in modules:
     if (-not (Test-Path -LiteralPath $InternalPath -PathType Container)) {
         throw '未生成 _internal 目录。'
     }
+
+    $PackagedJpegCodecBinary = Get-ChildItem -LiteralPath $InternalPath `
+        -Filter '_jpeg8*.pyd' -File -Recurse -ErrorAction SilentlyContinue
+    if (-not $PackagedJpegCodecBinary) {
+        throw 'PyInstaller 产物缺少 imagecodecs JPEG 二进制扩展。'
+    }
+
+    $JpegTiffPackagedPath = Join-Path (
+        [System.IO.Path]::GetTempPath()
+    ) ("sperm_protein_analyzer_jpeg_smoke_{0}.tif" -f [guid]::NewGuid())
+    $PackagedSmokeProcess = Start-Process `
+        -FilePath $ExePath `
+        -ArgumentList @(
+            '--packaging-smoke-jpeg-tiff',
+            ('"{0}"' -f $JpegTiffSourcePath),
+            ('"{0}"' -f $JpegTiffPackagedPath)
+        ) `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    if ($PackagedSmokeProcess.ExitCode -ne 0 -or
+        -not (Test-Path -LiteralPath $JpegTiffPackagedPath -PathType Leaf)) {
+        throw 'PyInstaller 成品无法通过正式 Head 路径读取 JPEG-compressed TIFF。'
+    }
+    & $BuildPython -c `
+        "import sys,tifffile; a=tifffile.imread(sys.argv[1]); b=tifffile.imread(sys.argv[2]); assert a.shape == b.shape and (a == b).all()" `
+        $JpegTiffSourcePath `
+        $JpegTiffPackagedPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'PyInstaller JPEG TIFF smoke 输出像素校验失败。'
+    }
+    Remove-Item -LiteralPath $JpegTiffPackagedPath -Force
 
     New-Item -ItemType Directory -Path $OutputRoot | Out-Null
 
@@ -707,7 +809,51 @@ print(value)
         }
     }
 
-    $CommitText = "branch=$Branch`r`ncommit=$Commit`r`n"
+    $BatchReadinessSmoke = @'
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+source_root = Path(sys.argv[1]).resolve()
+product_root = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(source_root))
+sys.frozen = True
+sys._MEIPASS = str(product_root / "_internal")
+sys.executable = str(product_root / "SpermProteinAnalyzer.exe")
+
+from app.batch_analysis_dialog import BatchAnalysisDialog
+
+harness = SimpleNamespace()
+harness.get_project_root = lambda: BatchAnalysisDialog.get_project_root(harness)
+if harness.get_project_root() != product_root:
+    raise SystemExit("Batch frozen root 错误：{}".format(harness.get_project_root()))
+for protein_key, display_name in (("protein1", "Q9BYW3"), ("protein3", "Q96P56")):
+    result = BatchAnalysisDialog.check_pipeline_for_protein(harness, protein_key)
+    if not result["ok"]:
+        raise SystemExit("{} packaged readiness 失败：{}".format(display_name, result["detail"]))
+    print("{} packaged readiness 正常".format(display_name))
+'@
+    $BatchReadinessSmokePath = Join-Path $BuildRoot 'verify_batch_readiness.py'
+    [System.IO.File]::WriteAllText(
+        $BatchReadinessSmokePath,
+        $BatchReadinessSmoke,
+        $Utf8NoBom
+    )
+    & $BuildPython $BatchReadinessSmokePath $SourceRoot $OutputRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw '成品 Batch Analysis V2 readiness 检查失败。'
+    }
+
+    $WorkingTreeText = if ($ModifiedTrackedFiles) {
+        $ModifiedTrackedFiles -join ','
+    }
+    else {
+        'clean'
+    }
+    $CommitText = (
+        "branch=$Branch`r`ncommit=$Commit`r`n" +
+        "working_tree_files=$WorkingTreeText`r`n"
+    )
     [System.IO.File]::WriteAllText(
         (Join-Path $OutputRoot 'git_source_commit.txt'),
         $CommitText,
