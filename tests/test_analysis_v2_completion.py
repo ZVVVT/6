@@ -33,11 +33,10 @@ def page(tmp_path, part, interactive, running=False):
         _analysis_running=True,
         tail_measurement_worker=object(), _worker_is_running=Mock(return_value=running),
         _analysis_context_matches_current=Mock(return_value=(True, "")),
+        database=Mock(),
         result_viewer=Mock(), append_log=Mock(), refresh_protein_status=Mock(),
         refresh_current_protein_workspace=Mock(), set_running_state=Mock(),
         select_next_unanalyzed_protein=Mock(),
-        _save_head_analysis_v2_to_database=Mock(return_value="saved"),
-        _save_tail_analysis_v2_to_database=Mock(return_value="saved"),
     )
     window._clear_analysis_v2_state = lambda: AnalysisWindow._clear_analysis_v2_state(window)
     window._finish_analysis_v2_ui = lambda **kw: AnalysisWindow._finish_analysis_v2_ui(window, **kw)
@@ -50,13 +49,16 @@ def page(tmp_path, part, interactive, running=False):
 def test_completion_dispatch_and_manual_order(tmp_path, part, interactive):
     window, payload = page(tmp_path, part, interactive)
     events = []
-    publication = Mock(summary={"success": True})
-    publication.commit.side_effect = lambda: events.append("commit") or ""
-    getattr(window, "_save_" + part + "_analysis_v2_to_database").side_effect = lambda **kw: events.append("db") or "saved"
+    published = SimpleNamespace(
+        output_dir=(tmp_path / "published").resolve(),
+        summary=payload["measurement_result"]["parsed_result"],
+        database_message="saved",
+        cleanup_warning="",
+    )
     window.result_viewer.refresh_results.side_effect = lambda: events.append("refresh")
     window.set_running_state.side_effect = lambda value: events.append("buttons")
     window.select_next_unanalyzed_protein.side_effect = lambda: events.append("next")
-    with patch("app.analysis_window.stage_" + part + "_measurement_output", side_effect=lambda **kw: events.append("publish") or publication) as publisher, patch("app.analysis_window.QMessageBox") as boxes, patch("app.analysis_window.show_long_message_dialog") as errors, patch("app.analysis_window.TaskStateStore"):
+    with patch("app.analysis_window.publish_measured_completion", side_effect=lambda **kw: events.extend(["publish", "db", "commit"]) or published) as publisher, patch("app.analysis_window.QMessageBox") as boxes, patch("app.analysis_window.show_long_message_dialog") as errors, patch("app.analysis_window.TaskStateStore"):
         boxes.information.side_effect = lambda *args: events.append("message")
         getattr(AnalysisWindow, "_on_" + part + "_measurement_finished")(window, True, 1.2, payload, "")
     assert window.analysis_v2_completion_result["part"] == part
@@ -80,7 +82,7 @@ def test_automatic_thread_cleanup_and_error(tmp_path, part, success):
     window, payload = page(tmp_path, part, False, running=True)
     worker = getattr(window, part + "_measurement_worker")
     window.sender = lambda: worker
-    with patch("app.analysis_window.QMessageBox") as boxes, patch("app.analysis_window.show_long_message_dialog") as dialog, patch("app.analysis_window.stage_" + part + "_measurement_output") as publisher:
+    with patch("app.analysis_window.QMessageBox") as boxes, patch("app.analysis_window.show_long_message_dialog") as dialog, patch("app.analysis_window.publish_measured_completion") as publisher:
         getattr(AnalysisWindow, "_on_" + part + "_measurement_finished")(window, success, 1, payload, "failed")
         getattr(AnalysisWindow, "_on_" + part + "_measurement_thread_finished")(window)
     assert getattr(window, part + "_measurement_worker") is None
@@ -117,7 +119,7 @@ def test_result_preserves_publisher_and_database_data(tmp_path, part):
 @pytest.mark.parametrize("part", ["head", "tail"])
 def test_manual_measurement_error_never_publishes(tmp_path, part):
     window, payload = page(tmp_path, part, True)
-    with patch("app.analysis_window.show_long_message_dialog") as dialog, patch("app.analysis_window.QMessageBox") as boxes, patch("app.analysis_window.stage_" + part + "_measurement_output") as publisher:
+    with patch("app.analysis_window.show_long_message_dialog") as dialog, patch("app.analysis_window.QMessageBox") as boxes, patch("app.analysis_window.publish_measured_completion") as publisher:
         getattr(AnalysisWindow, "_on_" + part + "_measurement_finished")(window, False, 1, payload, "failed")
     dialog.assert_called_once()
     publisher.assert_not_called()
@@ -152,8 +154,14 @@ def test_manual_delayed_thread_cleanup_preserves_next_selection(tmp_path, part):
     window, payload = page(tmp_path, part, True, running=True)
     worker = getattr(window, part + "_measurement_worker")
     window.sender = lambda: worker
+    published = SimpleNamespace(
+        output_dir=(tmp_path / "published").resolve(),
+        summary=payload["measurement_result"]["parsed_result"],
+        database_message="saved",
+        cleanup_warning="",
+    )
     with patch("app.analysis_window.QMessageBox") as boxes, patch(
-        "app.analysis_window.stage_" + part + "_measurement_output"
+        "app.analysis_window.publish_measured_completion", return_value=published,
     ), patch("app.analysis_window.TaskStateStore"):
         getattr(AnalysisWindow, "_on_" + part + "_measurement_finished")(
             window, True, 1, payload, "",

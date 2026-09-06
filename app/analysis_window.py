@@ -47,11 +47,8 @@ from core.analysis_v2.head_input_adapter import (
     build_head_segmentation_fields,
 )
 from core.analysis_v2.head_calibration_service import HeadCalibrationService
-from core.analysis_v2.head_result_publisher import (
-    stage_head_measurement_output,
-)
-from core.analysis_v2.tail_result_publisher import (
-    stage_tail_measurement_output,
+from core.analysis_v2.result_completion_service import (
+    publish_measured_completion,
 )
 from core.analysis_v2.tail_calibration_service import mark_tail_stage
 from core.analysis_v2.task_state import TaskStateStore
@@ -2470,99 +2467,6 @@ class AnalysisWindow(QWidget):
             )
             self._finish_analysis_v2_ui()
 
-    def _save_tail_analysis_v2_to_database(
-        self,
-        context,
-        output_dir: Path,
-        summary_result,
-    ) -> str:
-        """Atomically replace protein3 summary and field rows."""
-        context = dict(context or {})
-        summary_result = dict(summary_result or {})
-
-        case_id = context.get("case_id")
-        protein_name = str(
-            context.get("protein_name", "") or ""
-        ).strip()
-        image_folder = str(
-            context.get("raw_image_folder", "") or ""
-        )
-        output_folder = str(Path(output_dir).resolve())
-
-        if not case_id:
-            raise RuntimeError(
-                "当前 Analysis V2 上下文缺少数据库病例 ID。"
-            )
-        if not protein_name:
-            raise RuntimeError(
-                "当前 Analysis V2 上下文缺少蛋白名称。"
-            )
-        if not hasattr(
-            self.database,
-            "replace_protein_analysis_with_fields",
-        ):
-            raise RuntimeError(
-                "数据库组件缺少原子结果保存接口。"
-            )
-        if not summary_result.get("success"):
-            raise RuntimeError(
-                summary_result.get(
-                    "message",
-                    "尾部结果解析失败。",
-                )
-            )
-        if (
-            summary_result.get("calculation_mode")
-            != "head_equivalent"
-        ):
-            raise RuntimeError(
-                "尾部数据库保存拒绝非 head_equivalent 结果。"
-            )
-
-        total = dict(summary_result.get("total") or {})
-        rows = list(summary_result.get("rows") or [])
-        image_csv = str(
-            summary_result.get("image_csv", "") or ""
-        )
-
-        field_results = []
-        for item in rows:
-            field_results.append({
-                "field_no": str(
-                    item.get("image_number", "") or ""
-                ),
-                "sperm_count": item.get("sperm_count", 0),
-                "positive_count": item.get("positive_count", 0),
-                "mean_intensity": item.get("mean_intensity", 0),
-                "expression_rate": item.get("expression_rate", 0),
-                "overlay_image_path": "",
-                "csv_path": image_csv,
-            })
-
-        self.database.replace_protein_analysis_with_fields(
-            case_id=case_id,
-            protein_name=protein_name,
-            protein_part="tail",
-            image_folder=image_folder,
-            output_folder=output_folder,
-            total_fields=total.get("field_count", 0),
-            total_sperm_count=total.get("sperm_count", 0),
-            positive_count=total.get("positive_count", 0),
-            mean_intensity=total.get("mean_intensity", 0),
-            expression_rate=total.get("expression_rate", 0),
-            field_results=field_results,
-            status="完成",
-        )
-
-        return (
-            f"{protein_name} 结果已保存到数据库："
-            f"视野数 {total.get('field_count', 0)}，"
-            f"精子总数 {total.get('sperm_count', 0)}，"
-            f"关联尾部数 {total.get('positive_count', 0)}，"
-            f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
-            f"C 荧光强度 {total.get('mean_intensity_raw', total.get('mean_intensity', 0))}。"
-        )
-
     def _on_tail_measurement_finished(
         self,
         success: bool,
@@ -2617,7 +2521,6 @@ class AnalysisWindow(QWidget):
             )
             return
 
-        publication = None
         transaction_committed = False
 
         try:
@@ -2674,22 +2577,15 @@ class AnalysisWindow(QWidget):
                 "Analysis V2：尾部测量通过严格校验，正在安全发布正式结果。"
             )
 
-            publication = stage_tail_measurement_output(
-                source_dir=source_dir,
-                target_dir=target_dir,
-                expected_field_count=expected_field_count,
-                measurement_contract=validation,
+            published_completion = publish_measured_completion(
+                completion_result=completion,
+                database=self.database,
             )
-
-            save_message = self._save_tail_analysis_v2_to_database(
-                context=context,
-                output_dir=target_dir,
-                summary_result=publication.summary,
-            )
-
-            cleanup_warning = publication.commit()
-            publication = None
             transaction_committed = True
+            target_dir = published_completion.output_dir
+            parsed_result = published_completion.summary
+            save_message = published_completion.database_message
+            cleanup_warning = published_completion.cleanup_warning
 
             context["tail_measurement_payload"] = payload
             context["tail_measurement_elapsed_seconds"] = float(elapsed or 0.0)
@@ -2795,16 +2691,12 @@ class AnalysisWindow(QWidget):
                 )
                 return
 
-            rollback_detail = ""
-            if publication is not None:
-                try:
-                    publication.rollback()
-                except BaseException as rollback_exception:
-                    rollback_detail = (
-                        "\n\n文件回滚异常：{}".format(
-                            rollback_exception
-                        )
-                    )
+            rollback_error = getattr(exception, "rollback_error", None)
+            rollback_detail = (
+                "\n\n文件回滚异常：{}".format(rollback_error)
+                if rollback_error is not None
+                else ""
+            )
 
             self._show_analysis_v2_error(
                 "尾部结果发布失败",
@@ -2860,91 +2752,6 @@ class AnalysisWindow(QWidget):
         )
         self._finish_analysis_v2_ui()
 
-    def _save_head_analysis_v2_to_database(
-        self,
-        context,
-        output_dir: Path,
-        summary_result,
-    ) -> str:
-        context = dict(context or {})
-        summary_result = dict(summary_result or {})
-
-        case_id = context.get("case_id")
-        protein_name = str(
-            context.get("protein_name", "") or ""
-        ).strip()
-        image_folder = str(
-            context.get("raw_image_folder", "") or ""
-        )
-        output_folder = str(Path(output_dir).resolve())
-
-        if not case_id:
-            raise RuntimeError(
-                "当前 Analysis V2 上下文缺少数据库病例 ID。"
-            )
-        if not protein_name:
-            raise RuntimeError(
-                "当前 Analysis V2 上下文缺少蛋白名称。"
-            )
-        if not hasattr(
-            self.database,
-            "replace_protein_analysis_with_fields",
-        ):
-            raise RuntimeError(
-                "数据库组件缺少原子结果保存接口。"
-            )
-        if not summary_result.get("success"):
-            raise RuntimeError(
-                summary_result.get(
-                    "message",
-                    "头部结果解析失败。",
-                )
-            )
-
-        total = dict(summary_result.get("total") or {})
-        rows = list(summary_result.get("rows") or [])
-        image_csv = str(
-            summary_result.get("image_csv", "") or ""
-        )
-
-        field_results = []
-        for item in rows:
-            field_results.append({
-                "field_no": str(
-                    item.get("image_number", "") or ""
-                ),
-                "sperm_count": item.get("sperm_count", 0),
-                "positive_count": item.get("positive_count", 0),
-                "mean_intensity": item.get("mean_intensity", 0),
-                "expression_rate": item.get("expression_rate", 0),
-                "overlay_image_path": "",
-                "csv_path": image_csv,
-            })
-
-        self.database.replace_protein_analysis_with_fields(
-            case_id=case_id,
-            protein_name=protein_name,
-            protein_part="head",
-            image_folder=image_folder,
-            output_folder=output_folder,
-            total_fields=total.get("field_count", 0),
-            total_sperm_count=total.get("sperm_count", 0),
-            positive_count=total.get("positive_count", 0),
-            mean_intensity=total.get("mean_intensity", 0),
-            expression_rate=total.get("expression_rate", 0),
-            field_results=field_results,
-            status="完成",
-        )
-
-        return (
-            f"{protein_name} 结果已保存到数据库："
-            f"视野数 {total.get('field_count', 0)}，"
-            f"精子总数 {total.get('sperm_count', 0)}，"
-            f"共定位数 {total.get('positive_count', 0)}，"
-            f"标定率 {self.format_rate_for_display(total.get('expression_rate', 0))}，"
-            f"荧光强度 {self.format_int_for_display(total.get('mean_intensity', 0))}。"
-        )
-
     def _on_head_measurement_finished(
         self,
         success: bool,
@@ -2994,7 +2801,6 @@ class AnalysisWindow(QWidget):
             )
             return
 
-        publication = None
         transaction_committed = False
 
         try:
@@ -3055,23 +2861,14 @@ class AnalysisWindow(QWidget):
                 "Analysis V2：测量完成，正在安全发布正式结果。"
             )
 
-            publication = stage_head_measurement_output(
-                source_dir=source_dir,
-                target_dir=target_dir,
-                expected_field_count=expected_field_count,
+            published_completion = publish_measured_completion(
+                completion_result=completion,
+                database=self.database,
             )
-
-            save_message = (
-                self._save_head_analysis_v2_to_database(
-                    context=context,
-                    output_dir=target_dir,
-                    summary_result=publication.summary,
-                )
-            )
-
-            cleanup_warning = publication.commit()
-            publication = None
             transaction_committed = True
+            target_dir = published_completion.output_dir
+            save_message = published_completion.database_message
+            cleanup_warning = published_completion.cleanup_warning
 
             context["measurement_payload"] = payload
             context["measurement_elapsed_seconds"] = float(
@@ -3158,17 +2955,12 @@ class AnalysisWindow(QWidget):
                 )
                 return
 
-            rollback_detail = ""
-
-            if publication is not None:
-                try:
-                    publication.rollback()
-                except BaseException as rollback_exception:
-                    rollback_detail = (
-                        "\n\n文件回滚异常：{}".format(
-                            rollback_exception
-                        )
-                    )
+            rollback_error = getattr(exception, "rollback_error", None)
+            rollback_detail = (
+                "\n\n文件回滚异常：{}".format(rollback_error)
+                if rollback_error is not None
+                else ""
+            )
 
             self._show_analysis_v2_error(
                 "头部结果发布失败",

@@ -3,6 +3,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANALYSIS_WINDOW = PROJECT_ROOT / "app" / "analysis_window.py"
+COMPLETION_SERVICE = PROJECT_ROOT / "core" / "analysis_v2" / "result_completion_service.py"
 
 
 def _source():
@@ -48,20 +49,14 @@ def test_page_display_and_execution_use_same_tail_condition():
 
 def test_head_and_tail_workflows_keep_workers_and_database_parts():
     source = _source()
+    service_source = COMPLETION_SERVICE.read_text(encoding="utf-8")
     head_callback = source[
         source.index("def _on_head_calibration_completed"):
         source.index("def _start_tail_path_worker")
     ]
-    head_database = source[
-        source.index("def _save_head_analysis_v2_to_database"):
-        source.index("def _on_head_measurement_finished")
-    ]
-    tail_database = source[
-        source.index("def _save_tail_analysis_v2_to_database"):
-        source.index("def _on_tail_measurement_finished")
-    ]
-
     assert 'context.get("workflow") == "protein3_tail"' in head_callback
     assert "HeadMeasurementWorker(" in head_callback
-    assert 'protein_part="head"' in head_database
-    assert 'protein_part="tail"' in tail_database
+    assert 'part == "head"' in service_source
+    assert 'part == "tail"' in service_source
+    assert "replace_protein_analysis_with_fields" in service_source
+    assert source.count("publish_measured_completion(") == 2

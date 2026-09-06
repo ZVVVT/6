@@ -6,42 +6,32 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANALYSIS_WINDOW = PROJECT_ROOT / "app" / "analysis_window.py"
+COMPLETION_SERVICE = PROJECT_ROOT / "core" / "analysis_v2" / "result_completion_service.py"
 
 
 class TailPublicationWiringTests(unittest.TestCase):
     def test_tail_callback_stages_files_before_atomic_database_replace(self):
-        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
-        start = source.index("def _on_tail_measurement_finished")
-        end = source.index(
-            "def _on_tail_measurement_thread_finished",
-            start,
-        )
-        block = source[start:end]
+        block = COMPLETION_SERVICE.read_text(encoding="utf-8")
 
         stage_index = block.index("stage_tail_measurement_output(")
-        database_index = block.index(
-            "_save_tail_analysis_v2_to_database("
-        )
+        database_index = block.index("analysis_id = replace(")
         commit_index = block.index("publication.commit()")
 
         self.assertLess(stage_index, database_index)
         self.assertLess(database_index, commit_index)
         self.assertIn("publication.rollback()", block)
         self.assertIn('calculation_mode") != "head_equivalent"', block)
-        self.assertIn("candidate_output_dir", block)
-        self.assertIn("target_output_dir", block)
+        self.assertIn("source_dir", block)
+        self.assertIn("target_dir", block)
 
     def test_tail_database_save_is_explicitly_tail_and_atomic(self):
-        source = ANALYSIS_WINDOW.read_text(encoding="utf-8")
-        start = source.index("def _save_tail_analysis_v2_to_database")
-        end = source.index("def _on_tail_measurement_finished", start)
-        block = source[start:end]
+        block = COMPLETION_SERVICE.read_text(encoding="utf-8")
 
         self.assertIn(
-            "replace_protein_analysis_with_fields(",
+            '"replace_protein_analysis_with_fields"',
             block,
         )
-        self.assertIn('protein_part="tail"', block)
+        self.assertIn("protein_part=part", block)
         self.assertIn('"head_equivalent"', block)
         self.assertNotIn("save_protein_analysis(", block)
         self.assertNotIn("save_field_result(", block)

@@ -3,9 +3,11 @@
 import ast
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
+
+from core.analysis_v2.result_completion_service import publish_measured_completion
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "app" / "analysis_window.py"
@@ -63,20 +65,28 @@ def test_completion_message_distinguishes_tail_and_association_counts(
 
 
 def test_save_message_names_associated_count_without_changing_database_value(tmp_path):
-    method = _method("_save_tail_analysis_v2_to_database")
-    namespace = {"Path": Path}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), namespace)
     database = Mock()
-    window = SimpleNamespace(database=database, format_rate_for_display=str)
-    message = namespace[method.name](
-        window,
-        {"case_id": 1, "protein_name": "Q96P56"},
-        tmp_path,
-        {"success": True, "calculation_mode": "head_equivalent",
-         "total": {"field_count": 2, "sperm_count": 100, "positive_count": 65,
-                   "mean_intensity": 12, "expression_rate": 65}, "rows": []},
-    )
-    assert "关联尾部数 65，" in message
-    assert "有效尾部数" not in message
+    summary = {"success": True, "calculation_mode": "head_equivalent",
+               "total": {"field_count": 2, "sperm_count": 100, "positive_count": 65,
+                         "mean_intensity": 12, "expression_rate": 65}, "rows": []}
+    publication = Mock(summary=summary)
+    publication.commit.return_value = ""
+    completion = {
+        "status": "measured", "part": "tail", "protein_key": "protein3",
+        "protein_name": "Q96P56", "task_root": str(tmp_path / "task"),
+        "source_dir": tmp_path / "candidate", "target_dir": tmp_path / "formal",
+        "expected_field_count": 2, "measurement_contract": {"tail_object_count": 77},
+        "context": {"case_id": 1, "case_no": "CASE", "protein_key": "protein3",
+                    "protein_name": "Q96P56", "raw_image_folder": "raw"},
+        "tail_object_count": 77, "associated_object_count": 65,
+        "unresolved_object_count": 12,
+    }
+    with patch(
+        "core.analysis_v2.result_completion_service.stage_tail_measurement_output",
+        return_value=publication,
+    ):
+        result = publish_measured_completion(completion, database)
+    assert "关联尾部数 65，" in result.database_message
+    assert "有效尾部数" not in result.database_message
     database.replace_protein_analysis_with_fields.assert_called_once()
     assert database.replace_protein_analysis_with_fields.call_args[1]["positive_count"] == 65
