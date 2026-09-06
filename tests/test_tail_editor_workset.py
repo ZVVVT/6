@@ -1,4 +1,5 @@
 import json
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,38 @@ def make_count_editor(accepted_count, associated_count):
 
 
 class TailEditorWorksetTests(unittest.TestCase):
+    def test_associated_and_unresolved_tail_base_colors_are_white(self):
+        editor = make_89_editor()
+        editor.display_height, editor.display_width = editor.fragment_labels.shape
+        editor._refresh_unassigned_display()
+
+        unresolved_boundary = editor.display_unassigned_rgba[..., 3] == 1.0
+        np.testing.assert_array_equal(
+            editor.display_unassigned_rgba[unresolved_boundary, :3],
+            np.ones((int(unresolved_boundary.sum()), 3), dtype=np.float32),
+        )
+
+        render_source = inspect.getsource(TailResultEditor._build_result_owner)
+        self.assertIn(
+            "rgba[boundary] = (1.0, 1.0, 1.0, 1.0)",
+            render_source,
+        )
+
+        associated = [
+            item for item in editor.workset_objects
+            if item.association_status == "associated"
+        ]
+        unresolved = [
+            item for item in editor.workset_objects
+            if item.association_status == "unresolved"
+        ]
+        self.assertEqual((len(associated), len(unresolved)), (68, 21))
+        self.assertTrue(all(item.head_label_id is None for item in unresolved))
+
+    def test_selection_and_preview_colors_remain_yellow(self):
+        redraw_source = inspect.getsource(TailResultEditor.redraw)
+        self.assertGreaterEqual(redraw_source.count("color=(1.0, 0.9, 0.0)"), 4)
+
     def test_save_message_uses_228_accepted_not_187_associated(self):
         editor = make_count_editor(228, 187)
         self.assertEqual(

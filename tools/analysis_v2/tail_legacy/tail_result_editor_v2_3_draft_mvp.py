@@ -5,7 +5,7 @@
 
 界面原则：
 - 整张Merge图一次显示，不逐个头部翻页；
-- 白色粗轮廓表示已经纳入结果的尾部，紫色表示待关联候选，黄色表示当前选择或手动预览；
+- 白色粗轮廓表示已经纳入结果的尾部，黄色表示当前选择或手动预览；
 - 没有结果的头部不会被标成待处理，因为并非每个头部都有合格尾部；
 - 自动结果正确时无需操作；错误时点击后删除或重画；
 - 漏识别但确有合格尾部时，点击“新增 / 重画”后选择头部并绘制路径；
@@ -1637,7 +1637,7 @@ class TailResultEditor:
         )
         self.display_unassigned_rgba = self._display_boundary_rgba(
             unassigned_mask,
-            color=(0.78, 0.20, 1.0),
+            color=(1.0, 1.0, 1.0),
             alpha=1.0,
         )
 
@@ -2092,7 +2092,7 @@ class TailResultEditor:
         self.axis.set_ylim(self.image_height, 0)
         self.axis.set_axis_off()
         self.axis.set_title(
-            "精子尾部结果校准  |  橙色＝头部真实轮廓  白色＝已关联尾部  紫色＝未关联尾部  黄色＝当前选择/预览",
+            "精子尾部结果校准  |  橙色＝头部真实轮廓  白色＝尾部轮廓  黄色＝当前选择/预览",
             fontsize=12,
         )
 
@@ -2251,7 +2251,7 @@ class TailResultEditor:
         mask = np.isin(self.display_fragment_labels, values)
         self.display_unassigned_rgba = self._display_boundary_rgba(
             mask,
-            color=(0.78, 0.20, 1.0),
+            color=(1.0, 1.0, 1.0),
             alpha=1.0,
         )
         boundary = self._label_boundary(
