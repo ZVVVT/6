@@ -285,8 +285,24 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_cases(self, keyword: str = ""):
+    def get_cases(self, keyword: str = "", sort_field=None, sort_order: str = "desc"):
         keyword = (keyword or "").strip()
+
+        # 排序字段和方向必须经过白名单映射，不能把调用方输入直接拼进 SQL。
+        if sort_field == "test_date" and sort_order in ("asc", "desc"):
+            order_by = """
+                ORDER BY
+                    CASE
+                        WHEN cases.test_date IS NULL
+                          OR TRIM(cases.test_date) = ''
+                        THEN 1
+                        ELSE 0
+                    END ASC,
+                    cases.test_date {direction},
+                    cases.id DESC
+            """.format(direction=sort_order.upper())
+        else:
+            order_by = "ORDER BY cases.id DESC"
 
         base_select = """
             SELECT
@@ -335,8 +351,8 @@ class Database:
                        OR cases.sample_no LIKE ?
                        OR cases.test_date LIKE ?
                        OR cases.phone LIKE ?
-                    ORDER BY cases.id DESC
-                    """,
+                    """
+                    + order_by,
                     (
                         like_keyword,
                         like_keyword,
@@ -348,9 +364,7 @@ class Database:
             else:
                 cursor.execute(
                     base_select
-                    + """
-                    ORDER BY cases.id DESC
-                    """
+                    + order_by
                 )
             return [dict(row) for row in cursor.fetchall()]
 

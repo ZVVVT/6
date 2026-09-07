@@ -261,6 +261,8 @@ class CaseManagerWindow(QWidget):
         self.database = database
         self.current_cases: List[Dict] = []
         self.current_page = 0
+        self.sort_field = None
+        self.sort_order = "desc"
         self._page_size = 1
         self._table_row_height = 38
         self._min_page_size = 3
@@ -613,6 +615,7 @@ class CaseManagerWindow(QWidget):
         self.table.setColumnCount(len(self.TABLE_HEADERS))
         self.table.setHorizontalHeaderLabels(self.TABLE_HEADERS)
         self.table.setColumnHidden(0, True)
+        self.table.setSortingEnabled(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -631,6 +634,8 @@ class CaseManagerWindow(QWidget):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(42)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
 
         # 列宽说明：
         # 1. 不再使用单一 Stretch，也不写固定像素列宽。
@@ -703,6 +708,7 @@ class CaseManagerWindow(QWidget):
         self.btn_edit.clicked.connect(self.edit_case)
         self.btn_delete.clicked.connect(self.delete_case)
         self.table.doubleClicked.connect(self.open_selected_case)
+        header.sectionClicked.connect(self._handle_header_section_clicked)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -771,9 +777,27 @@ class CaseManagerWindow(QWidget):
         keyword = self.search_edit.text().strip()
         self._load_cases_by_keyword(keyword)
 
+    def _handle_header_section_clicked(self, section):
+        """仅允许通过检测日期表头切换服务端排序。"""
+        test_date_column = self.TABLE_HEADERS.index("检测日期")
+        if section != test_date_column:
+            return
+
+        if self.sort_field == "test_date":
+            self.sort_order = "asc" if self.sort_order == "desc" else "desc"
+        else:
+            self.sort_field = "test_date"
+            self.sort_order = "desc"
+
+        header = self.table.horizontalHeader()
+        indicator_order = Qt.DescendingOrder if self.sort_order == "desc" else Qt.AscendingOrder
+        header.setSortIndicator(test_date_column, indicator_order)
+        header.setSortIndicatorShown(True)
+        self._load_cases_by_keyword(self.search_edit.text().strip())
+
     def _load_cases_by_keyword(self, keyword):
         try:
-            cases = self.database.get_cases(keyword)
+            cases = self.database.get_cases(keyword, self.sort_field, self.sort_order)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载病例失败：\n{e}")
             return
