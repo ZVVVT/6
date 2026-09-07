@@ -470,19 +470,9 @@ class SettingsWindow(QWidget):
 
         header = self.protein_table.horizontalHeader()
         header.setFixedHeight(36)
+        # 仅有 0、1、2、4、5 五列可见；统一 Stretch 让它们始终铺满
+        # 蛋白配置表的可用宽度，并在窗口缩放时自动重新分配列宽。
         header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.Fixed)
-        header.setSectionResizeMode(6, QHeaderView.Fixed)
-        self.protein_table.setColumnWidth(0, 78)
-        self.protein_table.setColumnWidth(1, 160)
-        self.protein_table.setColumnWidth(2, 96)
-        self.protein_table.setColumnWidth(4, 110)
-        self.protein_table.setColumnWidth(5, 120)
-        self.protein_table.setColumnWidth(6, 104)
         self.protein_table.setColumnHidden(3, True)
         self.protein_table.setColumnHidden(6, True)
 
