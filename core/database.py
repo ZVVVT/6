@@ -289,18 +289,23 @@ class Database:
         keyword = (keyword or "").strip()
 
         # 排序字段和方向必须经过白名单映射，不能把调用方输入直接拼进 SQL。
-        if sort_field == "test_date" and sort_order in ("asc", "desc"):
+        sortable_columns = {
+            "test_date": "cases.test_date",
+            "created_at": "cases.created_at",
+        }
+        sort_column = sortable_columns.get(sort_field)
+        if sort_column and sort_order in ("asc", "desc"):
             order_by = """
                 ORDER BY
                     CASE
-                        WHEN cases.test_date IS NULL
-                          OR TRIM(cases.test_date) = ''
+                        WHEN {column} IS NULL
+                          OR TRIM({column}) = ''
                         THEN 1
                         ELSE 0
                     END ASC,
-                    cases.test_date {direction},
+                    {column} {direction},
                     cases.id DESC
-            """.format(direction=sort_order.upper())
+            """.format(column=sort_column, direction=sort_order.upper())
         else:
             order_by = "ORDER BY cases.id DESC"
 

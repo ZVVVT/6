@@ -778,20 +778,24 @@ class CaseManagerWindow(QWidget):
         self._load_cases_by_keyword(keyword)
 
     def _handle_header_section_clicked(self, section):
-        """仅允许通过检测日期表头切换服务端排序。"""
-        test_date_column = self.TABLE_HEADERS.index("检测日期")
-        if section != test_date_column:
+        """仅允许通过可排序表头切换服务端排序。"""
+        sortable_columns = {
+            self.TABLE_HEADERS.index("检测日期"): "test_date",
+            self.TABLE_HEADERS.index("创建时间"): "created_at",
+        }
+        sort_field = sortable_columns.get(section)
+        if sort_field is None:
             return
 
-        if self.sort_field == "test_date":
+        if self.sort_field == sort_field:
             self.sort_order = "asc" if self.sort_order == "desc" else "desc"
         else:
-            self.sort_field = "test_date"
+            self.sort_field = sort_field
             self.sort_order = "desc"
 
         header = self.table.horizontalHeader()
         indicator_order = Qt.DescendingOrder if self.sort_order == "desc" else Qt.AscendingOrder
-        header.setSortIndicator(test_date_column, indicator_order)
+        header.setSortIndicator(section, indicator_order)
         header.setSortIndicatorShown(True)
         self._load_cases_by_keyword(self.search_edit.text().strip())
 
