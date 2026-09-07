@@ -278,8 +278,10 @@ class SettingsWindow(QWidget):
         self.tabs.addTab(tab, "软件信息")
 
     def init_runtime_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        # 保留运行环境页和全部控件，供配置加载、保存及路径检查继续使用；
+        # 交付版不将该页加入正式 Tab，避免用户从界面进入。
+        self.runtime_tab = QWidget()
+        layout = QVBoxLayout(self.runtime_tab)
 
         group = QGroupBox("运行环境")
         form = QFormLayout(group)
@@ -323,7 +325,6 @@ class SettingsWindow(QWidget):
         layout.addWidget(group)
         layout.addWidget(hint)
         layout.addStretch()
-        self.tabs.addTab(tab, "运行环境")
 
     def init_qc_tab(self):
         tab = QWidget()
