@@ -127,6 +127,24 @@ def test_publication_summary_defines_database_summary_and_fields(tmp_path, part)
     assert result.field_rows == saved["field_results"]
 
 
+@pytest.mark.parametrize("part", ["head", "tail"])
+def test_protein3_database_part_comes_from_completion(tmp_path, part):
+    value, summary = completion(tmp_path, part)
+    value["protein_key"] = "protein3"
+    value["protein_name"] = "Q96P56"
+    value["context"]["protein_key"] = "protein3"
+    value["context"]["protein_name"] = "Q96P56"
+    database = Mock()
+    with patch(
+        "core.analysis_v2.result_completion_service.stage_{}_measurement_output".format(part),
+        return_value=publication(summary),
+    ):
+        publish_measured_completion(value, database)
+    assert database.replace_protein_analysis_with_fields.call_args.kwargs[
+        "protein_part"
+    ] == part
+
+
 @pytest.mark.parametrize(
     "tail_count,associated_count,unresolved_count",
     [(77, 65, 12), (12, 0, 12)],

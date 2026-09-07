@@ -1426,8 +1426,22 @@ class BatchAnalysisDialog(QDialog):
                 "detail": "{}（{}）：不支持的正式 protein_key。".format(display_name, key),
             }
 
+        allowed_parts = formal[1]
+        configured_part = str(self.config.get_protein_part(key) or "").strip().lower()
+        if configured_part not in allowed_parts:
+            return {
+                "ok": False,
+                "text": "缺失",
+                "path": "",
+                "detail": "{}（{}）：配置 part={}，允许 {}。".format(
+                    display_name, key, configured_part or "<empty>",
+                    "/".join(allowed_parts),
+                ),
+                "protein_part": configured_part,
+            }
+
         assets = list(ANALYSIS_V2_HEAD_ASSETS)
-        if formal[1] == "tail":
+        if configured_part == "tail":
             assets.extend(ANALYSIS_V2_TAIL_ASSETS)
 
         project_root = self.get_project_root()
@@ -1445,12 +1459,14 @@ class BatchAnalysisDialog(QDialog):
                 "text": "缺失",
                 "path": "",
                 "detail": "{}（{}）：{}".format(display_name, key, "；".join(missing)),
+                "protein_part": configured_part,
             }
         return {
             "ok": True,
             "text": "正常",
             "path": "；".join(checked_paths),
             "detail": "{}（{}）：Analysis V2 运行资源正常。".format(display_name, key),
+            "protein_part": configured_part,
         }
 
     def check_mvimageid_environment(self) -> dict:
@@ -1610,6 +1626,14 @@ class BatchAnalysisDialog(QDialog):
         if channels.get("_complete_fields", 0) <= 0:
             return "缺少G或R"
 
+        if (
+            pipeline_check is not None
+            and pipeline_check.get("protein_part") == "tail"
+            and channels.get("_merge_complete_fields", 0)
+            < channels.get("_complete_fields", 0)
+        ):
+            return "缺少Merge"
+
         if pipeline_check is not None and not pipeline_check.get("ok", False):
             return "V2资源缺失"
         if env_check is not None and not env_check.get("ok", False):
@@ -1630,6 +1654,7 @@ class BatchAnalysisDialog(QDialog):
             "Merge": 0,
             "_total_fields": 0,
             "_complete_fields": 0,
+            "_merge_complete_fields": 0,
             "_duplicate_fields": 0,
             "_unmatched_files": 0,
         }
@@ -1645,6 +1670,10 @@ class BatchAnalysisDialog(QDialog):
         counts["Merge"] = result.channel_count("Merge")
         counts["_total_fields"] = result.total_fields
         counts["_complete_fields"] = result.complete_count
+        counts["_merge_complete_fields"] = sum(
+            1 for item in result.fields
+            if not item.duplicates and item.get("G") and item.get("R") and item.get("Merge")
+        )
         counts["_duplicate_fields"] = sum(1 for item in result.fields if item.duplicates)
         counts["_unmatched_files"] = len(result.unmatched_files)
         return counts
@@ -1866,7 +1895,7 @@ class BatchAnalysisDialog(QDialog):
             item.setForeground(Qt.darkGreen)
         elif status in ["分析中"]:
             item.setForeground(Qt.blue)
-        elif status in ["失败", "缺少G或R", "图片重复", "V2资源缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
+        elif status in ["失败", "缺少G或R", "缺少Merge", "图片重复", "V2资源缺失", "环境异常", "匹配多个文件夹", "匹配名冲突", "文件夹重复"]:
             item.setForeground(Qt.red)
         else:
             item.setForeground(Qt.gray)

@@ -32,7 +32,7 @@ class AnalysisV2TaskRequest:
     """Matched rows use field_no/R/G/Merge, or field_id/*_path service keys.
 
     workspace_root denotes the cases directory, as ConfigManager does.
-    protein_part is head/tail; when omitted it is derived from protein_key.
+    protein_part is the frozen head/tail value read for this request.
     """
 
     case_no: str
@@ -125,9 +125,11 @@ class AnalysisV2TaskRunner:
         key = request.protein_key
         if key not in ("protein1", "protein2", "protein3", "protein4", "protein5"):
             raise ValueError("Unsupported protein_key: {}".format(key))
-        part = "tail" if key == "protein3" else "head"
-        if request.protein_part is not None and request.protein_part != part:
-            raise ValueError("protein_part does not match protein_key")
+        part = str(request.protein_part or "").strip().lower()
+        if part not in ("head", "tail"):
+            raise ValueError("protein_part must be head or tail")
+        if part == "tail" and key != "protein3":
+            raise ValueError("tail is supported only for protein3")
         if _sanitize_identifier(request.case_no, "case_no") != request.case_no:
             raise ValueError("case_no must be a safe, nonempty directory name")
         if request.candidate_path_mode not in ("graph_preserving", "ordered"):

@@ -12,8 +12,16 @@ from app import batch_analysis_dialog as batch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def readiness_harness(project_root):
-    return SimpleNamespace(get_project_root=lambda: Path(project_root))
+def readiness_harness(project_root, parts=None):
+    configured = {
+        "protein1": "head", "protein2": "head", "protein3": "tail",
+        "protein4": "head", "protein5": "head",
+    }
+    configured.update(parts or {})
+    return SimpleNamespace(
+        get_project_root=lambda: Path(project_root),
+        config=SimpleNamespace(get_protein_part=lambda key: configured.get(key, "")),
+    )
 
 
 def create_assets(project_root, protein_key):
@@ -55,8 +63,37 @@ def test_protein3_requires_head_tail_and_c18b_assets(tmp_path):
     assert "graph_constrained_instance_separation.py" in result["path"]
 
 
+def test_protein3_head_requires_only_head_assets(tmp_path):
+    create_assets(tmp_path, "protein1")
+    result = batch.BatchAnalysisDialog.check_pipeline_for_protein(
+        readiness_harness(tmp_path, {"protein3": "head"}), "protein3",
+    )
+    assert result["ok"] is True
+    assert result["protein_part"] == "head"
+    assert "measure_head_from_labels.cppipe" in result["path"]
+    assert "measure_tail_from_labels.cppipe" not in result["path"]
+    assert ".venv-c18b\\python.exe" not in result["path"]
+
+
+def test_readiness_requires_merge_only_for_protein3_tail(tmp_path):
+    folder = tmp_path / "images"
+    folder.mkdir()
+    channels = {
+        "_duplicate_fields": 0, "_complete_fields": 1,
+        "_merge_complete_fields": 0,
+    }
+    head_check = {"ok": True, "protein_part": "head"}
+    tail_check = {"ok": True, "protein_part": "tail"}
+    assert batch.BatchAnalysisDialog.get_status_by_folder_and_channels(
+        object(), folder, channels, head_check, {"ok": True},
+    ) == "可分析"
+    assert batch.BatchAnalysisDialog.get_status_by_folder_and_channels(
+        object(), folder, channels, tail_check, {"ok": True},
+    ) == "缺少Merge"
+
+
 def test_source_runtime_root_uses_shared_application_root():
-    harness = SimpleNamespace()
+    harness = readiness_harness(PROJECT_ROOT)
     harness.get_project_root = lambda: (
         batch.BatchAnalysisDialog.get_project_root(harness)
     )
@@ -80,7 +117,7 @@ def test_frozen_external_assets_use_executable_root_not_meipass(
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(internal_root), raising=False)
     monkeypatch.setattr(sys, "executable", str(executable))
-    harness = SimpleNamespace()
+    harness = readiness_harness(product_root)
     harness.get_project_root = lambda: (
         batch.BatchAnalysisDialog.get_project_root(harness)
     )

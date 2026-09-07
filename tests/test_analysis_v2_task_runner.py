@@ -29,7 +29,9 @@ def harness(tmp_path, monkeypatch):
     image = tmp_path / "image.tif"
     image.write_bytes(b"input")
     fields = [{"field_no": "001", "R": str(image), "G": str(image), "Merge": str(image)}]
-    request = tasks.AnalysisV2TaskRequest("case1", "protein1", fields, case_id=7)
+    request = tasks.AnalysisV2TaskRequest(
+        "case1", "protein1", fields, protein_part="head", case_id=7,
+    )
 
     def segmentation(**kwargs):
         calls.append("head_segmentation")
@@ -98,7 +100,7 @@ def harness(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("key", ["protein1", "protein2", "protein4", "protein5"])
 def test_head_only_synchronous(harness, key):
-    request = tasks.AnalysisV2TaskRequest("case1", key, harness.fields)
+    request = tasks.AnalysisV2TaskRequest("case1", key, harness.fields, protein_part="head")
     thread_id = threading.get_ident()
     def check_thread(_):
         assert threading.get_ident() == thread_id
@@ -111,13 +113,26 @@ def test_head_only_synchronous(harness, key):
     assert not completion["target_dir"].exists()
 
 
-def test_protein3_order_and_counts(harness):
-    completion = harness.runner.run(tasks.AnalysisV2TaskRequest("case1", "protein3", harness.fields))
+def test_protein3_tail_order_and_counts(harness):
+    completion = harness.runner.run(tasks.AnalysisV2TaskRequest(
+        "case1", "protein3", harness.fields, protein_part="tail",
+    ))
     assert harness.calls == ["head_segmentation", "head_calibration", "c18b", "workset",
                              "contract", "register", "tail_calibration", "tail_measurement"]
     assert completion["status"] == "measured"
     assert tuple(completion[k] for k in ("tail_object_count", "associated_object_count",
                                        "unresolved_object_count")) == (89, 68, 21)
+    assert completion["part"] == "tail"
+
+
+def test_protein3_head_skips_c18b_and_uses_head_measurement(harness):
+    fields = [{key: value for key, value in harness.fields[0].items() if key != "Merge"}]
+    completion = harness.runner.run(tasks.AnalysisV2TaskRequest(
+        "case1", "protein3", fields, protein_part="head",
+    ))
+    assert harness.calls == ["head_segmentation", "head_calibration", "head_measurement"]
+    assert completion["part"] == "head"
+    assert completion["context"]["protein_part"] == "head"
 
 
 def test_all_unresolved_completion(harness, monkeypatch):
@@ -125,7 +140,9 @@ def test_all_unresolved_completion(harness, monkeypatch):
         return {"validation": {"tail_object_count": 12, "result_parser": {
             "success": True, "calculation_mode": "head_equivalent", "total": {"positive_count": 0}}}}
     monkeypatch.setattr(harness.measurement, "run", measure)
-    result = harness.runner.run(tasks.AnalysisV2TaskRequest("case1", "protein3", harness.fields))
+    result = harness.runner.run(tasks.AnalysisV2TaskRequest(
+        "case1", "protein3", harness.fields, protein_part="tail",
+    ))
     assert tuple(result[k] for k in ("tail_object_count", "associated_object_count",
                                     "unresolved_object_count")) == (12, 0, 12)
 
@@ -147,8 +164,14 @@ def test_no_window_thread_publisher_database_dependencies(harness, monkeypatch):
             assert forbidden not in source
 
 
-@pytest.mark.parametrize("key,part", [("bad", None), ("Q96P56", None), ("protein3", "head"),
-                                      ("protein1", "tail")])
+@pytest.mark.parametrize(
+    "key,part",
+    [
+        ("bad", "head"), ("Q96P56", "head"), ("protein3", None),
+        ("protein1", "tail"), ("protein2", "tail"),
+        ("protein4", "tail"), ("protein5", "tail"),
+    ],
+)
 def test_invalid_protein_or_part_rejected(harness, key, part):
     with pytest.raises(tasks.AnalysisV2TaskError) as error:
         harness.runner.run(tasks.AnalysisV2TaskRequest("case1", key, harness.fields, protein_part=part))
@@ -161,7 +184,9 @@ def test_protein3_requires_all_channels(harness, channel):
     fields = [dict(harness.fields[0])]
     del fields[0][channel]
     with pytest.raises(tasks.AnalysisV2TaskError):
-        harness.runner.run(tasks.AnalysisV2TaskRequest("case1", "protein3", fields))
+        harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", "protein3", fields, protein_part="tail",
+        ))
     assert harness.calls == []
 
 
@@ -172,6 +197,7 @@ def test_stage_failure_stops_chain(harness, monkeypatch, stage):
     def fail(*args, **kwargs):
         raise cause
     key = "protein3" if stage in ("c18b", "tail_measurement") else "protein1"
+    part = "tail" if key == "protein3" else "head"
     if stage == "head_segmentation":
         monkeypatch.setattr(tasks, "run_head_segmentation", fail)
     elif stage == "c18b":
@@ -179,7 +205,9 @@ def test_stage_failure_stops_chain(harness, monkeypatch, stage):
     else:
         monkeypatch.setattr(harness.measurement, "run", fail)
     with pytest.raises(tasks.AnalysisV2TaskError) as error:
-        harness.runner.run(tasks.AnalysisV2TaskRequest("case1", key, harness.fields))
+        harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", key, harness.fields, protein_part=part,
+        ))
     assert error.value.stage == stage
     assert error.value.cause is cause
     assert error.value.case_no == "case1"
@@ -195,7 +223,10 @@ def test_stage_failure_stops_chain(harness, monkeypatch, stage):
 def test_service_shaped_fields_and_workspace(harness, tmp_path):
     row = harness.fields[0]
     fields = [{"field_id": "001", "tritc_path": row["R"], "fitc_path": row["G"]}]
-    request = tasks.AnalysisV2TaskRequest("case1", "protein1", fields, workspace_root=tmp_path / "custom")
+    request = tasks.AnalysisV2TaskRequest(
+        "case1", "protein1", fields, protein_part="head",
+        workspace_root=tmp_path / "custom",
+    )
     result = harness.runner.run(request)
     assert Path(result["task_root"]).relative_to(tmp_path / "custom" / "case1")
 
@@ -302,7 +333,9 @@ def test_runner_real_calibration_and_tail_measurement_contract(harness, tmp_path
         for name in ("save_initial_c18b_tail_workset", "build_automatic_tail_final_contract",
                      "register_tail_final_contract", "complete_tail_calibration"):
             monkeypatch.setattr(tasks, name, getattr(calibration, name))
-        result = harness.runner.run(tasks.AnalysisV2TaskRequest("case1", "protein3", harness.fields))
+        result = harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", "protein3", harness.fields, protein_part="tail",
+        ))
         assert result["status"] == "measured"
         assert tuple(result[k] for k in ("tail_object_count", "associated_object_count",
                                         "unresolved_object_count")) == (total, associated, total - associated)

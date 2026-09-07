@@ -3026,12 +3026,12 @@ class AnalysisWindow(QWidget):
             return
 
         formal_protein = FORMAL_PROTEIN_PARTS.get(protein_key)
-        expected_part = formal_protein[1] if formal_protein else ""
-        if not expected_part or protein_part != expected_part:
-            expected_text = expected_part or "不支持的蛋白"
+        allowed_parts = formal_protein[1] if formal_protein else ()
+        if protein_part not in allowed_parts:
+            expected_text = "/".join(allowed_parts) if allowed_parts else "不支持的蛋白"
             message = (
                 "当前 protein / part 不受正式 Analysis V2 支持："
-                "{} / {}（正式配置：{}）。"
+                "{} / {}（允许配置：{}）。"
             ).format(protein_key, protein_part or "未配置", expected_text)
             self.append_log(message)
             QMessageBox.warning(

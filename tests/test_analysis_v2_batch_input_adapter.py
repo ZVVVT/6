@@ -18,7 +18,11 @@ class StubConfig:
         self.app_root = Path(workspace_root).parent
         self._workspace_root = Path(workspace_root)
         self._parts = parts or {
-            key: part for key, (_name, part) in FORMAL_PROTEIN_PARTS.items()
+            "protein1": "head",
+            "protein2": "head",
+            "protein3": "tail",
+            "protein4": "head",
+            "protein5": "head",
         }
 
     def get_protein_part(self, key):
@@ -71,7 +75,7 @@ def test_five_formal_protein_mappings(tmp_path, protein_key, accession, part):
     assert isinstance(request, AnalysisV2TaskRequest)
     assert request.protein_key == protein_key
     assert request.protein_part == part
-    assert FORMAL_PROTEIN_PARTS[protein_key] == (accession, part)
+    assert part in FORMAL_PROTEIN_PARTS[protein_key][1]
 
 
 def test_existing_batch_folder_alias_matching_feeds_adapter(tmp_path):
@@ -110,6 +114,15 @@ def test_one_field_builds_formal_g_r_merge_keys(tmp_path):
 
 def test_head_merge_is_optional(tmp_path):
     request, _folder = build(tmp_path, channels=("G", "R"))
+    assert request.matched_fields[0]["merge_path"] == ""
+
+
+def test_protein3_head_uses_configured_part_and_merge_is_optional(tmp_path):
+    config = StubConfig(tmp_path / "cases", parts={"protein3": "head"})
+    request, _folder = build(
+        tmp_path, "protein3", "Q96P56", channels=("G", "R"), config=config,
+    )
+    assert request.protein_part == "head"
     assert request.matched_fields[0]["merge_path"] == ""
 
 
@@ -195,13 +208,19 @@ def test_missing_protein_folder_is_rejected(tmp_path):
     assert caught.value.folder == str(folder.resolve())
 
 
-def test_configured_part_must_match_formal_mapping(tmp_path):
+@pytest.mark.parametrize(
+    "protein_key,part",
+    [("protein1", "tail"), ("protein2", "tail"),
+     ("protein4", "tail"), ("protein5", "tail"),
+     ("protein3", "body")],
+)
+def test_configured_part_must_match_formal_rules(tmp_path, protein_key, part):
     folder = tmp_path / "Q96P56"
     write_field(folder)
-    config = StubConfig(tmp_path / "cases", parts={"protein3": "head"})
-    with pytest.raises(AnalysisV2BatchInputError, match="正式映射不一致"):
+    config = StubConfig(tmp_path / "cases", parts={protein_key: part})
+    with pytest.raises(AnalysisV2BatchInputError, match="正式规则"):
         build_batch_task_request(
-            {"case_no": "CASE001"}, "protein3", folder, config,
+            {"case_no": "CASE001"}, protein_key, folder, config,
         )
 
 

@@ -10,11 +10,11 @@ from .task_runner import AnalysisV2TaskRequest
 
 
 FORMAL_PROTEIN_PARTS = {
-    "protein1": ("Q9BYW3", "head"),
-    "protein2": ("P10323", "head"),
-    "protein3": ("Q96P56", "tail"),
-    "protein4": ("Q8IYV9", "head"),
-    "protein5": ("W5XKT8", "head"),
+    "protein1": ("Q9BYW3", ("head",)),
+    "protein2": ("P10323", ("head",)),
+    "protein3": ("Q96P56", ("head", "tail")),
+    "protein4": ("Q8IYV9", ("head",)),
+    "protein5": ("W5XKT8", ("head",)),
 }
 
 
@@ -56,12 +56,12 @@ def build_batch_task_request(
             "非法 protein_key", key, folder,
         )
 
-    _accession, expected_part = formal
+    _accession, allowed_parts = formal
     configured_part = str(config.get_protein_part(key) or "").strip().lower()
-    if configured_part != expected_part:
+    if configured_part not in allowed_parts:
         raise AnalysisV2BatchInputError(
-            "配置 part 与正式映射不一致：配置={}，正式={}".format(
-                configured_part or "<empty>", expected_part,
+            "配置 part 不受正式规则支持：配置={}，允许={}".format(
+                configured_part or "<empty>", "/".join(allowed_parts),
             ),
             key,
             folder,
@@ -74,7 +74,7 @@ def build_batch_task_request(
 
     match_result = ImageChannelMatcher(config.get_image_rule()).scan_folder(folder)
     _validate_channel_totals(match_result, key, folder)
-    matched_fields = _build_matched_fields(match_result, key, expected_part, folder)
+    matched_fields = _build_matched_fields(match_result, key, configured_part, folder)
 
     case = dict(case_data or {})
     case_no = str(case.get("case_no", "") or "").strip()
@@ -98,7 +98,7 @@ def build_batch_task_request(
         case_no=case_no,
         case_id=case.get("id"),
         protein_key=key,
-        protein_part=expected_part,
+        protein_part=configured_part,
         matched_fields=matched_fields,
         workspace_root=root,
         raw_image_folder=str(folder),

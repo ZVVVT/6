@@ -31,12 +31,15 @@ def test_cancel_before_run_is_sticky_and_idempotent(harness):
                                   "tail_calibration", "head_measurement", "tail_measurement", "completion"])
 def test_cancel_at_boundary_never_enters_next_stage(harness, stage):
     key = "protein3" if stage in ("c18b", "tail_calibration", "tail_measurement") else "protein1"
+    part = "tail" if key == "protein3" else "head"
     def log(message):
         if message.endswith(": " + stage):
             harness.runner.cancel()
     harness.runner.log_callback = log
     with pytest.raises(tasks.AnalysisV2TaskCancelled) as error:
-        harness.runner.run(tasks.AnalysisV2TaskRequest("case1", key, harness.fields))
+        harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", key, harness.fields, protein_part=part,
+        ))
     assert error.value.stage == stage
     assert stage not in harness.calls
 
@@ -136,9 +139,12 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         monkeypatch.setattr(harness.measurement, "run", lambda self, **kwargs: execute())
     monkeypatch.setattr(subprocess, "Popen", spawn)
     key = "protein3" if stage in ("c18b", "tail_measurement") else "protein1"
+    part = "tail" if key == "protein3" else "head"
     def run():
         try:
-            harness.runner.run(tasks.AnalysisV2TaskRequest("case1", key, harness.fields))
+            harness.runner.run(tasks.AnalysisV2TaskRequest(
+                "case1", key, harness.fields, protein_part=part,
+            ))
         except Exception as error:
             errors.append(error)
     thread = threading.Thread(target=run)

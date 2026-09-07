@@ -1,4 +1,5 @@
 ﻿import shutil
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -439,8 +440,8 @@ class SettingsWindow(QWidget):
         layout = QVBoxLayout(tab)
 
         tips = QLabel(
-            "内部编号用于工作目录和配置索引；显示名称用于界面和报告。"
-            "切换表达部位时会自动匹配头部或尾部默认 Pipeline，也可点击“选择”手动覆盖。"
+            "蛋白身份为产品固定配置；Q96P56 可选择 head/tail，"
+            "其他蛋白固定为 head；用户可维护报告参考下限。"
         )
         tips.setWordWrap(True)
         tips.setStyleSheet("color: #666666;")
@@ -482,6 +483,8 @@ class SettingsWindow(QWidget):
         self.protein_table.setColumnWidth(4, 110)
         self.protein_table.setColumnWidth(5, 120)
         self.protein_table.setColumnWidth(6, 104)
+        self.protein_table.setColumnHidden(3, True)
+        self.protein_table.setColumnHidden(6, True)
 
         layout.addWidget(self.protein_table, 1)
 
@@ -1210,33 +1213,32 @@ class SettingsWindow(QWidget):
         self.protein_table.insertRow(row)
         self.protein_table.setRowHeight(row, 38)
 
-        self.protein_table.setItem(row, 0, QTableWidgetItem(str(key)))
-        self.protein_table.setItem(row, 1, QTableWidgetItem(str(name)))
+        key_item = QTableWidgetItem(str(key))
+        key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
+        self.protein_table.setItem(row, 0, key_item)
 
-        part_combo = QComboBox()
-        part_combo.addItems(["head", "tail"])
-        if part not in ["head", "tail"]:
-            part = "head"
-        part_combo.setCurrentText(part)
-        self.style_part_combo(part_combo)
-        self.protein_table.setCellWidget(row, 2, self.make_cell_widget(part_combo))
+        name_item = QTableWidgetItem(str(name))
+        name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+        self.protein_table.setItem(row, 1, name_item)
+
+        if key == "protein3":
+            part_combo = QComboBox()
+            part_combo.addItems(["head", "tail"])
+            part_combo.setCurrentText(part if part in ("head", "tail") else "tail")
+            self.style_part_combo(part_combo)
+            self.protein_table.setCellWidget(
+                row, 2, self.make_cell_widget(part_combo)
+            )
+        else:
+            part_item = QTableWidgetItem("head")
+            part_item.setFlags(part_item.flags() & ~Qt.ItemIsEditable)
+            part_item.setTextAlignment(Qt.AlignCenter)
+            self.protein_table.setItem(row, 2, part_item)
 
         self.protein_table.setItem(row, 3, QTableWidgetItem(str(pipeline)))
         self.protein_table.setItem(row, 4, QTableWidgetItem(str(intensity_min)))
         self.protein_table.setItem(row, 5, QTableWidgetItem(str(rate_min)))
 
-        btn_select = QPushButton("选择")
-        btn_select.setObjectName("ProteinSelectButton")
-        btn_select.setFixedSize(68, 28)
-        btn_select.clicked.connect(
-            lambda checked=False, button=btn_select: self.select_protein_pipeline_for_button(button)
-        )
-        self.protein_table.setCellWidget(row, 6, self.make_cell_widget(btn_select, margin_left=8, margin_right=8))
-
-        # 初始部位和已保存 Pipeline 都写入后再绑定，避免页面加载时覆盖自定义值。
-        part_combo.currentTextChanged.connect(
-            lambda part, combo=part_combo: self.apply_default_pipeline_for_part(combo, part)
-        )
 
     def apply_default_pipeline_for_part(self, part_combo, part):
         """按用户切换后的表达部位更新该下拉框所在行的标准 Pipeline。"""
@@ -1325,12 +1327,15 @@ class SettingsWindow(QWidget):
         for row in range(self.protein_table.rowCount()):
             key = self.get_table_text(row, 0).strip()
             name = self.get_table_text(row, 1).strip()
-            pipeline = self.get_table_text(row, 3).strip()
             intensity_min = self.get_table_text(row, 4).strip()
             rate_min = self.get_table_text(row, 5).strip()
 
             part_widget = self.get_part_combo_from_row(row)
-            part = part_widget.currentText().strip() if isinstance(part_widget, QComboBox) else "head"
+            part = (
+                part_widget.currentText().strip()
+                if isinstance(part_widget, QComboBox)
+                else self.get_table_text(row, 2).strip()
+            )
 
             if not key:
                 return False, f"第 {row + 1} 行内部编号不能为空。"
@@ -1338,25 +1343,38 @@ class SettingsWindow(QWidget):
                 return False, f"内部编号重复：{key}"
             if not name:
                 return False, f"第 {row + 1} 行显示名称不能为空。"
-            if part not in ["head", "tail"]:
-                return False, f"第 {row + 1} 行表达部位必须是 head 或 tail。"
+            if key in ("protein1", "protein2", "protein4", "protein5"):
+                if part != "head":
+                    return False, f"{key} 的表达部位必须是 head。"
+            elif key == "protein3":
+                if part not in ("head", "tail"):
+                    return False, "protein3 的表达部位必须是 head 或 tail。"
+            else:
+                return False, f"不支持的正式蛋白：{key}"
 
             try:
-                float(intensity_min)
+                intensity_value = float(intensity_min)
             except Exception:
                 return False, f"第 {row + 1} 行荧光强度下限不是数字。"
+            if not math.isfinite(intensity_value):
+                return False, f"第 {row + 1} 行荧光强度下限必须是有限数字。"
+            if intensity_value < 0:
+                return False, f"第 {row + 1} 行荧光强度下限不能小于 0。"
 
             try:
-                float(rate_min)
+                rate_value = float(rate_min)
             except Exception:
                 return False, f"第 {row + 1} 行标定率下限不是数字。"
+            if not math.isfinite(rate_value):
+                return False, f"第 {row + 1} 行标定率下限必须是有限数字。"
+            if rate_value < 0 or rate_value > 100:
+                return False, f"第 {row + 1} 行标定率下限必须在 0~100 范围内。"
 
             keys.append(key)
             seen_keys.add(key)
 
             self.config.set("Protein", key, part)
             self.config.set("ProteinNames", key, name)
-            self.config.set("ProteinPipelines", key, pipeline)
             self.config.set("ProteinReferenceIntensityMin", key, intensity_min)
             self.config.set("ProteinReferenceRateMin", key, rate_min)
 
@@ -1389,12 +1407,6 @@ class SettingsWindow(QWidget):
             ("数据库文件", self.database_edit.text().strip(), "parent_create"),
             ("报告目录", self.report_dir_edit.text().strip(), "dir_create"),
         ]
-
-        for row in range(self.protein_table.rowCount()):
-            key = self.get_table_text(row, 0).strip()
-            pipeline = self.get_table_text(row, 3).strip()
-            if pipeline:
-                checks.append((f"{key} 自定义 Pipeline", pipeline, "file"))
 
         all_ok = True
         for name, path_text, check_type in checks:

@@ -42,7 +42,7 @@ def test_formal_mapping_is_checked_before_any_analysis_route():
     head_route = run_source.index('if protein_part == "head":')
 
     assert validation < tail_route < head_route
-    assert "protein_part != expected_part" in run_source[validation:tail_route]
+    assert "protein_part not in allowed_parts" in run_source[validation:tail_route]
     assert "self.set_running_state(False)" in run_source[validation:tail_route]
 
 
@@ -50,18 +50,17 @@ def test_formal_mapping_covers_supported_and_fail_fast_combinations():
     from core.analysis_v2.batch_input_adapter import FORMAL_PROTEIN_PARTS
 
     expected = {
-        "protein1": "head",
-        "protein2": "head",
-        "protein3": "tail",
-        "protein4": "head",
-        "protein5": "head",
+        "protein1": ("head",),
+        "protein2": ("head",),
+        "protein3": ("head", "tail"),
+        "protein4": ("head",),
+        "protein5": ("head",),
     }
     assert {key: value[1] for key, value in FORMAL_PROTEIN_PARTS.items()} == expected
 
     rejected = [
         ("protein1", "tail"),
         ("protein2", "tail"),
-        ("protein3", "head"),
         ("protein4", "tail"),
         ("protein5", "tail"),
         ("protein1", "body"),
@@ -69,8 +68,11 @@ def test_formal_mapping_covers_supported_and_fail_fast_combinations():
     ]
     for protein_key, protein_part in rejected:
         formal = FORMAL_PROTEIN_PARTS.get(protein_key)
-        expected_part = formal[1] if formal else ""
-        assert not expected_part or protein_part != expected_part
+        allowed_parts = formal[1] if formal else ()
+        assert protein_part not in allowed_parts
+
+    assert "head" in FORMAL_PROTEIN_PARTS["protein3"][1]
+    assert "tail" in FORMAL_PROTEIN_PARTS["protein3"][1]
 
 
 def test_run_analysis_has_no_legacy_execution_entry():
