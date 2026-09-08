@@ -15,6 +15,7 @@ from .c18b_execution import C18BExecution
 from .completion import build_completion_result
 from .head_calibration_service import HeadCalibrationService
 from .head_input_adapter import build_head_segmentation_fields
+from .input_manifest_checkpoint import write_and_verify_input_manifest_checkpoint
 from .head_measurement_service import HeadMeasurementService
 from .segmentation_service import run_head_segmentation, _validate_field_id
 from .tail_calibration_service import (
@@ -191,6 +192,34 @@ class AnalysisV2TaskRunner:
                         "interactive": False,
                     },
                 )
+                self._enter("input_manifest")
+                input_checkpoints = []
+                for field in fields:
+                    self._field_id = field["field_id"]
+                    checkpoint = write_and_verify_input_manifest_checkpoint(
+                        paths.task_root, field, request.protein_key,
+                    )
+                    input_checkpoints.append(checkpoint)
+                    performance_logger.event(
+                        "input_manifest_checkpoint",
+                        "input_manifest",
+                        "succeeded",
+                        duration_seconds=checkpoint["input_checkpoint_seconds"],
+                        extra={
+                            "field_id": checkpoint["field_id"],
+                            "generation": checkpoint["generation"],
+                            "hash_seconds": checkpoint["hash_seconds"],
+                            "write_seconds": checkpoint["write_seconds"],
+                            "validate_seconds": checkpoint["validate_seconds"],
+                            "input_checkpoint_seconds": checkpoint["input_checkpoint_seconds"],
+                        },
+                    )
+                input_checkpoint_seconds = sum(
+                    item["input_checkpoint_seconds"] for item in input_checkpoints
+                )
+            else:
+                input_checkpoints = []
+                input_checkpoint_seconds = 0.0
             head_started = time.perf_counter()
             self._enter("head_segmentation")
             run_head_segmentation(
@@ -257,7 +286,7 @@ class AnalysisV2TaskRunner:
             if part == "tail":
                 measured_seconds = measured_at - performance_started
                 accounted_seconds = (
-                    head_seconds + c18b_seconds
+                    input_checkpoint_seconds + head_seconds + c18b_seconds
                     + finalizer_seconds + measurement_seconds
                 )
                 performance_logger.event(
@@ -270,8 +299,14 @@ class AnalysisV2TaskRunner:
                         "boundary": "prepared_request_to_tail_measured",
                         "interactive": False,
                         "machine_wall_seconds": measured_seconds,
+                        "input_checkpoint_seconds": input_checkpoint_seconds,
+                        "input_checkpoints": [{
+                            "field_id": item["field_id"],
+                            "input_checkpoint_seconds": item["input_checkpoint_seconds"],
+                        } for item in input_checkpoints],
                         "human_wait_seconds": 0.0,
                         "stages_seconds": {
+                            "input_checkpoint": input_checkpoint_seconds,
                             "head": head_seconds,
                             "tail_core": c18b_phases.get("tail_core", 0.0),
                             "fragment_filter": c18b_phases.get("fragment_filter", 0.0),

@@ -10,9 +10,16 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from PIL import Image
 
 from core.analysis_v2 import task_runner as tasks
 from core.analysis_v2.c18b_execution import C18BExecution
+from core.analysis_v2.checkpoint_store import CheckpointStore
+from core.analysis_v2.environment_snapshot import sha256_file
+from core.analysis_v2.input_fingerprint import stage_input_projection
+from core.analysis_v2.input_manifest_checkpoint import (
+    InputManifestCheckpointError, write_and_verify_input_manifest_checkpoint,
+)
 
 
 @pytest.fixture
@@ -27,7 +34,7 @@ def harness(tmp_path, monkeypatch):
         get_protein_display_name=lambda key: key,
     )
     image = tmp_path / "image.tif"
-    image.write_bytes(b"input")
+    Image.new("L", (3, 2)).save(str(image), format="TIFF")
     fields = [{"field_no": "001", "R": str(image), "G": str(image), "Merge": str(image)}]
     request = tasks.AnalysisV2TaskRequest(
         "case1", "protein1", fields, protein_part="head", case_id=7,
@@ -145,11 +152,64 @@ def test_protein3_tail_emits_v3_unified_timing(harness):
     assert event["extra"]["human_wait_seconds"] == 0.0
     assert event["extra"]["publisher_db_included"] is False
     assert set(event["extra"]["stages_seconds"]) == {
-        "head", "tail_core", "fragment_filter",
+        "input_checkpoint", "head", "tail_core", "fragment_filter",
         "association_editor_adapter", "c18b_orchestration_overhead",
         "finalizer", "measurement", "checkpoint_overhead",
         "publisher_db",
     }
+    assert event["extra"]["input_checkpoint_seconds"] >= 0
+    assert len(event["extra"]["input_checkpoints"]) == 1
+
+
+def test_protein3_tail_writes_verified_input_manifest_checkpoint(harness):
+    harness.runner.run(tasks.AnalysisV2TaskRequest(
+        "case1", "protein3", harness.fields, protein_part="tail",
+    ))
+    root = harness.runner._paths.task_root / "checkpoints" / "input" / "001"
+    generation = root / "generations" / "input_manifest"
+    assert generation.is_dir()
+    assert (generation / "completion.json").is_file()
+    stored = CheckpointStore(root).load_checkpoint(generation)
+    payload = json.loads((generation / "input_manifest.json").read_text(encoding="utf-8"))
+    assert stored["stage"] == "input_manifest"
+    assert (payload["field_id"], payload["protein_key"], payload["protein_part"]) == (
+        "001", "protein3", "tail",
+    )
+    assert {row["role"] for row in payload["inputs"]} == {"FITC", "TRITC", "Merge"}
+    assert {row["sha256"] for row in payload["inputs"]} == {
+        sha256_file(Path(harness.fields[0]["R"])),
+    }
+    assert [item["role"] for item in stored["files"]] == ["input_manifest"]
+    assert not (harness.runner._paths.task_root / "cp_output").exists()
+    assert not any(path.suffix.lower() in (".tif", ".tiff") for path in generation.rglob("*"))
+    assert [item["role"] for item in stage_input_projection(payload, "head")["inputs"]] == ["TRITC"]
+    assert [item["role"] for item in stage_input_projection(payload, "tail_core")["inputs"]] == ["FITC"]
+    assert stage_input_projection(payload, "association")["inputs"] == []
+
+
+def test_input_manifest_checkpoint_rejects_second_generation(harness):
+    fields = tasks.AnalysisV2TaskRunner(harness.config)._validate(
+        tasks.AnalysisV2TaskRequest("case1", "protein3", harness.fields, protein_part="tail")
+    )[1]
+    task_root = harness.config.get_workspace_root() / "case1" / "analysis_v2" / "protein3" / "runs" / "one"
+    write_and_verify_input_manifest_checkpoint(task_root, fields[0], "protein3")
+    with pytest.raises(InputManifestCheckpointError, match="拒绝覆盖"):
+        write_and_verify_input_manifest_checkpoint(task_root, fields[0], "protein3")
+
+
+@pytest.mark.parametrize("reason", ["checkpoint create failed", "checkpoint validation failed"])
+def test_input_manifest_checkpoint_failure_fails_before_head(harness, monkeypatch, reason):
+    def fail(*args, **kwargs):
+        raise InputManifestCheckpointError(reason)
+    monkeypatch.setattr(tasks, "write_and_verify_input_manifest_checkpoint", fail)
+    with pytest.raises(tasks.AnalysisV2TaskError) as error:
+        harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", "protein3", harness.fields, protein_part="tail",
+        ))
+    assert error.value.stage == "input_manifest"
+    assert error.value.field_id == "001"
+    assert reason in str(error.value)
+    assert harness.calls == []
 
 
 def test_protein3_head_skips_c18b_and_uses_head_measurement(harness):
