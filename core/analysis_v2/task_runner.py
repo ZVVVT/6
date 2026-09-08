@@ -46,6 +46,9 @@ class AnalysisV2TaskRequest:
     workspace_root: Optional[Path] = None
     raw_image_folder: Optional[str] = None
     candidate_path_mode: str = "graph_preserving"
+    # Explicit-only Phase 3C recovery inputs.  Keys are field IDs; values carry
+    # only an immutable TailCore checkpoint generation identity/path.
+    tail_core_recovery_sources: Optional[Mapping[str, Mapping[str, Any]]] = None
 
 
 class AnalysisV2TaskError(Exception):
@@ -259,6 +262,7 @@ class AnalysisV2TaskRunner:
                 execution = C18BExecution(
                     project_root, paths.task_root, self.config.get_python_exe(),
                     request.candidate_path_mode, self.log_callback, self._process_context,
+                    request.tail_core_recovery_sources,
                 )
                 try:
                     prepared = execution.run()
@@ -283,6 +287,11 @@ class AnalysisV2TaskRunner:
                             "tail_core_checkpoint_seconds": checkpoint[
                                 "tail_core_checkpoint_seconds"
                             ],
+                            "tail_core_mode": checkpoint.get("tail_core_mode", "computed"),
+                            "tail_core_recovery_validation_seconds": checkpoint.get(
+                                "tail_core_recovery_validation_seconds", 0.0),
+                            "tail_core_reuse_materialization_seconds": checkpoint.get(
+                                "tail_core_reuse_materialization_seconds", 0.0),
                             "payload_bytes": checkpoint["payload_bytes"],
                         },
                     )
@@ -347,6 +356,11 @@ class AnalysisV2TaskRunner:
                             "tail_core_checkpoint_seconds": item[
                                 "tail_core_checkpoint_seconds"
                             ],
+                            "tail_core_mode": item.get("tail_core_mode", "computed"),
+                            "tail_core_recovery_validation_seconds": item.get(
+                                "tail_core_recovery_validation_seconds", 0.0),
+                            "tail_core_reuse_materialization_seconds": item.get(
+                                "tail_core_reuse_materialization_seconds", 0.0),
                             "payload_bytes": item["payload_bytes"],
                         } for item in tail_core_checkpoints],
                         "human_wait_seconds": 0.0,
@@ -357,6 +371,12 @@ class AnalysisV2TaskRunner:
                             "fragment_filter": c18b_phases.get("fragment_filter", 0.0),
                             "tail_core_checkpoint": c18b_phases.get(
                                 "tail_core_checkpoint", 0.0
+                            ),
+                            "tail_core_recovery_validation": c18b_phases.get(
+                                "tail_core_recovery_validation", 0.0
+                            ),
+                            "tail_core_reuse_materialization": c18b_phases.get(
+                                "tail_core_reuse_materialization", 0.0
                             ),
                             "association_editor_adapter": c18b_phases.get(
                                 "association_editor_adapter", 0.0

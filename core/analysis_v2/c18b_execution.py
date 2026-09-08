@@ -8,7 +8,12 @@ from pathlib import Path
 
 from core.analysis_process_registry import analysis_process_registry
 from .task_process_context import TaskProcessCancelled
-from .tail_core_checkpoint import write_and_verify_tail_core_checkpoint
+from .tail_core_checkpoint import (
+    PROBABILITY_NAME,
+    PROBABILITY_ROLE,
+    recover_and_verify_tail_core_checkpoint,
+    write_and_verify_tail_core_checkpoint,
+)
 
 WINDOWS_CREATION_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
@@ -81,7 +86,7 @@ def _c18b_filtered_instances_path(task_root: Path, field_id: str) -> Path:
 class C18BExecution:
     def __init__(self, project_root, task_root, python_executable,
                  candidate_path_mode="graph_preserving", log_callback=None,
-                 process_context=None):
+                 process_context=None, tail_core_recovery_sources=None):
         self.project_root = Path(project_root).resolve()
         self.task_root = Path(task_root).resolve()
         self.python_executable = Path(python_executable).resolve()
@@ -90,6 +95,7 @@ class C18BExecution:
         self.process_context = process_context
         self._process = None
         self.field_id = None
+        self.tail_core_recovery_sources = dict(tail_core_recovery_sources or {})
 
     def _log(self, message):
         if self.log_callback is not None:
@@ -289,29 +295,31 @@ class C18BExecution:
             raise FileNotFoundError("C18B未生成实例标签：{}".format(instances_path))
         return instances_path
 
-    def _prepare_c18b_editor_payload(self, field_id, instances_path, log_handle):
-        filter_script = (
-            self.project_root
-            / "tools"
-            / "analysis_v2"
-            / "c18b_score015"
-            / "extreme_fragment_filter.py"
-        ).resolve()
-        if not filter_script.is_file():
-            raise FileNotFoundError(
-                "C18B极短碎片过滤器不存在：{}".format(filter_script)
+    def _prepare_c18b_editor_payload(self, field_id, instances_path, log_handle,
+                                      checkpoint=None, apply_filter=True):
+        if apply_filter:
+            filter_script = (
+                self.project_root
+                / "tools"
+                / "analysis_v2"
+                / "c18b_score015"
+                / "extreme_fragment_filter.py"
+            ).resolve()
+            if not filter_script.is_file():
+                raise FileNotFoundError(
+                    "C18B极短碎片过滤器不存在：{}".format(filter_script)
+                )
+            filter_started = time.perf_counter()
+            self._run_streaming_command(
+                [
+                    str(self.python_executable),
+                    "-u",
+                    str(filter_script),
+                    str(Path(instances_path).resolve().parent),
+                ],
+                "{} C18B extreme fragment filter".format(field_id),
+                log_handle,
             )
-        filter_started = time.perf_counter()
-        self._run_streaming_command(
-            [
-                str(self.python_executable),
-                "-u",
-                str(filter_script),
-                str(Path(instances_path).resolve().parent),
-            ],
-            "{} C18B extreme fragment filter".format(field_id),
-            log_handle,
-        )
         filtered_instances_path = _c18b_filtered_instances_path(
             self.task_root, field_id
         )
@@ -322,18 +330,21 @@ class C18BExecution:
                     filtered_instances_path
                 )
             )
-        self._add_phase_timing(
-            "fragment_filter",
-            time.perf_counter() - filter_started,
-        )
-        checkpoint = write_and_verify_tail_core_checkpoint(
-            self.task_root, self.project_root, Path(instances_path).resolve().parent,
-            field_id, self.candidate_path_mode,
-        )
-        self._add_phase_timing(
-            "tail_core_checkpoint",
-            checkpoint["tail_core_checkpoint_seconds"],
-        )
+        if apply_filter:
+            self._add_phase_timing(
+                "fragment_filter",
+                time.perf_counter() - filter_started,
+            )
+            checkpoint = write_and_verify_tail_core_checkpoint(
+                self.task_root, self.project_root, Path(instances_path).resolve().parent,
+                field_id, self.candidate_path_mode,
+            )
+            self._add_phase_timing(
+                "tail_core_checkpoint",
+                checkpoint["tail_core_checkpoint_seconds"],
+            )
+        elif checkpoint is None:
+            raise ValueError("recovery adapter preparation 缺少 TailCore checkpoint")
         self._check_cancelled()
         adapter = (
             self.project_root
@@ -411,6 +422,41 @@ class C18BExecution:
             "tail_core_checkpoint": checkpoint,
         }
 
+    def _recovery_source_for_field(self, field_id):
+        source = getattr(self, "tail_core_recovery_sources", {}).get(str(field_id))
+        if source is None:
+            return None
+        if not isinstance(source, dict):
+            raise ValueError("TailCore recovery source 必须是对象：{}".format(field_id))
+        if str(source.get("field_id", field_id)) != str(field_id):
+            raise ValueError("TailCore recovery source field_id 不匹配：{}".format(field_id))
+        generation = source.get("checkpoint_generation_path")
+        if not generation:
+            raise ValueError(
+                "TailCore recovery source 必须显式提供 checkpoint_generation_path：{}".format(field_id)
+            )
+        return {"generation": Path(generation)}
+
+    def _materialize_recovered_editor_inputs(self, field_id, checkpoint, source):
+        """Create current-run ephemeral adapter inputs; checkpoint remains truth."""
+        started = time.perf_counter()
+        generation = Path(checkpoint["generation"])
+        files = dict((item["role"], item) for item in checkpoint["checkpoint_manifest"]["files"])
+        probability_item = files.get(PROBABILITY_ROLE)
+        if probability_item is None:
+            raise FileNotFoundError("recovery checkpoint 缺少 probability payload")
+        probability_source = generation / probability_item["relative_path"]
+        output_dir = _c18b_instances_path(self.task_root, field_id).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+        for name in ("06_final_tail_instances.tif", "07_extreme_fragment_filtered_labels.tif"):
+            shutil.copyfile(str(generation / "labels" / name), str(output_dir / name))
+        probability_target = (self.task_root / "segmentation" / "c18b_runner_contract"
+                              / field_id / PROBABILITY_NAME)
+        probability_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(str(probability_source), str(probability_target))
+        return output_dir / "06_final_tail_instances.tif", time.perf_counter() - started
+
     def _run_c18b_workflow(self, fields, log_handle, started):
         self._log("Analysis V2：开始C18B尾部处理。")
         self._phase_timings_seconds = {}
@@ -418,19 +464,37 @@ class C18BExecution:
         for field_id in fields:
             self.field_id = field_id
             self._check_cancelled()
-            core_started = time.perf_counter()
-            instances_path = self._ensure_c18b_result(field_id, log_handle)
-            self._add_phase_timing(
-                "tail_core",
-                time.perf_counter() - core_started,
-            )
-            editor_payloads.append(
-                self._prepare_c18b_editor_payload(
-                    field_id,
-                    instances_path,
-                    log_handle,
-                )
-            )
+            source = self._recovery_source_for_field(field_id)
+            if source is None:
+                core_started = time.perf_counter()
+                instances_path = self._ensure_c18b_result(field_id, log_handle)
+                self._add_phase_timing("tail_core", time.perf_counter() - core_started)
+                payload = self._prepare_c18b_editor_payload(field_id, instances_path, log_handle)
+                if payload.get("tail_core_checkpoint") is not None:
+                    payload["tail_core_checkpoint"]["tail_core_mode"] = "computed"
+            else:
+                try:
+                    validation_started = time.perf_counter()
+                    checkpoint = recover_and_verify_tail_core_checkpoint(
+                        self.task_root, self.project_root, field_id,
+                        self.candidate_path_mode, source["generation"],
+                    )
+                    validation_seconds = time.perf_counter() - validation_started
+                    instances_path, materialization_seconds = self._materialize_recovered_editor_inputs(
+                        field_id, checkpoint, source)
+                    checkpoint["tail_core_mode"] = "reused"
+                    checkpoint["tail_core_recovery_validation_seconds"] = validation_seconds
+                    checkpoint["tail_core_reuse_materialization_seconds"] = materialization_seconds
+                    self._add_phase_timing("tail_core_recovery_validation", validation_seconds)
+                    self._add_phase_timing("tail_core_reuse_materialization", materialization_seconds)
+                    self._log("TailCoreResult recovered/reused: field={} C18B compute skipped".format(field_id))
+                    payload = self._prepare_c18b_editor_payload(
+                        field_id, instances_path, log_handle, checkpoint=checkpoint,
+                        apply_filter=False)
+                except Exception as error:
+                    self._log("TailCoreResult recovery rejected: field={} cause={}".format(field_id, error))
+                    raise
+            editor_payloads.append(payload)
             self._check_cancelled()
         elapsed_seconds = float(time.perf_counter() - started)
         phase_timings = dict(self._phase_timings_seconds)
