@@ -125,6 +125,33 @@ def test_protein3_tail_order_and_counts(harness):
     assert completion["part"] == "tail"
 
 
+def test_protein3_tail_emits_v3_unified_timing(harness):
+    harness.runner.run(tasks.AnalysisV2TaskRequest(
+        "case1", "protein3", harness.fields, protein_part="tail",
+    ))
+    events_path = harness.runner._paths.logs_dir / "events.jsonl"
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    finished = [
+        item for item in events
+        if item["event"] == "tail_v3_timing_finished"
+    ]
+    assert len(finished) == 1
+    event = finished[0]
+    assert event["duration_seconds"] >= 0
+    assert event["extra"]["boundary"] == "prepared_request_to_tail_measured"
+    assert event["extra"]["human_wait_seconds"] == 0.0
+    assert event["extra"]["publisher_db_included"] is False
+    assert set(event["extra"]["stages_seconds"]) == {
+        "head", "tail_core", "fragment_filter",
+        "association_editor_adapter", "c18b_orchestration_overhead",
+        "finalizer", "measurement", "checkpoint_overhead",
+        "publisher_db",
+    }
+
+
 def test_protein3_head_skips_c18b_and_uses_head_measurement(harness):
     fields = [{key: value for key, value in harness.fields[0].items() if key != "Merge"}]
     completion = harness.runner.run(tasks.AnalysisV2TaskRequest(

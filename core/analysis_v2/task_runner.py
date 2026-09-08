@@ -24,6 +24,7 @@ from .tail_calibration_service import (
 from .tail_measurement_service import TailMeasurementService
 from .task_paths import AnalysisTaskPaths, _sanitize_identifier
 from .task_process_context import TaskProcessContext, TaskProcessCancelled
+from .stage_logger import StageLogger
 from .task_state import TaskStateStore
 
 
@@ -173,6 +174,24 @@ class AnalysisV2TaskRunner:
                 workspace_root=workspace,
             )
             paths = self._paths
+            if part == "tail":
+                performance_logger = StageLogger.from_task_paths(
+                    paths,
+                    case_no=request.case_no,
+                    protein_key=request.protein_key,
+                )
+                performance_started = time.perf_counter()
+                performance_logger.event(
+                    "tail_v3_timing_started",
+                    "performance",
+                    "running",
+                    extra={
+                        "clock": "time.perf_counter",
+                        "boundary": "prepared_request_to_tail_measured",
+                        "interactive": False,
+                    },
+                )
+            head_started = time.perf_counter()
             self._enter("head_segmentation")
             run_head_segmentation(
                 paths=paths, paired_fields=fields,
@@ -186,6 +205,7 @@ class AnalysisV2TaskRunner:
             HeadCalibrationService(paths.task_root, interactive=False).complete(
                 process_context=self._process_context,
             )
+            head_seconds = time.perf_counter() - head_started
             if part == "tail":
                 self._enter("c18b")
                 execution = C18BExecution(
@@ -197,7 +217,10 @@ class AnalysisV2TaskRunner:
                 except Exception:
                     self._field_id = execution.field_id
                     raise
+                c18b_seconds = float(prepared.get("elapsed_seconds", 0.0))
+                c18b_phases = dict(prepared.get("phase_timings_seconds") or {})
                 self._enter("tail_calibration")
+                finalizer_started = time.perf_counter()
                 results = []
                 for field in prepared["fields"]:
                     self._process_context.check_cancelled()
@@ -216,6 +239,7 @@ class AnalysisV2TaskRunner:
                     results.append(register_tail_final_contract(payload, contract))
                 self._process_context.check_cancelled()
                 complete_tail_calibration(paths.task_root, results, automatic=True)
+                finalizer_seconds = time.perf_counter() - finalizer_started
             self._enter("{}_measurement".format(part))
             service_class = TailMeasurementService if part == "tail" else HeadMeasurementService
             service = service_class(
@@ -226,7 +250,48 @@ class AnalysisV2TaskRunner:
                 python_exe=self.config.get_python_exe(),
                 plugins_directory=self.config.get_plugins_directory(), timeout_seconds=900.0,
             )
+            measurement_started = time.perf_counter()
             measurement = service.run(process_context=self._process_context)
+            measurement_seconds = time.perf_counter() - measurement_started
+            measured_at = time.perf_counter()
+            if part == "tail":
+                measured_seconds = measured_at - performance_started
+                accounted_seconds = (
+                    head_seconds + c18b_seconds
+                    + finalizer_seconds + measurement_seconds
+                )
+                performance_logger.event(
+                    "tail_v3_timing_finished",
+                    "performance",
+                    "succeeded",
+                    duration_seconds=measured_seconds,
+                    extra={
+                        "clock": "time.perf_counter",
+                        "boundary": "prepared_request_to_tail_measured",
+                        "interactive": False,
+                        "machine_wall_seconds": measured_seconds,
+                        "human_wait_seconds": 0.0,
+                        "stages_seconds": {
+                            "head": head_seconds,
+                            "tail_core": c18b_phases.get("tail_core", 0.0),
+                            "fragment_filter": c18b_phases.get("fragment_filter", 0.0),
+                            "association_editor_adapter": c18b_phases.get(
+                                "association_editor_adapter", 0.0
+                            ),
+                            "c18b_orchestration_overhead": c18b_phases.get(
+                                "c18b_orchestration_overhead", 0.0
+                            ),
+                            "finalizer": finalizer_seconds,
+                            "measurement": measurement_seconds,
+                            "checkpoint_overhead": max(
+                                0.0,
+                                measured_seconds - accounted_seconds,
+                            ),
+                            "publisher_db": 0.0,
+                        },
+                        "publisher_db_included": False,
+                    },
+                )
             self._enter("completion")
             payload = {
                 "task_root": str(paths.task_root), "measurement_result": measurement,

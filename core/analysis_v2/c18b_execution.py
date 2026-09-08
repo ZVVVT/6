@@ -115,6 +115,13 @@ class C18BExecution:
         with log_path.open("a", encoding="utf-8", newline="\n") as handle:
             return self._run_c18b_workflow(self._discover_fields(), handle, time.perf_counter())
 
+    def _add_phase_timing(self, phase, elapsed):
+        timings = getattr(self, "_phase_timings_seconds", None)
+        if timings is None:
+            timings = {}
+            self._phase_timings_seconds = timings
+        timings[phase] = timings.get(phase, 0.0) + float(elapsed)
+
     @staticmethod
     def _read_json(path: Path):
         with Path(path).open("r", encoding="utf-8") as handle:
@@ -293,6 +300,7 @@ class C18BExecution:
             raise FileNotFoundError(
                 "C18B极短碎片过滤器不存在：{}".format(filter_script)
             )
+        filter_started = time.perf_counter()
         self._run_streaming_command(
             [
                 str(self.python_executable),
@@ -313,6 +321,10 @@ class C18BExecution:
                     filtered_instances_path
                 )
             )
+        self._add_phase_timing(
+            "fragment_filter",
+            time.perf_counter() - filter_started,
+        )
         adapter = (
             self.project_root
             / "tools"
@@ -346,6 +358,7 @@ class C18BExecution:
         ).resolve()
         if not editor_script.is_file():
             raise FileNotFoundError("尾部editor不存在：{}".format(editor_script))
+        adapter_started = time.perf_counter()
         self._run_streaming_command(
             [
                 str(self.python_executable),
@@ -360,6 +373,11 @@ class C18BExecution:
             ],
             "{} C18B editor payload".format(field_id),
             log_handle,
+        )
+
+        self._add_phase_timing(
+            "association_editor_adapter",
+            time.perf_counter() - adapter_started,
         )
 
         return {
@@ -384,11 +402,17 @@ class C18BExecution:
 
     def _run_c18b_workflow(self, fields, log_handle, started):
         self._log("Analysis V2：开始C18B尾部处理。")
+        self._phase_timings_seconds = {}
         editor_payloads = []
         for field_id in fields:
             self.field_id = field_id
             self._check_cancelled()
+            core_started = time.perf_counter()
             instances_path = self._ensure_c18b_result(field_id, log_handle)
+            self._add_phase_timing(
+                "tail_core",
+                time.perf_counter() - core_started,
+            )
             editor_payloads.append(
                 self._prepare_c18b_editor_payload(
                     field_id,
@@ -397,6 +421,12 @@ class C18BExecution:
                 )
             )
             self._check_cancelled()
+        elapsed_seconds = float(time.perf_counter() - started)
+        phase_timings = dict(self._phase_timings_seconds)
+        phase_timings["c18b_orchestration_overhead"] = max(
+            0.0,
+            elapsed_seconds - sum(phase_timings.values()),
+        )
         return {
             "success": True,
             "workflow": "c18b_tail_editor",
@@ -405,5 +435,6 @@ class C18BExecution:
             "ready_for_measurement": False,
             "task_root": str(self.task_root),
             "fields": editor_payloads,
-            "elapsed_seconds": float(time.perf_counter() - started),
+            "elapsed_seconds": elapsed_seconds,
+            "phase_timings_seconds": phase_timings,
         }
