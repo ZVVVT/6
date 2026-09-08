@@ -267,6 +267,25 @@ class AnalysisV2TaskRunner:
                     raise
                 c18b_seconds = float(prepared.get("elapsed_seconds", 0.0))
                 c18b_phases = dict(prepared.get("phase_timings_seconds") or {})
+                tail_core_checkpoints = [
+                    field.get("tail_core_checkpoint") for field in prepared["fields"]
+                    if field.get("tail_core_checkpoint") is not None
+                ]
+                for checkpoint in tail_core_checkpoints:
+                    performance_logger.event(
+                        "tail_core_checkpoint",
+                        "tail_core",
+                        "succeeded",
+                        duration_seconds=checkpoint["tail_core_checkpoint_seconds"],
+                        extra={
+                            "field_id": checkpoint["field_id"],
+                            "generation": checkpoint["generation"],
+                            "tail_core_checkpoint_seconds": checkpoint[
+                                "tail_core_checkpoint_seconds"
+                            ],
+                            "payload_bytes": checkpoint["payload_bytes"],
+                        },
+                    )
                 self._enter("tail_calibration")
                 finalizer_started = time.perf_counter()
                 results = []
@@ -323,12 +342,22 @@ class AnalysisV2TaskRunner:
                             "field_id": item["field_id"],
                             "input_checkpoint_seconds": item["input_checkpoint_seconds"],
                         } for item in input_checkpoints],
+                        "tail_core_checkpoints": [{
+                            "field_id": item["field_id"],
+                            "tail_core_checkpoint_seconds": item[
+                                "tail_core_checkpoint_seconds"
+                            ],
+                            "payload_bytes": item["payload_bytes"],
+                        } for item in tail_core_checkpoints],
                         "human_wait_seconds": 0.0,
                         "stages_seconds": {
                             "input_checkpoint": input_checkpoint_seconds,
                             "head": head_seconds,
                             "tail_core": c18b_phases.get("tail_core", 0.0),
                             "fragment_filter": c18b_phases.get("fragment_filter", 0.0),
+                            "tail_core_checkpoint": c18b_phases.get(
+                                "tail_core_checkpoint", 0.0
+                            ),
                             "association_editor_adapter": c18b_phases.get(
                                 "association_editor_adapter", 0.0
                             ),

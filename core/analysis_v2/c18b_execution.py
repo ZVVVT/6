@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core.analysis_process_registry import analysis_process_registry
 from .task_process_context import TaskProcessCancelled
+from .tail_core_checkpoint import write_and_verify_tail_core_checkpoint
 
 WINDOWS_CREATION_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
@@ -325,6 +326,15 @@ class C18BExecution:
             "fragment_filter",
             time.perf_counter() - filter_started,
         )
+        checkpoint = write_and_verify_tail_core_checkpoint(
+            self.task_root, self.project_root, Path(instances_path).resolve().parent,
+            field_id, self.candidate_path_mode,
+        )
+        self._add_phase_timing(
+            "tail_core_checkpoint",
+            checkpoint["tail_core_checkpoint_seconds"],
+        )
+        self._check_cancelled()
         adapter = (
             self.project_root
             / "tools"
@@ -398,6 +408,7 @@ class C18BExecution:
             "editor_script": str(editor_script),
             "c18b_baseline_instances": str(Path(instances_path).resolve()),
             "c18b_filtered_instances": str(filtered_instances_path),
+            "tail_core_checkpoint": checkpoint,
         }
 
     def _run_c18b_workflow(self, fields, log_handle, started):

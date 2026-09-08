@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -187,6 +188,51 @@ class CheckpointAttempt(object):
 
     def add_json(self, role: str, relative_path: str, value: Mapping[str, Any]) -> Path:
         return self.add_bytes(role, relative_path, _json_bytes(value))
+
+    def add_file_payload(self, source_path: Path, relative_path: str, role: str,
+                         failure_injector: Optional[Callable[[str], None]] = None) -> Path:
+        """Copy an existing payload byte-for-byte into this generation.
+
+        This is intentionally a general CheckpointStore primitive: callers do
+        not get a side-channel writer that could bypass payload hashing,
+        relative-path validation, or the immutable-generation contract.
+        """
+        self._ensure_open()
+        source = Path(source_path).resolve()
+        if not source.is_file():
+            raise FileNotFoundError("checkpoint source payload 不存在：{}".format(source))
+        role = _require_text(role, "payload role")
+        relative_path = _safe_relative_path(relative_path)
+        if relative_path in (MANIFEST_NAME, COMPLETION_MARKER_NAME):
+            raise ValueError("payload relative_path 不能占用 checkpoint 保留文件名")
+        if relative_path.lower().endswith(_PICKLE_SUFFIXES):
+            raise ValueError("checkpoint payload 禁止 pickle/marshal 类文件")
+        if any(item["role"] == role for item in self._files):
+            raise ValueError("payload role 必须唯一：{}".format(role))
+        if any(item["relative_path"] == relative_path for item in self._files):
+            raise ValueError("payload relative_path 必须唯一：{}".format(relative_path))
+        target = _safe_generation_path(self.staging_path, relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copyfile(str(source), str(target))
+            # Windows does not permit fsync on a read-only file descriptor.
+            # ``rb+`` does not change copied bytes and permits the durability
+            # barrier required before the manifest records this payload.
+            with target.open("rb+") as handle:
+                os.fsync(handle.fileno())
+        except Exception:
+            if target.exists():
+                target.unlink()
+            raise
+        if failure_injector is not None:
+            failure_injector("file_payload_written")
+        self._files = list(self._files) + [{
+            "role": role,
+            "relative_path": relative_path,
+            "byte_size": target.stat().st_size,
+            "sha256": _sha256_file(target),
+        }]
+        return target
 
     def _manifest(self) -> Dict[str, Any]:
         if not self._files:
