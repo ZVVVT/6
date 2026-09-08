@@ -25,6 +25,7 @@ from .tail_calibration_service import (
 from .tail_measurement_service import TailMeasurementService
 from .task_paths import AnalysisTaskPaths, _sanitize_identifier
 from .task_process_context import TaskProcessContext, TaskProcessCancelled
+from .task_supervisor import TaskSupervisor
 from .stage_logger import StageLogger
 from .task_state import TaskStateStore
 
@@ -71,8 +72,9 @@ class AnalysisV2TaskRunner:
     def __init__(self, config, log_callback=None):
         self.config = config
         self.log_callback = log_callback
-        self._process_context = TaskProcessContext()
-        self.cancel_event = self._process_context.cancel_event
+        self._supervisor = TaskSupervisor(TaskProcessContext())
+        self._process_context = self._supervisor.process_context
+        self.cancel_event = self._supervisor.cancel_event
         self._lock = threading.Lock()
         self._done = threading.Event()
         self._done.set()
@@ -103,7 +105,7 @@ class AnalysisV2TaskRunner:
         self._process_context.check_cancelled()
 
     def cancel(self):
-        self._process_context.cancel()
+        self._supervisor.request_cancel("user requested cancellation")
 
     def shutdown(self, timeout_seconds=10.0):
         timeout = float(timeout_seconds)
@@ -112,7 +114,7 @@ class AnalysisV2TaskRunner:
         deadline = time.monotonic() + timeout
         with self._lock:
             self._closed = True
-        self._process_context.cancel(deadline=deadline)
+        self._supervisor.request_cancel("runner shutdown", deadline=deadline)
         finished = self._done.wait(max(0, deadline - time.monotonic()))
         resources_finished = self._process_context.wait(deadline)
         if not finished or not resources_finished:
@@ -155,6 +157,10 @@ class AnalysisV2TaskRunner:
                 raise AnalysisV2TaskError("Runner is already running", stage="validation")
             if self._closed:
                 raise AnalysisV2TaskCancelled("Runner is shut down", stage="validation")
+            if self.cancel_event.is_set():
+                raise AnalysisV2TaskCancelled("Runner is cancelled", stage="validation")
+            if not self._supervisor.register_worker("analysis-v2-task-runner"):
+                raise AnalysisV2TaskCancelled("Runner is cancelled", stage="validation")
             self._running = True
             self._done.clear()
             self._request = request
@@ -361,8 +367,18 @@ class AnalysisV2TaskRunner:
                     except Exception as state_error:
                         cancelled.state_error = state_error
                 raise cancelled from cause
+            root_failure = self._supervisor.record_failure(
+                self._stage, getattr(cause, "field_id", None) or self._field_id, cause,
+                details={"case_no": getattr(self._request, "case_no", None),
+                         "protein_key": getattr(self._request, "protein_key", None)},
+            )
+            self._supervisor.request_cancel(
+                "failure at {}".format(root_failure.stage), failure_triggered=True,
+            )
             raise self._error(AnalysisV2TaskError, str(cause), cause) from cause
         finally:
+            self._supervisor.mark_worker_done("analysis-v2-task-runner")
+            self._supervisor.finalize()
             with self._lock:
                 self._running = False
                 self._done.set()

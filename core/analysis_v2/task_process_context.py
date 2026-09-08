@@ -36,6 +36,10 @@ class TaskProcessContext:
                 self._processes.pop(process.pid, None)
             analysis_process_registry.unregister(process)
 
+    def has_active_processes(self):
+        with self._lock:
+            return bool(self._processes)
+
     @staticmethod
     def _terminate(process, timeout=1.0):
         try:

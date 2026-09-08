@@ -307,6 +307,35 @@ def test_stage_failure_stops_chain(harness, monkeypatch, stage):
     assert "head_measurement" not in harness.calls
 
 
+def test_stage_failure_records_root_failure_and_requests_failure_cancel(harness, monkeypatch):
+    cause = RuntimeError("primary stage failure")
+    cause.field_id = "001"
+    monkeypatch.setattr(tasks, "run_head_segmentation", lambda **kwargs: (_ for _ in ()).throw(cause))
+    with pytest.raises(tasks.AnalysisV2TaskError):
+        harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", "protein1", harness.fields, protein_part="head",
+        ))
+    root = harness.runner._supervisor.root_failure
+    assert (root.stage, root.field, root.exception_type, root.message) == (
+        "head_segmentation", "001", "RuntimeError", "primary stage failure",
+    )
+    assert harness.runner._supervisor.cancellation_is_failure_triggered
+
+
+def test_successful_runner_finalizes_supervisor_completed(harness):
+    harness.runner.run(tasks.AnalysisV2TaskRequest(
+        "case1", "protein1", harness.fields, protein_part="head",
+    ))
+    assert harness.runner._supervisor.state == "COMPLETED"
+
+
+def test_user_cancel_is_not_recorded_as_computation_failure(harness):
+    harness.runner.cancel()
+    with pytest.raises(tasks.AnalysisV2TaskCancelled):
+        harness.runner.run(harness.request)
+    assert harness.runner._supervisor.root_failure is None
+
+
 def test_service_shaped_fields_and_workspace(harness, tmp_path):
     row = harness.fields[0]
     fields = [{"field_id": "001", "tritc_path": row["R"], "fitc_path": row["G"]}]
