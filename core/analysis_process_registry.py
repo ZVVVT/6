@@ -44,15 +44,21 @@ class AnalysisProcessRegistry:
         if pid <= 0:
             return
         if os.name == "nt":
-            subprocess.run(
+            completed = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 check=False,
                 timeout=timeout,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            return
+            return {
+                "command": ["taskkill", "/PID", str(pid), "/T", "/F"],
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+            }
         if process is not None:
             try:
                 process.terminate()

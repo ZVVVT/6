@@ -292,3 +292,120 @@ def test_windows_cancellation_terminates_grandchild(tmp_path):
         context.cancel()
         if handle:
             kernel.CloseHandle(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process tree contract")
+def test_windows_cancellation_terminates_three_level_tree(tmp_path):
+    script = tmp_path / "tree.py"
+    child_pid = tmp_path / "child.pid"
+    grandchild_pid = tmp_path / "grandchild.pid"
+    script.write_text(
+        "import subprocess,sys,time\n"
+        "from pathlib import Path\n"
+        "role, child_path, grandchild_path = sys.argv[1:]\n"
+        "if role == 'root':\n"
+        "    child = subprocess.Popen([sys.executable, __file__, 'child', child_path, grandchild_path])\n"
+        "    Path(child_path).write_text(str(child.pid))\n"
+        "elif role == 'child':\n"
+        "    grandchild = subprocess.Popen([sys.executable, __file__, 'grandchild', child_path, grandchild_path])\n"
+        "    Path(grandchild_path).write_text(str(grandchild.pid))\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    context = TaskProcessContext()
+    root = context.register(subprocess.Popen(
+        [sys.executable, str(script), "root", str(child_pid), str(grandchild_pid)],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ))
+    try:
+        _wait_for_file(grandchild_pid)
+        pids = [root.pid, int(child_pid.read_text()), int(grandchild_pid.read_text())]
+        assert all(_windows_pid_is_alive(pid) for pid in pids)
+        context.cancel()
+        root.wait(timeout=5)
+        assert all(not _windows_pid_is_alive(pid) for pid in pids[1:])
+        assert context.wait(time.monotonic() + 1)
+    finally:
+        context.cancel()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process tree contract")
+def test_windows_tree_cancel_does_not_terminate_unrelated_process(tmp_path):
+    unrelated_context = TaskProcessContext()
+    unrelated = unrelated_context.register(subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ))
+    context = TaskProcessContext()
+    pid_path = tmp_path / "child.pid"
+    code = (
+        "import subprocess,sys,time; from pathlib import Path; "
+        "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+        "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(30)"
+    )
+    root = context.register(subprocess.Popen([sys.executable, "-c", code, str(pid_path)]))
+    try:
+        _wait_for_file(pid_path)
+        context.cancel()
+        root.wait(timeout=5)
+        assert not _windows_pid_is_alive(int(pid_path.read_text()))
+        assert unrelated.poll() is None
+        assert context.wait(time.monotonic() + 1)
+    finally:
+        context.cancel()
+        unrelated_context.cancel()
+        unrelated_context.wait(time.monotonic() + 5)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process tree contract")
+def test_windows_tree_cancel_converges_spawn_race(tmp_path):
+    script = tmp_path / "race.py"
+    pid_path = tmp_path / "spawned.pid"
+    script.write_text(
+        "import subprocess,sys,time\n"
+        "from pathlib import Path\n"
+        "time.sleep(.05)\n"
+        "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    context = TaskProcessContext()
+    root = context.register(subprocess.Popen([sys.executable, str(script), str(pid_path)]))
+    try:
+        # Cancellation races the delayed spawn.  Either no child is created or
+        # any child published by the root is part of the subsequently verified tree.
+        time.sleep(.04)
+        context.cancel()
+        root.wait(timeout=5)
+        if pid_path.exists():
+            assert not _windows_pid_is_alive(int(pid_path.read_text()))
+        assert context.wait(time.monotonic() + 1)
+    finally:
+        context.cancel()
+
+
+def _wait_for_file(path, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not path.is_file() and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert path.is_file()
+
+
+def _windows_pid_is_alive(pid):
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, int(pid))
+    if not handle:
+        return False
+    try:
+        return kernel.WaitForSingleObject(handle, 0) == 258
+    finally:
+        kernel.CloseHandle(handle)
