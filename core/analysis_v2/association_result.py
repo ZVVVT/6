@@ -133,8 +133,15 @@ def adapter_association_output(adapter_dir, tail_ids):
         unresolved[int(row.get("c18b_instance_id") or 0)] = str(
             row.get("reason") or "association_output_not_usable"
         )
+    known_tail_ids = set(int(value) for value in tail_ids)
+    unknown_selected = set(selected) - known_tail_ids
+    unknown_unresolved = set(unresolved) - known_tail_ids
+    if unknown_selected or unknown_unresolved:
+        raise AssociationResultError(
+            "adapter 引用了不存在于 TailCore 07 的 tail：{}".format(
+                sorted(unknown_selected | unknown_unresolved)))
     result = []
-    for tail_id in sorted(int(value) for value in tail_ids):
+    for tail_id in sorted(known_tail_ids):
         if tail_id in selected:
             item = selected[tail_id]
             result.append({"tail_id": tail_id, "association_status": "associated",

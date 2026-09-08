@@ -14,6 +14,7 @@ from .tail_core_checkpoint import (
     recover_and_verify_tail_core_checkpoint,
     write_and_verify_tail_core_checkpoint,
 )
+from .association_checkpoint import write_and_verify_association_checkpoint
 
 WINDOWS_CREATION_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
@@ -401,6 +402,17 @@ class C18BExecution:
             time.perf_counter() - adapter_started,
         )
 
+        # The adapter has now completed its automatic one-to-one decision, but
+        # no editor/workset semantics have started.  Preserve that exact fact
+        # independently; the current editor continues to consume its old files.
+        association_checkpoint = write_and_verify_association_checkpoint(
+            self.task_root, self.project_root, field_id, output_dir, head_labels,
+            checkpoint)
+        self._add_phase_timing(
+            "association_checkpoint",
+            association_checkpoint["association_checkpoint_seconds"],
+        )
+
         return {
             "field_id": field_id,
             "merge": str(merge_path),
@@ -420,6 +432,7 @@ class C18BExecution:
             "c18b_baseline_instances": str(Path(instances_path).resolve()),
             "c18b_filtered_instances": str(filtered_instances_path),
             "tail_core_checkpoint": checkpoint,
+            "association_checkpoint": association_checkpoint,
         }
 
     def _recovery_source_for_field(self, field_id):

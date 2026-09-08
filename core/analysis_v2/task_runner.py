@@ -295,6 +295,25 @@ class AnalysisV2TaskRunner:
                             "payload_bytes": checkpoint["payload_bytes"],
                         },
                     )
+                association_checkpoints = [
+                    field.get("association_checkpoint") for field in prepared["fields"]
+                    if field.get("association_checkpoint") is not None
+                ]
+                for checkpoint in association_checkpoints:
+                    performance_logger.event(
+                        "association_checkpoint",
+                        "association",
+                        "succeeded",
+                        duration_seconds=checkpoint["association_checkpoint_seconds"],
+                        extra={
+                            "field_id": checkpoint["field_id"],
+                            "generation": checkpoint["generation"],
+                            "association_checkpoint_seconds": checkpoint[
+                                "association_checkpoint_seconds"
+                            ],
+                            "payload_bytes": checkpoint["payload_bytes"],
+                        },
+                    )
                 self._enter("tail_calibration")
                 finalizer_started = time.perf_counter()
                 results = []
@@ -363,6 +382,13 @@ class AnalysisV2TaskRunner:
                                 "tail_core_reuse_materialization_seconds", 0.0),
                             "payload_bytes": item["payload_bytes"],
                         } for item in tail_core_checkpoints],
+                        "association_checkpoints": [{
+                            "field_id": item["field_id"],
+                            "association_checkpoint_seconds": item[
+                                "association_checkpoint_seconds"
+                            ],
+                            "payload_bytes": item["payload_bytes"],
+                        } for item in association_checkpoints],
                         "human_wait_seconds": 0.0,
                         "stages_seconds": {
                             "input_checkpoint": input_checkpoint_seconds,
@@ -380,6 +406,9 @@ class AnalysisV2TaskRunner:
                             ),
                             "association_editor_adapter": c18b_phases.get(
                                 "association_editor_adapter", 0.0
+                            ),
+                            "association_checkpoint": c18b_phases.get(
+                                "association_checkpoint", 0.0
                             ),
                             "c18b_orchestration_overhead": c18b_phases.get(
                                 "c18b_orchestration_overhead", 0.0

@@ -153,7 +153,7 @@ def test_protein3_tail_emits_v3_unified_timing(harness):
     assert event["extra"]["publisher_db_included"] is False
     assert set(event["extra"]["stages_seconds"]) == {
         "input_checkpoint", "head", "tail_core", "fragment_filter",
-        "tail_core_checkpoint", "association_editor_adapter", "c18b_orchestration_overhead",
+            "tail_core_checkpoint", "association_editor_adapter", "association_checkpoint", "c18b_orchestration_overhead",
         "tail_core_recovery_validation", "tail_core_reuse_materialization",
         "finalizer", "measurement", "checkpoint_overhead",
         "publisher_db",
