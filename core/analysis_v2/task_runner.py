@@ -115,10 +115,23 @@ class AnalysisV2TaskRunner:
         with self._lock:
             self._closed = True
         self._supervisor.request_cancel("runner shutdown", deadline=deadline)
-        finished = self._done.wait(max(0, deadline - time.monotonic()))
+        # Reap owned children before waiting for the worker.  A worker can be
+        # blocked in its subprocess wait and cannot set _done until its child
+        # has exited; waiting for _done first therefore consumed the complete
+        # shutdown budget without giving the process context a chance to reap.
         resources_finished = self._process_context.wait(deadline)
+        finished = self._done.wait(max(0, deadline - time.monotonic()))
+        # A process can be registered while cancellation is already sticky.
+        # The register contract terminates it immediately, but verify/reap it
+        # after the worker exits as well, using the same absolute deadline.
+        resources_finished = self._process_context.wait(deadline) and resources_finished
         if not finished or not resources_finished:
-            error = self._error(AnalysisV2TaskError, "Task shutdown timed out")
+            remaining = self._process_context.live_processes()
+            message = "Task shutdown timed out: remaining process count={}, stage={}, waiting_phase={}, processes={}".format(
+                len(remaining), self._stage,
+                "process_reap" if remaining else "worker_done", remaining,
+            )
+            error = self._error(AnalysisV2TaskError, message)
             error.stage = "shutdown"
             raise error
         return True

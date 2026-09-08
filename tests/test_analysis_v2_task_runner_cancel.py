@@ -205,6 +205,55 @@ def test_shutdown_reports_owned_process_that_will_not_exit(harness):
             context.unregister(process)
 
 
+def test_cancel_reaps_owned_direct_process_when_tree_termination_is_unavailable(monkeypatch):
+    """A denied tree operation cannot leave this task's direct child running."""
+    class Process:
+        pid = 456789
+
+        def __init__(self):
+            self.return_code = None
+            self.terminate_calls = 0
+
+        def poll(self):
+            return self.return_code
+
+        def terminate(self):
+            self.terminate_calls += 1
+            self.return_code = 1
+
+    context = TaskProcessContext()
+    process = Process()
+    monkeypatch.setattr(
+        analysis_process_registry, "_terminate_tree",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+    context.register(process)
+    context.cancel()
+    assert process.terminate_calls == 1
+    assert context.wait(time.monotonic() + 0.1)
+    assert not context.has_active_processes()
+
+
+def test_shutdown_reuses_one_absolute_deadline_for_every_reap_wait(harness, monkeypatch):
+    deadlines = []
+    monkeypatch.setattr(harness.runner._process_context, "wait",
+                        lambda deadline: deadlines.append(deadline) or True)
+    assert harness.runner.shutdown(1)
+    assert len(deadlines) == 2
+    assert deadlines[0] == deadlines[1]
+
+
+def test_shutdown_timeout_does_not_replace_existing_root_failure(harness, monkeypatch):
+    root = harness.runner._supervisor.record_failure(
+        "c18b", "001", RuntimeError("primary failure"),
+    )
+    monkeypatch.setattr(harness.runner._process_context, "wait", lambda deadline: False)
+    with pytest.raises(tasks.AnalysisV2TaskError, match="Task shutdown timed out"):
+        harness.runner.shutdown(0)
+    assert harness.runner._supervisor.root_failure is root
+    assert (root.stage, root.field, root.message) == ("c18b", "001", "primary failure")
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows process tree contract")
 def test_windows_cancellation_terminates_grandchild(tmp_path):
     import ctypes

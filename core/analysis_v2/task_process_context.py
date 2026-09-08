@@ -24,8 +24,10 @@ class TaskProcessContext:
         analysis_process_registry.register(process)
         with self._lock:
             self._processes[process.pid] = process
-        # Covers cancellation between the pre-Popen check and registration.
-        if self.cancel_event.is_set():
+            cancelled = self.cancel_event.is_set()
+        # Covers cancellation between the pre-Popen check and registration.  The
+        # process remains owned until wait()/unregister() has reaped it.
+        if cancelled:
             self._terminate(process)
         return process
 
@@ -40,12 +42,38 @@ class TaskProcessContext:
         with self._lock:
             return bool(self._processes)
 
+    def live_processes(self):
+        """Return diagnostic data without releasing ownership."""
+        with self._lock:
+            processes = list(self._processes.values())
+        result = []
+        for process in processes:
+            try:
+                alive = process.poll() is None
+            except (AttributeError, RuntimeError):
+                alive = False
+            if alive:
+                result.append({"pid": getattr(process, "pid", None),
+                               "role": "direct-child"})
+        return result
+
     @staticmethod
     def _terminate(process, timeout=1.0):
         try:
             analysis_process_registry._terminate_tree(process.pid, process, timeout=timeout)
         except Exception:
-            # Ownership is retained; shutdown will retry and report timeout.
+            # A tree operation is best-effort.  The direct child is still task
+            # owned and must receive its own termination request below.
+            pass
+        try:
+            if process.poll() is None:
+                # On Windows taskkill can be denied even for a process whose
+                # Popen handle is owned by this task.  Do not treat that as a
+                # successful cancellation: terminate the owned direct child.
+                # This deliberately does not claim to solve descendant trees.
+                process.terminate()
+        except (AttributeError, OSError, RuntimeError):
+            # Ownership is retained; wait() will retry and report a timeout.
             pass
 
     def cancel(self, deadline=None):
