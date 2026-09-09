@@ -31,6 +31,7 @@ def test_gui_protein3_tail_commits_input_before_head_segmentation(
         task_root = kwargs["paths"].task_root
         manifest = _input_manifest(task_root, "ZBFY023-C-1")
         observed.append(manifest)
+        assert kwargs["process_context"] is worker.process_context
         return {"fields": []}
 
     monkeypatch.setattr(workers, "run_head_segmentation", fake_segmentation)

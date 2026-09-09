@@ -123,12 +123,23 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
     helper = tmp_path / "silent.py"
     helper.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
     context = harness.runner._process_context
+    atomic_spawn = context.spawn_atomic
 
     def spawn(*args, **kwargs):
         process = popen(*args, **kwargs)
         observed.append(process)
         if race:
             # Cancellation occurs after creation but before caller can register.
+            harness.runner.cancel()
+        ready.set()
+        return process
+
+    def spawn_atomic(*args, **kwargs):
+        process = atomic_spawn(*args, **kwargs)
+        observed.append(process)
+        if race:
+            # The formal Direct Cellpose launcher now owns the process before
+            # this seam returns; cancellation must still converge promptly.
             harness.runner.cancel()
         ready.set()
         return process
@@ -154,7 +165,10 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         monkeypatch.setattr(tasks.C18BExecution, "run", lambda self: execute())
     else:
         monkeypatch.setattr(harness.measurement, "run", lambda self, **kwargs: execute())
-    monkeypatch.setattr(subprocess, "Popen", spawn)
+    if stage == "head_segmentation":
+        monkeypatch.setattr(context, "spawn_atomic", spawn_atomic)
+    else:
+        monkeypatch.setattr(subprocess, "Popen", spawn)
     key = "protein3" if stage in ("c18b", "tail_measurement") else "protein1"
     part = "tail" if key == "protein3" else "head"
     def run():
@@ -170,7 +184,8 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         if args and str(args[0][0]).lower() == "taskkill":
             return popen(*args, **kwargs)
         return spawn(*args, **kwargs)
-    monkeypatch.setattr(subprocess, "Popen", scoped_spawn)
+    if stage != "head_segmentation":
+        monkeypatch.setattr(subprocess, "Popen", scoped_spawn)
     with mock.patch.object(analysis_process_registry, "terminate_all", side_effect=AssertionError("global cancel")):
         thread.start()
         try:
