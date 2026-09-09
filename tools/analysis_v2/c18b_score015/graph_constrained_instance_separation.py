@@ -106,6 +106,48 @@ def _path_geometry(path: np.ndarray, shape: tuple[int, int],
     return distance, align, seed
 
 
+def _path_geometry_region(path: np.ndarray, shape: tuple[int, int],
+                          region_y: np.ndarray, region_x: np.ndarray
+                          ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Full-frame path distance with derived geometry evaluated only in a region.
+
+    ``distanceTransformWithLabels`` deliberately remains full-frame: its labels
+    define the frozen nearest-seed semantics.  Only the nearest lookup, vector
+    arithmetic, and alignment calculation are indexed to the parent region.
+    """
+    seed = np.zeros(shape, np.uint8)
+    tangent_x = np.zeros(shape, np.float32)
+    tangent_y = np.zeros(shape, np.float32)
+    for k, (x, y) in enumerate(path):
+        if not (0 <= x < shape[1] and 0 <= y < shape[0]):
+            continue
+        a = path[max(0, k - 6)].astype(float)
+        b = path[min(len(path) - 1, k + 6)].astype(float)
+        v = b - a
+        norm = max(float(np.linalg.norm(v)), 1.)
+        seed[y, x] = 1
+        tangent_x[y, x], tangent_y[y, x] = v / norm
+    distance, nearest = cv2.distanceTransformWithLabels(1 - seed, cv2.DIST_L2, 5,
+                                                        labelType=cv2.DIST_LABEL_PIXEL)
+    ys, xs = np.where(seed)
+    order = np.lexsort((xs, ys)); ys, xs = ys[order], xs[order]
+    lut_x = np.zeros(len(xs) + 1, np.float32); lut_y = np.zeros(len(xs) + 1, np.float32)
+    lut_tx = np.zeros(len(xs) + 1, np.float32); lut_ty = np.zeros(len(xs) + 1, np.float32)
+    lut_x[1:], lut_y[1:] = xs, ys
+    lut_tx[1:], lut_ty[1:] = tangent_x[ys, xs], tangent_y[ys, xs]
+    nearest_region = nearest[region_y, region_x]
+    np.minimum(nearest_region, len(xs), out=nearest_region)
+    distance_region = distance[region_y, region_x]
+    x = region_x.astype(np.float32, copy=False)
+    y = region_y.astype(np.float32, copy=False)
+    vx = x - lut_x[nearest_region]
+    vy = y - lut_y[nearest_region]
+    align_region = (np.abs(vx * lut_tx[nearest_region] + vy * lut_ty[nearest_region]) /
+                    np.maximum(distance_region, 1.))
+    np.clip(align_region, 0., 1., out=align_region)
+    return distance_region, align_region, seed
+
+
 def _axis_angle(a: np.ndarray, b: np.ndarray) -> float:
     va = a[-1].astype(float) - a[0]
     vb = b[-1].astype(float) - b[0]

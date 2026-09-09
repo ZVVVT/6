@@ -6,7 +6,9 @@ from collections import defaultdict
 import networkx as nx
 import numpy as np
 
-from graph_constrained_instance_separation import fragment_pair_features, _path_geometry
+from graph_constrained_instance_separation import (
+    fragment_pair_features, _path_geometry, _path_geometry_region,
+)
 
 
 def node_curvature(path, window=8):
@@ -56,7 +58,7 @@ def cluster(nodes, edges, resolution, seed):
 
 
 def _streaming_argmin(cost_maps):
-    """Return the first minimum index per pixel without stacking cost maps."""
+    """Return the first minimum index per item without stacking cost maps."""
     iterator = iter(cost_maps)
     try:
         best_cost = next(iterator).copy()
@@ -73,9 +75,12 @@ def _streaming_argmin(cost_maps):
 def reconstruct(grown, fitc, groups, membership, intensity_weight, direction_weight):
     """Compete identity communities within each grown parent region."""
     final = np.zeros_like(grown, np.uint16)
+    # Retained for the frozen per-call allocation contract.  The region-indexed
+    # path no longer reads this full-frame grid for derived geometry.
     coordinate_grid = np.indices(fitc.shape, dtype=np.float32)
     for parent_id, group in enumerate(groups, 1):
         region = grown == parent_id
+        region_y, region_x = np.nonzero(region)
         by_community = defaultdict(list)
         for fragment, path in enumerate(group, 1):
             by_community[membership[f"P{parent_id}:F{fragment}"]].append(path)
@@ -86,7 +91,7 @@ def reconstruct(grown, fitc, groups, membership, intensity_weight, direction_wei
         def community_costs():
             for cid in ids:
                 geoms = [
-                    _path_geometry(path, fitc.shape, coordinate_grid)
+                    _path_geometry_region(path, fitc.shape, region_y, region_x)
                     for path in by_community[cid]
                 ]
                 distances = np.stack([g[0] for g in geoms])
@@ -96,12 +101,12 @@ def reconstruct(grown, fitc, groups, membership, intensity_weight, direction_wei
                     np.stack([g[1] for g in geoms]), nearest[None], axis=0)[0]
                 seed_mask = np.maximum.reduce([g[2] for g in geoms]) > 0
                 level = max(float(np.median(fitc[seed_mask])), 1.0)
-                intensity = np.abs(fitc-level) / level
+                intensity = np.abs(fitc[region_y, region_x]-level) / level
                 yield (distance + intensity_weight*intensity*np.maximum(distance, 1) +
                        direction_weight*direction*np.maximum(distance, 1))
         winner = _streaming_argmin(community_costs())
         for k, cid in enumerate(ids):
-            final[region & (winner == k)] = cid
+            final[region_y[winner == k], region_x[winner == k]] = cid
     dense = np.zeros_like(final)
     for new, old in enumerate(np.unique(final[final > 0]), 1):
         dense[final == old] = new
