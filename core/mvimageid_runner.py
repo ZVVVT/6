@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -184,8 +185,9 @@ class MvImageIDRunner:
         cancel_callback: CancelCallback = None,
         log_file: str = "",
         process_context=None,
+        launch_stage: str = "",
+        field_id: str = "",
     ) -> MvImageIDRunResult:
-        registry = process_context or analysis_process_registry
         if process_context is not None:
             process_context.check_cancelled()
         start_time = time.time()
@@ -233,17 +235,54 @@ class MvImageIDRunner:
 
                 if process_context is not None:
                     process_context.check_cancelled()
-                process = registry.register(subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    cwd=str(self.source_project_dir),
-                    env=env,
-                    **self._get_subprocess_window_options(),
-                ))
+                popen_kwargs = {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.STDOUT,
+                    "text": True,
+                    "encoding": "utf-8",
+                    "errors": "replace",
+                    "cwd": str(self.source_project_dir),
+                    "env": env,
+                }
+                popen_kwargs.update(self._get_subprocess_window_options())
+                if process_context is not None:
+                    # spawn_atomic completes suspended creation, Job assignment,
+                    # direct ownership registration and resume as one protocol.
+                    # Do not register its Popen-compatible result a second time.
+                    process = process_context.spawn_atomic(command, **popen_kwargs)
+                    provenance = {
+                        "stage": str(launch_stage or self._measurement_stage(pipeline_path)),
+                        "field_id": str(field_id or "all_fields"),
+                        "pipeline": pipeline_path.name,
+                        "mode": "atomic",
+                        "worker_pid": int(process.pid),
+                        "worker_python": str(command[0]),
+                        "job_owned": True,
+                        "assign_completed": True,
+                        "resume_completed": True,
+                    }
+                else:
+                    # Explicit transition compatibility for QC and legacy callers.
+                    process = analysis_process_registry.register(
+                        subprocess.Popen(command, **popen_kwargs)
+                    )
+                    provenance = {
+                        "stage": str(launch_stage or self._measurement_stage(pipeline_path)),
+                        "field_id": str(field_id or "all_fields"),
+                        "pipeline": pipeline_path.name,
+                        "mode": "legacy",
+                        "worker_pid": int(process.pid),
+                        "worker_python": str(command[0]),
+                        "job_owned": False,
+                    }
+                # Receipt is deliberately written only after spawn_atomic has
+                # returned; no disk I/O is inserted before ResumeThread.
+                log_fp.write(
+                    "MvImageID launch_provenance="
+                    + json.dumps(provenance, ensure_ascii=False, sort_keys=True)
+                    + "\n"
+                )
+                log_fp.flush()
 
                 try:
                     if process_context is not None:
@@ -282,7 +321,10 @@ class MvImageIDRunner:
                     process.wait()
                     raise
                 finally:
-                    registry.unregister(process)
+                    if process_context is not None:
+                        process_context.unregister(process)
+                    else:
+                        analysis_process_registry.unregister(process)
                 elapsed = time.time() - start_time
                 log_fp.write("\n" + "=" * 60 + "\n")
                 log_fp.write(f"ExitCode: {return_code}\n")
@@ -336,6 +378,15 @@ class MvImageIDRunner:
                 output_text="",
                 error_message=message,
             )
+
+    @staticmethod
+    def _measurement_stage(pipeline_path: Path) -> str:
+        name = pipeline_path.name.lower()
+        if name == "measure_head_from_labels.cppipe":
+            return "head_measurement"
+        if name == "measure_tail_from_labels.cppipe":
+            return "tail_measurement"
+        return "mvimageid"
 
 
 class MvImageIDWorker(QThread):

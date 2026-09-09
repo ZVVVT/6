@@ -165,10 +165,7 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         monkeypatch.setattr(tasks.C18BExecution, "run", lambda self: execute())
     else:
         monkeypatch.setattr(harness.measurement, "run", lambda self, **kwargs: execute())
-    if stage in ("head_segmentation", "c18b"):
-        monkeypatch.setattr(context, "spawn_atomic", spawn_atomic)
-    else:
-        monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(context, "spawn_atomic", spawn_atomic)
     key = "protein3" if stage in ("c18b", "tail_measurement") else "protein1"
     part = "tail" if key == "protein3" else "head"
     def run():
@@ -179,13 +176,6 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         except Exception as error:
             errors.append(error)
     thread = threading.Thread(target=run)
-    # taskkill itself uses Popen; exclude it from the Popen race injection.
-    def scoped_spawn(*args, **kwargs):
-        if args and str(args[0][0]).lower() == "taskkill":
-            return popen(*args, **kwargs)
-        return spawn(*args, **kwargs)
-    if stage not in ("head_segmentation", "c18b"):
-        monkeypatch.setattr(subprocess, "Popen", scoped_spawn)
     with mock.patch.object(analysis_process_registry, "terminate_all", side_effect=AssertionError("global cancel")):
         thread.start()
         try:

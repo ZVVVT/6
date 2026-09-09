@@ -186,10 +186,11 @@ class HeadMeasurementWorker(QThread):
         self.task_root = Path(task_root).resolve()
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
+        self.process_context = TaskProcessContext()
 
     def request_cancel(self) -> None:
         self.requestInterruption()
-        analysis_process_registry.terminate_all()
+        self.process_context.cancel()
 
     def run(self) -> None:
         started = time.perf_counter()
@@ -222,7 +223,7 @@ class HeadMeasurementWorker(QThread):
                 timeout_seconds=self.timeout_seconds,
             )
 
-            result = service.run()
+            result = service.run(process_context=self.process_context)
             elapsed = time.perf_counter() - started
 
             payload = {
