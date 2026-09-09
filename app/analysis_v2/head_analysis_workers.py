@@ -14,6 +14,9 @@ from core.analysis_v2 import (
     HeadMeasurementService,
     run_head_segmentation,
 )
+from core.analysis_v2.input_manifest_checkpoint import (
+    write_and_verify_input_manifest_checkpoint,
+)
 from core.config_manager import ConfigManager
 from core.analysis_process_registry import analysis_process_registry
 
@@ -32,6 +35,7 @@ class HeadSegmentationWorker(QThread):
         paired_fields: Sequence[Dict[str, Any]],
         config: ConfigManager,
         timeout_seconds: float = 600.0,
+        write_input_manifest_checkpoint: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -44,6 +48,9 @@ class HeadSegmentationWorker(QThread):
         ]
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
+        self.write_input_manifest_checkpoint = bool(
+            write_input_manifest_checkpoint
+        )
 
     def request_cancel(self) -> None:
         self.requestInterruption()
@@ -78,6 +85,18 @@ class HeadSegmentationWorker(QThread):
                 protein_key=self.protein_key,
             )
 
+            input_checkpoints = []
+            if self.write_input_manifest_checkpoint:
+                # The GUI protein3-tail route intentionally uses the same
+                # Phase1 input contract as AnalysisV2TaskRunner.  Commit and
+                # verify it before any head or C18B computation can start.
+                for field in self.paired_fields:
+                    input_checkpoints.append(
+                        write_and_verify_input_manifest_checkpoint(
+                            paths.task_root, field, self.protein_key,
+                        )
+                    )
+
             self.log_signal.emit(
                 "Analysis V2\uff1a\u5f00\u59cb\u5934\u90e8\u5206\u5272\uff0c"
                 "\u89c6\u91ce\u6570 {} \u3002".format(
@@ -110,6 +129,7 @@ class HeadSegmentationWorker(QThread):
                 "case_no": case_no,
                 "protein_key": self.protein_key,
                 "field_count": len(self.paired_fields),
+                "input_checkpoints": input_checkpoints,
             }
 
             self.log_signal.emit(

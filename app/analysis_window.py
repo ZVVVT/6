@@ -1605,6 +1605,9 @@ class AnalysisWindow(QWidget):
             protein_key=protein_key,
             paired_fields=paired_fields,
             config=self.config,
+            write_input_manifest_checkpoint=(
+                workflow == "protein3_tail"
+            ),
             parent=self,
         )
         worker.log_signal.connect(self.append_log)
