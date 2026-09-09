@@ -14,6 +14,7 @@ from PIL import Image
 
 from core.analysis_v2 import task_runner as tasks
 from core.analysis_v2.c18b_execution import C18BExecution
+from core.analysis_v2.task_process_context import TaskProcessContext
 from core.analysis_v2.checkpoint_store import CheckpointStore
 from core.analysis_v2.environment_snapshot import sha256_file
 from core.analysis_v2.input_fingerprint import stage_input_projection
@@ -356,12 +357,14 @@ def test_interactive_tail_worker_delegates_shared_execution(tmp_path):
     (tmp_path / "manifest.json").write_text('{"protein_key":"protein3"}')
     (tmp_path / "worker_input.json").write_text('{"fields":[{"field_id":"001"}]}')
     worker = TailPathWorker(tmp_path, tmp_path, Path(sys.executable))
+    assert isinstance(worker.process_context, TaskProcessContext)
     results = []
     worker.finished_signal.connect(lambda *args: results.append(args))
     with mock.patch.object(C18BExecution, "_ensure_c18b_result", return_value=tmp_path / "labels") as ensure:
         with mock.patch.object(C18BExecution, "_prepare_c18b_editor_payload", return_value={"field_id": "001"}):
             worker.run()
     ensure.assert_called_once()
+    assert worker.process_context.cancel_event.is_set() is False
     assert results[0][0] is True
 
     assert results[0][1]["ready_for_measurement"] is False

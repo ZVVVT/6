@@ -51,13 +51,14 @@ class TailPathWorker(QThread, C18BExecution):
         )
         self._cancel_requested = False
         self._process = None
+        # This fallback worker must not reuse the completed Head worker's Job.
+        # It owns its C18B children for its own QThread lifetime.
+        self.process_context = TaskProcessContext()
 
     def request_cancel(self) -> None:
         self._cancel_requested = True
         self.requestInterruption()
-        process = self._process
-        if process is not None:
-            analysis_process_registry._terminate_tree(process.pid, process)
+        self.process_context.cancel()
 
     def _log(self, message):
         self.log_signal.emit(message)

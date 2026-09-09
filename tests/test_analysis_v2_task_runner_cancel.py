@@ -165,7 +165,7 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         monkeypatch.setattr(tasks.C18BExecution, "run", lambda self: execute())
     else:
         monkeypatch.setattr(harness.measurement, "run", lambda self, **kwargs: execute())
-    if stage == "head_segmentation":
+    if stage in ("head_segmentation", "c18b"):
         monkeypatch.setattr(context, "spawn_atomic", spawn_atomic)
     else:
         monkeypatch.setattr(subprocess, "Popen", spawn)
@@ -184,7 +184,7 @@ def test_real_process_cancellation_is_task_scoped(harness, tmp_path, monkeypatch
         if args and str(args[0][0]).lower() == "taskkill":
             return popen(*args, **kwargs)
         return spawn(*args, **kwargs)
-    if stage != "head_segmentation":
+    if stage not in ("head_segmentation", "c18b"):
         monkeypatch.setattr(subprocess, "Popen", scoped_spawn)
     with mock.patch.object(analysis_process_registry, "terminate_all", side_effect=AssertionError("global cancel")):
         thread.start()

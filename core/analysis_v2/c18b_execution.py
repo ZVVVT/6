@@ -162,6 +162,7 @@ class C18BExecution:
         label,
         log_handle,
         allowed_return_codes=(0,),
+        launch_stage=None,
     ):
         self._check_cancelled()
         command = [str(value) for value in command]
@@ -174,20 +175,56 @@ class C18BExecution:
         child_env["PYTHONIOENCODING"] = "utf-8"
         child_env["PYTHONUNBUFFERED"] = "1"
 
-        registry = getattr(self, "process_context", None) or analysis_process_registry
+        process_context = getattr(self, "process_context", None)
+        registry = process_context or analysis_process_registry
+        popen_kwargs = {
+            "cwd": str(self.project_root),
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+            "env": child_env,
+            "creationflags": WINDOWS_CREATION_FLAGS,
+        }
         self._check_cancelled()
-        process = registry.register(subprocess.Popen(
-            command,
-            cwd=str(self.project_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            env=child_env,
-            creationflags=WINDOWS_CREATION_FLAGS,
-        ))
+        if process_context is not None:
+            # spawn_atomic owns suspended creation, Job assignment, direct
+            # registration, sticky cancellation and resume.  Do not register
+            # this Popen-compatible result a second time.
+            process = process_context.spawn_atomic(command, **popen_kwargs)
+            launch_provenance = {
+                "stage": str(launch_stage or label),
+                "field_id": getattr(self, "field_id", None),
+                "mode": "atomic",
+                "worker_pid": int(process.pid),
+                "worker_python": str(self.python_executable),
+                "job_owned": True,
+                "assign_completed": True,
+                "resume_completed": True,
+            }
+        else:
+            # Explicit transition compatibility for callers without a task Job.
+            process = analysis_process_registry.register(
+                subprocess.Popen(command, **popen_kwargs)
+            )
+            launch_provenance = {
+                "stage": str(launch_stage or label),
+                "field_id": getattr(self, "field_id", None),
+                "mode": "legacy",
+                "worker_pid": int(process.pid),
+                "worker_python": str(self.python_executable),
+                "job_owned": False,
+            }
+        # This is deliberately after spawn_atomic returns: no disk I/O occurs
+        # between AssignProcessToJobObject and ResumeThread.
+        log_handle.write(
+            "C18B launch_provenance="
+            + json.dumps(launch_provenance, ensure_ascii=False, sort_keys=True)
+            + "\n"
+        )
+        log_handle.flush()
         self._process = process
         output_lines = []
         try:
@@ -291,6 +328,7 @@ class C18BExecution:
             ],
             "{} C18B backend".format(field_id),
             log_handle,
+            launch_stage="c18b_tail_core",
         )
         if not instances_path.is_file() or instances_path.stat().st_size <= 0:
             raise FileNotFoundError("C18B未生成实例标签：{}".format(instances_path))
@@ -320,6 +358,7 @@ class C18BExecution:
                 ],
                 "{} C18B extreme fragment filter".format(field_id),
                 log_handle,
+                launch_stage="extreme_fragment_filter",
             )
         filtered_instances_path = _c18b_filtered_instances_path(
             self.task_root, field_id
@@ -395,6 +434,7 @@ class C18BExecution:
             ],
             "{} C18B editor payload".format(field_id),
             log_handle,
+            launch_stage="tail_editor_adapter",
         )
 
         self._add_phase_timing(
