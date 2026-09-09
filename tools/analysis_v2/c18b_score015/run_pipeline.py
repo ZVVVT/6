@@ -278,6 +278,29 @@ def _label_bounds(labels):
     }
 
 
+def _final_instance_metrics(final, fitc):
+    """Measure final instances in edge-equivalent local image ROIs."""
+    height, width = final.shape
+    bounds = _label_bounds(final)
+    metrics = []
+    for iid in range(1, int(final.max()) + 1):
+        x0, y0, x1, y1 = bounds[iid]
+        # Retain one real-image background pixel where it exists.  Do not add
+        # a synthetic zero halo for labels already touching an image boundary:
+        # OpenCV thinning distinguishes those two boundary conditions.
+        roi_x0 = max(x0 - 1, 0)
+        roi_y0 = max(y0 - 1, 0)
+        roi_x1 = min(x1 + 2, width)
+        roi_y1 = min(y1 + 2, height)
+        local_mask = final[roi_y0:roi_y1, roi_x0:roi_x1] == iid
+        length, branches = _mask_shape_metrics(local_mask)
+        local_fitc = fitc[roi_y0:roi_y1, roi_x0:roi_x1]
+        metrics.append({"instance_id": iid, "area": int(local_mask.sum()),
+                        "FITC_integrated": float(local_fitc[local_mask].sum()),
+                        "skeleton_length": length, "branch_points": branches})
+    return metrics
+
+
 def final_instance_diagnostic_rows(final_labels, fitc, candidate_rows,
                                    merged, membership):
     """Build one diagnostic row per final label without mutating labels."""
@@ -489,13 +512,7 @@ def run_one(input_path, output_root, cfg, return_enhanced=False,
     timings["debug_image_output"] = debug_image_seconds
 
     started = time.perf_counter()
-    metrics = []
-    for iid in range(1, int(final.max()) + 1):
-        mask = final == iid
-        length, branches = _mask_shape_metrics(mask)
-        metrics.append({"instance_id": iid, "area": int(mask.sum()),
-                        "FITC_integrated": float(fitc[mask].sum()), "skeleton_length": length,
-                        "branch_points": branches})
+    metrics = _final_instance_metrics(final, fitc)
     write_csv(output / "instance_metrics.csv", metrics,
               ["instance_id", "area", "FITC_integrated", "skeleton_length", "branch_points"])
     stats = {"skeleton_count": int(cv2.connectedComponents((skel > 0).astype(np.uint8), 8)[0]-1),
