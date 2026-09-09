@@ -23,8 +23,10 @@ INPUT_ROLES = ("FITC", "TRITC", "Merge")
 STAGE_HEAD = "head"
 STAGE_TAIL_CORE = "tail_core"
 STAGE_ASSOCIATION = "association"
+STAGE_TAIL_OBJECTS_REVISION = "tail_objects_revision"
 STAGE_INPUT_MANIFEST = "input_manifest"
-STAGES = (STAGE_INPUT_MANIFEST, STAGE_HEAD, STAGE_TAIL_CORE, STAGE_ASSOCIATION)
+STAGES = (STAGE_INPUT_MANIFEST, STAGE_HEAD, STAGE_TAIL_CORE, STAGE_ASSOCIATION,
+          STAGE_TAIL_OBJECTS_REVISION)
 _PATH_KEYS = frozenset(("relative_path", "logical_reference"))
 
 
@@ -191,7 +193,8 @@ def stage_input_projection(manifest: Mapping[str, Any], stage: str,
     if stage not in STAGES:
         raise InputManifestError("不支持的 stage：{}".format(stage))
     roles = {STAGE_INPUT_MANIFEST: INPUT_ROLES, STAGE_HEAD: ("TRITC",),
-             STAGE_TAIL_CORE: ("FITC",), STAGE_ASSOCIATION: ()}[stage]
+             STAGE_TAIL_CORE: ("FITC",), STAGE_ASSOCIATION: (),
+             STAGE_TAIL_OBJECTS_REVISION: ()}[stage]
     # Rebuild each record from its business fields, so a caller may retain an
     # absolute diagnostic path in the in-memory manifest without polluting ID.
     records = dict((item["role"], _input_identity(item)) for item in manifest["inputs"])

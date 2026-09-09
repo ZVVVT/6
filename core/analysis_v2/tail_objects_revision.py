@@ -6,6 +6,7 @@ not import, invoke, or replace either of those consumers.
 """
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -32,12 +33,30 @@ def _positive_ids(labels):
 
 
 def _sha256(path):
-    import hashlib
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def geometry_semantic_fingerprint(labels):
+    """Return the portable business identity of a label array, not its TIFF.
+
+    Values are converted to a C-contiguous little-endian representation before
+    hashing.  Consequently TIFF container bytes, metadata, source path and
+    host byte order are deliberately outside this identity.
+    """
+    array = np.asarray(labels)
+    if array.ndim != 2 or not np.issubdtype(array.dtype, np.integer):
+        raise TailObjectsRevisionError("geometry 必须是二维整数标签")
+    canonical_dtype = np.dtype(array.dtype).newbyteorder("<")
+    canonical = np.ascontiguousarray(array, dtype=canonical_dtype)
+    return {
+        "shape": [int(value) for value in canonical.shape],
+        "dtype": canonical.dtype.str,
+        "sha256": hashlib.sha256(canonical.tobytes(order="C")).hexdigest(),
+    }
 
 
 def _relative_path(value):
@@ -84,15 +103,21 @@ def _object_id(field_id, fragment_id):
 
 
 def _revision_identity(result):
+    geometry = result["geometry"]
+    # File checksum and location verify a checkpoint payload, but are not
+    # business facts.  Keeping them out makes the Revision ID portable across
+    # attempts and generation directories.
+    geometry_identity = dict((key, geometry[key]) for key in (
+        "source", "shape", "dtype", "positive_ids", "semantic_fingerprint")
+                             if key in geometry)
     semantic = {
         "schema_version": result["schema_version"],
         "field_id": result["field_id"],
         "revision_number": result["revision_number"],
         "parent_revision_id": result["parent_revision_id"],
         "origin": result["origin"],
-        "upstream_identities": result["upstream_identities"],
         "objects": result["objects"],
-        "geometry": result["geometry"],
+        "geometry": geometry_identity,
     }
     return fingerprint(semantic)
 
@@ -149,6 +174,7 @@ def build_revision0(tail_core_result, association_result, core_filtered_07):
             "shape": [int(value) for value in np.asarray(core_filtered_07).shape],
             "dtype": str(np.asarray(core_filtered_07).dtype),
             "positive_ids": list(core_ids),
+            "semantic_fingerprint": geometry_semantic_fingerprint(core_filtered_07),
         },
         "objects": objects,
         "summary": {
@@ -212,6 +238,8 @@ def validate_revision0(result, tail_core_result, association_result, geometry_la
     if (labels.ndim != 2 or list(labels.shape) != geometry.get("shape") or
             str(labels.dtype) != geometry.get("dtype") or _positive_ids(labels) != geometry.get("positive_ids")):
         raise TailObjectsRevisionError("geometry TIFF shape、dtype 或 ID 不匹配")
+    if geometry.get("semantic_fingerprint") != geometry_semantic_fingerprint(labels):
+        raise TailObjectsRevisionError("geometry semantic fingerprint 不匹配")
     if geometry.get("positive_ids") != core_ids:
         raise TailObjectsRevisionError("Revision geometry ID 与 TailCore 07 不一致")
     if geometry_labels is not None and not np.array_equal(labels, np.asarray(geometry_labels)):
@@ -285,6 +313,7 @@ def serialize_revision0(result, output_dir, tail_core_result, association_result
     stored["geometry"]["shape"] = [int(value) for value in labels.shape]
     stored["geometry"]["dtype"] = str(labels.dtype)
     stored["geometry"]["positive_ids"] = _positive_ids(labels)
+    stored["geometry"]["semantic_fingerprint"] = geometry_semantic_fingerprint(labels)
     stored["revision_id"] = "tail-objects-r0-{}".format(_revision_identity(stored))
     validate_revision0(stored, tail_core_result, association_result, root_dir=output)
     json_path = output / REVISION_JSON_NAME

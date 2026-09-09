@@ -10,7 +10,8 @@ from core.analysis_v2.association_result import adapter_association_output, buil
 from core.analysis_v2.tail_core_result import build_tail_core_result
 from core.analysis_v2.tail_objects_revision import (
     GEOMETRY_LABEL_NAME, REVISION_JSON_NAME, TailObjectsRevisionError,
-    build_revision0, load_revision0, serialize_revision0, validate_revision0,
+    build_revision0, geometry_semantic_fingerprint, load_revision0,
+    serialize_revision0, validate_revision0,
 )
 
 
@@ -66,11 +67,67 @@ def test_roundtrip_deterministic_fingerprint_and_no_pickle(tmp_path):
     serialize_revision0(result, first, core, association, labels)
     serialize_revision0(result, second, core, association, labels)
     loaded = load_revision0(first, core, association, "field-A")
+    assert loaded["revision_id"] == result["revision_id"]
     assert loaded == load_revision0(second, core, association, "field-A")
     assert (first / REVISION_JSON_NAME).read_bytes() == (second / REVISION_JSON_NAME).read_bytes()
     assert np.array_equal(tifffile.imread(str(first / GEOMETRY_LABEL_NAME)), labels)
     assert "pickle" not in (first / REVISION_JSON_NAME).read_text(encoding="utf-8").lower()
     assert not list(tmp_path.rglob("*.pkl"))
+
+
+def test_revision_id_binds_full_geometry_semantics_but_not_tiff_container(tmp_path):
+    core, association, labels, result = revision()
+    changed = labels.copy()
+    changed[0, 0] = 7  # Keep objects and positive IDs identical; alter one pixel only.
+    changed_result = build_revision0(core, association, changed)
+    assert result["objects"] == changed_result["objects"]
+    assert result["revision_id"] != changed_result["revision_id"]
+    assert result["geometry"]["semantic_fingerprint"] != changed_result["geometry"]["semantic_fingerprint"]
+
+    first = tmp_path / "one"; second = tmp_path / "two"
+    serialize_revision0(result, first, core, association, labels)
+    serialize_revision0(result, second, core, association, labels)
+    second_tiff = second / GEOMETRY_LABEL_NAME
+    tifffile.imwrite(str(second_tiff), labels, metadata={"writer": "different metadata"})
+    stored = json.loads((second / REVISION_JSON_NAME).read_text(encoding="utf-8"))
+    import hashlib
+    stored["geometry"]["sha256"] = hashlib.sha256(second_tiff.read_bytes()).hexdigest()
+    (second / REVISION_JSON_NAME).write_bytes(
+        __import__("core.analysis_v2.input_fingerprint", fromlist=["canonical_json_bytes"]).
+        canonical_json_bytes(stored) + b"\n")
+    assert first.joinpath(GEOMETRY_LABEL_NAME).read_bytes() != second_tiff.read_bytes()
+    assert load_revision0(first, core, association)["revision_id"] == result["revision_id"]
+    assert load_revision0(second, core, association)["revision_id"] == result["revision_id"]
+
+    different_provenance_core = copy.deepcopy(core)
+    different_provenance_core["fingerprints"]["producer"] = "different-run-provenance"
+    same_semantics = build_revision0(different_provenance_core, association, labels)
+    assert same_semantics["revision_id"] == result["revision_id"]
+
+    relabelled = labels.copy(); relabelled[relabelled == 7] = 8
+    relabelled_core = copy.deepcopy(core)
+    relabelled_core["labels"]["filtered_07"]["positive_ids"] = [8, 11, 22]
+    relabelled_decisions = copy.deepcopy(association["tails"])
+    relabelled_decisions[0]["tail_id"] = 8
+    relabelled_association = build_association_result(
+        "field-A", [8, 11, 22], [101, 202], relabelled_decisions,
+        ASSOCIATION_FINGERPRINTS)
+    assert build_revision0(relabelled_core, relabelled_association, relabelled)[
+        "revision_id"] != result["revision_id"]
+
+
+def test_geometry_semantic_fingerprint_canonicalizes_byte_order_and_rejects_claim_tamper(tmp_path):
+    core, association, labels, result = revision()
+    assert geometry_semantic_fingerprint(labels) == geometry_semantic_fingerprint(
+        labels.astype(labels.dtype.newbyteorder(">")))
+    serialize_revision0(result, tmp_path, core, association, labels)
+    stored = json.loads((tmp_path / REVISION_JSON_NAME).read_text(encoding="utf-8"))
+    stored["geometry"]["semantic_fingerprint"]["sha256"] = "0" * 64
+    (tmp_path / REVISION_JSON_NAME).write_bytes(
+        __import__("core.analysis_v2.input_fingerprint", fromlist=["canonical_json_bytes"]).
+        canonical_json_bytes(stored) + b"\n")
+    with pytest.raises(TailObjectsRevisionError, match="semantic fingerprint"):
+        load_revision0(tmp_path, core, association)
 
 
 @pytest.mark.parametrize("mutate, message", [

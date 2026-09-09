@@ -314,6 +314,23 @@ class AnalysisV2TaskRunner:
                             "payload_bytes": checkpoint["payload_bytes"],
                         },
                     )
+                revision_checkpoints = [
+                    field.get("tail_objects_revision_checkpoint") for field in prepared["fields"]
+                    if field.get("tail_objects_revision_checkpoint") is not None
+                ]
+                for checkpoint in revision_checkpoints:
+                    performance_logger.event(
+                        "tail_objects_revision_checkpoint", "tail_objects_revision", "succeeded",
+                        duration_seconds=checkpoint["tail_objects_revision_checkpoint_seconds"],
+                        extra={
+                            "field_id": checkpoint["field_id"],
+                            "generation": checkpoint["generation"],
+                            "revision_id": checkpoint["tail_objects_revision"]["revision_id"],
+                            "tail_objects_revision_checkpoint_seconds": checkpoint[
+                                "tail_objects_revision_checkpoint_seconds"],
+                            "payload_bytes": checkpoint["payload_bytes"],
+                        },
+                    )
                 self._enter("tail_calibration")
                 finalizer_started = time.perf_counter()
                 results = []
@@ -389,6 +406,13 @@ class AnalysisV2TaskRunner:
                             ],
                             "payload_bytes": item["payload_bytes"],
                         } for item in association_checkpoints],
+                        "tail_objects_revision_checkpoints": [{
+                            "field_id": item["field_id"],
+                            "revision_id": item["tail_objects_revision"]["revision_id"],
+                            "tail_objects_revision_checkpoint_seconds": item[
+                                "tail_objects_revision_checkpoint_seconds"],
+                            "payload_bytes": item["payload_bytes"],
+                        } for item in revision_checkpoints],
                         "human_wait_seconds": 0.0,
                         "stages_seconds": {
                             "input_checkpoint": input_checkpoint_seconds,
@@ -409,6 +433,9 @@ class AnalysisV2TaskRunner:
                             ),
                             "association_checkpoint": c18b_phases.get(
                                 "association_checkpoint", 0.0
+                            ),
+                            "tail_objects_revision_checkpoint": c18b_phases.get(
+                                "tail_objects_revision_checkpoint", 0.0
                             ),
                             "c18b_orchestration_overhead": c18b_phases.get(
                                 "c18b_orchestration_overhead", 0.0

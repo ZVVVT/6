@@ -15,6 +15,7 @@ from .tail_core_checkpoint import (
     write_and_verify_tail_core_checkpoint,
 )
 from .association_checkpoint import write_and_verify_association_checkpoint
+from .tail_objects_revision_checkpoint import write_and_verify_revision0_checkpoint
 
 WINDOWS_CREATION_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
@@ -452,6 +453,14 @@ class C18BExecution:
             "association_checkpoint",
             association_checkpoint["association_checkpoint_seconds"],
         )
+        revision_checkpoint = write_and_verify_revision0_checkpoint(
+            self.task_root, self.project_root, field_id, checkpoint,
+            association_checkpoint,
+        )
+        self._add_phase_timing(
+            "tail_objects_revision_checkpoint",
+            revision_checkpoint["tail_objects_revision_checkpoint_seconds"],
+        )
 
         return {
             "field_id": field_id,
@@ -473,6 +482,7 @@ class C18BExecution:
             "c18b_filtered_instances": str(filtered_instances_path),
             "tail_core_checkpoint": checkpoint,
             "association_checkpoint": association_checkpoint,
+            "tail_objects_revision_checkpoint": revision_checkpoint,
         }
 
     def _recovery_source_for_field(self, field_id):
