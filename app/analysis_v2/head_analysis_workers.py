@@ -19,6 +19,7 @@ from core.analysis_v2.input_manifest_checkpoint import (
 )
 from core.config_manager import ConfigManager
 from core.analysis_process_registry import analysis_process_registry
+from core.analysis_v2.task_process_context import TaskProcessContext
 
 
 class HeadSegmentationWorker(QThread):
@@ -51,9 +52,14 @@ class HeadSegmentationWorker(QThread):
         self.write_input_manifest_checkpoint = bool(
             write_input_manifest_checkpoint
         )
+        # This worker owns the formal GUI Direct Cellpose child.  It uses the
+        # same per-task Job protocol as AnalysisV2TaskRunner without changing
+        # the surrounding GUI workflow ownership model.
+        self.process_context = TaskProcessContext()
 
     def request_cancel(self) -> None:
         self.requestInterruption()
+        self.process_context.cancel()
         analysis_process_registry.terminate_all()
 
     def run(self) -> None:
@@ -118,6 +124,7 @@ class HeadSegmentationWorker(QThread):
                 timeout_seconds=self.timeout_seconds,
                 case_no=case_no,
                 protein_key=self.protein_key,
+                process_context=self.process_context,
             )
 
             elapsed = time.perf_counter() - started

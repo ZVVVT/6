@@ -85,6 +85,18 @@ class DirectCellposeRunner:
             "--input-json",
             str(input_json),
         ]
+        field_ids = []
+        # Formal Analysis V2 writes worker_input.json before launch.  Retain
+        # compatibility with low-level legacy callers that only exercise the
+        # launcher contract and do not materialize an input payload.
+        if input_json.is_file():
+            with input_json.open("r", encoding="utf-8") as input_handle:
+                input_payload = json.load(input_handle)
+            field_ids = [
+                str(item["field_id"])
+                for item in input_payload.get("fields", [])
+                if isinstance(item, dict) and item.get("field_id") is not None
+            ]
         environment = os.environ.copy()
         environment.update({
             "PYTHONUNBUFFERED": "1",
@@ -104,6 +116,7 @@ class DirectCellposeRunner:
             "return_code": None,
             "duration_seconds": None,
             "timeout_seconds": timeout,
+            "field_ids": field_ids,
         }
         atomic_write_json(command_path, command_record)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -114,14 +127,47 @@ class DirectCellposeRunner:
                 with stderr_path.open("w", encoding="utf-8", newline="\n") as stderr_handle:
                     if process_context is not None:
                         process_context.check_cancelled()
-                    process = registry.register(subprocess.Popen(
-                        command,
-                        cwd=str(self.project_root),
-                        env=environment,
-                        stdout=stdout_handle,
-                        stderr=stderr_handle,
-                        creationflags=creationflags,
-                    ))
+                    popen_kwargs = {
+                        "cwd": str(self.project_root),
+                        "env": environment,
+                        "stdout": stdout_handle,
+                        "stderr": stderr_handle,
+                        "creationflags": creationflags,
+                    }
+                    if process_context is not None:
+                        # TaskProcessContext performs suspended creation, Job
+                        # assignment, direct registration and resume as one
+                        # operation.  Do not register this process again here.
+                        process = process_context.spawn_atomic(command, **popen_kwargs)
+                        # A normal return from spawn_atomic is its established
+                        # success contract: AssignProcessToJobObject and
+                        # ResumeThread have both completed successfully.  These
+                        # values are therefore not guessed from Windows state.
+                        command_record["launch_provenance"] = {
+                            "stage": "direct_cellpose_spawn",
+                            "mode": "atomic",
+                            "field_ids": field_ids,
+                            "worker_pid": int(process.pid),
+                            "worker_python": str(self.python_path),
+                            "job_owned": True,
+                            "assign_completed": True,
+                            "resume_completed": True,
+                        }
+                        atomic_write_json(command_path, command_record)
+                    else:
+                        # Legacy callers have no per-task ownership context.
+                        process = analysis_process_registry.register(
+                            subprocess.Popen(command, **popen_kwargs)
+                        )
+                        command_record["launch_provenance"] = {
+                            "stage": "direct_cellpose_spawn",
+                            "mode": "legacy",
+                            "field_ids": field_ids,
+                            "worker_pid": int(process.pid),
+                            "worker_python": str(self.python_path),
+                            "job_owned": False,
+                        }
+                        atomic_write_json(command_path, command_record)
                     try:
                         if process_context is not None:
                             process_context.check_cancelled()
