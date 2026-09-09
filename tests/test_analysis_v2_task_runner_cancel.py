@@ -5,6 +5,8 @@ import subprocess
 import sys
 import threading
 import time
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 from unittest import mock
 
@@ -17,6 +19,21 @@ from core.analysis_v2.direct_cellpose_runner import DirectCellposeRunner
 from core.analysis_v2.task_process_context import TaskProcessContext, TaskProcessCancelled
 from core.mvimageid_runner import MvImageIDRunner
 from test_analysis_v2_task_runner import harness
+
+
+def _open_process_identity(pid):
+    """Open one Windows process instance for membership and exit diagnostics."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000 | 0x00001000, False, int(pid))
+    assert handle, "OpenProcess({}, SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION) failed: {}".format(
+        pid, ctypes.get_last_error())
+    return kernel, handle
 
 
 def test_cancel_before_run_is_sticky_and_idempotent(harness):
@@ -383,6 +400,169 @@ def test_windows_tree_cancel_converges_spawn_race(tmp_path):
         assert context.wait(time.monotonic() + 1)
     finally:
         context.cancel()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_windows_job_post_assignment_three_level_orphan_is_killed(tmp_path, monkeypatch):
+    """A child that exits after spawning cannot detach its Job-owned grandchild."""
+    script = tmp_path / "controlled_tree.py"
+    allow_child = tmp_path / "allow-child"
+    child_pid = tmp_path / "child.pid"
+    grandchild_pid = tmp_path / "grandchild.pid"
+    child_exited = tmp_path / "child-exited"
+    script.write_text(
+        "import subprocess,sys,time\nfrom pathlib import Path\n"
+        "role, allow, childpid, pidfile, exited = sys.argv[1:]\n"
+        "if role == 'root':\n"
+        " while not Path(allow).exists(): time.sleep(.005)\n"
+        " child=subprocess.Popen([sys.executable, __file__, 'child', allow, childpid, pidfile, exited])\n"
+        " Path(childpid).write_text(str(child.pid))\n"
+        " time.sleep(30)\n"
+        "elif role == 'child':\n"
+        " child=subprocess.Popen([sys.executable, __file__, 'grandchild', allow, childpid, pidfile, exited])\n"
+        " Path(pidfile).write_text(str(child.pid))\n"
+        " Path(exited).write_text('yes')\n"
+        "elif role == 'grandchild': time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    context = TaskProcessContext()
+    root = context.register(subprocess.Popen([sys.executable, str(script), "root",
+                                               str(allow_child), str(child_pid), str(grandchild_pid),
+                                               str(child_exited)]))
+    grandchild_kernel = grandchild_handle = child_handle = None
+    try:
+        assert context._job_diagnostics["assignments"][-1]["assigned"]
+        allow_child.write_text("go", encoding="utf-8")
+        _wait_for_file(child_pid)
+        _wait_for_file(grandchild_pid)
+        _wait_for_file(child_exited)
+        child_value = int(child_pid.read_text())
+        grandchild_value = int(grandchild_pid.read_text())
+        child_kernel, child_handle = _open_process_identity(child_value)
+        grandchild_kernel, grandchild_handle = _open_process_identity(grandchild_value)
+        assert child_kernel.WaitForSingleObject(child_handle, 5000) == 0
+        flags = context._job.limit_flags()
+        diagnostic = {
+            "pids": {"root": root.pid, "child": child_value, "grandchild": grandchild_value},
+            "creationflags": {"root": 0, "child": 0, "grandchild": 0},
+            "membership_before_cancel": {
+                "root": context._job.is_process_in_job(root._handle),
+                "child": context._job.is_process_in_job(child_handle),
+                "grandchild": context._job.is_process_in_job(grandchild_handle),
+            },
+            "active_before_cancel": context._job.active_process_count(),
+            "job_limit_flags": flags,
+            "breakaway_ok": bool(flags & 0x00000800),
+            "silent_breakaway_ok": bool(flags & 0x00001000),
+            "child_handle_signaled_before_cancel": True,
+        }
+        print("post-assignment Job diagnostic before cancel: {}".format(diagnostic))
+        assert diagnostic["membership_before_cancel"] == {
+            "root": True, "child": True, "grandchild": True,
+        }
+        # Do not let the pre-Job ancestry cleanup hide the successful Job path.
+        monkeypatch.setattr(analysis_process_registry, "_terminate_tree",
+                            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fallback")))
+        monkeypatch.setattr("core.analysis_v2.task_process_context.terminate_owned_tree",
+                            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fallback")))
+        context.cancel()
+        termination = context._job_diagnostics["termination"]
+        diagnostic["termination"] = termination
+        diagnostic["active_immediately_after_cancel"] = context._job.active_process_count()
+        diagnostic["grandchild_handle_wait_0"] = grandchild_kernel.WaitForSingleObject(
+            grandchild_handle, 0)
+        diagnostic["pid_alive_immediately_after_cancel"] = _windows_pid_is_alive(grandchild_value)
+        print("post-assignment Job diagnostic after cancel: {}".format(diagnostic))
+        root.wait(timeout=5)
+        assert context.wait(time.monotonic() + 5)
+        # wait() reaps ownership and closes the Job only after its final
+        # QueryInformationJobObject observed zero active members.
+        diagnostic["active_after_shared_deadline"] = context._job_diagnostics["active_after_reap"]
+        diagnostic["grandchild_handle_after_shared_deadline"] = grandchild_kernel.WaitForSingleObject(
+            grandchild_handle, 0)
+        diagnostic["pid_alive_after_shared_deadline"] = _windows_pid_is_alive(grandchild_value)
+        print("post-assignment Job diagnostic converged: {}".format(diagnostic))
+        assert diagnostic["grandchild_handle_after_shared_deadline"] == 0
+        assert not diagnostic["pid_alive_after_shared_deadline"]
+        assert context._job_diagnostics["termination"]["requested"]
+        assert context._job_diagnostics["active_after_reap"] == 0
+    finally:
+        context.cancel()
+        if child_handle:
+            child_kernel.CloseHandle(child_handle)
+        if grandchild_handle:
+            grandchild_kernel.CloseHandle(grandchild_handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_windows_job_does_not_retroactively_own_pre_assignment_descendants(tmp_path):
+    """Documents the Popen-to-Assign window with a controlled, non-random probe."""
+    script = tmp_path / "pre_assignment_tree.py"
+    child_ready = tmp_path / "child-ready"
+    allow_grandchild = tmp_path / "allow-grandchild"
+    grandchild_pid = tmp_path / "grandchild.pid"
+    script.write_text(
+        "import subprocess,sys,time\nfrom pathlib import Path\n"
+        "role, ready, allow, pidfile = sys.argv[1:]\n"
+        "if role == 'root':\n"
+        " subprocess.Popen([sys.executable, __file__, 'child', ready, allow, pidfile])\n"
+        " time.sleep(30)\n"
+        "elif role == 'child':\n"
+        " Path(ready).write_text('ready')\n"
+        " while not Path(allow).exists(): time.sleep(.005)\n"
+        " grandchild=subprocess.Popen([sys.executable, __file__, 'grandchild', ready, allow, pidfile])\n"
+        " Path(pidfile).write_text(str(grandchild.pid))\n"
+        "elif role == 'grandchild': time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    root = subprocess.Popen([sys.executable, str(script), "root", str(child_ready),
+                             str(allow_grandchild), str(grandchild_pid)])
+    context = TaskProcessContext()
+    try:
+        _wait_for_file(child_ready)
+        context.register(root)
+        assert context._job_diagnostics["assignments"][-1]["assigned"]
+        allow_grandchild.write_text("go", encoding="utf-8")
+        _wait_for_file(grandchild_pid)
+        context.cancel()
+        root.wait(timeout=5)
+        # An already-created child was never inserted into root's Job, so its
+        # later grandchild survives Job termination.  Cleanup below is explicit.
+        assert _windows_pid_is_alive(int(grandchild_pid.read_text()))
+    finally:
+        context.cancel()
+        if grandchild_pid.is_file():
+            subprocess.run(["taskkill", "/PID", grandchild_pid.read_text(), "/T", "/F"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        context.wait(time.monotonic() + 5)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_windows_job_contexts_are_isolated_and_handles_close():
+    context_a, context_b = TaskProcessContext(), TaskProcessContext()
+    process_a = context_a.register(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"]))
+    process_b = context_b.register(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"]))
+    try:
+        assert context_a._job_diagnostics["assignments"][-1]["assigned"]
+        assert context_b._job_diagnostics["assignments"][-1]["assigned"]
+        context_a.cancel()
+        assert context_a.wait(time.monotonic() + 5)
+        assert process_b.poll() is None
+        assert context_a._job_diagnostics["closed"]
+    finally:
+        context_a.cancel()
+        context_b.cancel()
+        context_b.wait(time.monotonic() + 5)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_windows_job_normal_completion_closes_handle():
+    context = TaskProcessContext()
+    process = context.register(subprocess.Popen([sys.executable, "-c", "pass"]))
+    process.wait(timeout=5)
+    assert context.wait(time.monotonic() + 5)
+    assert context._job_diagnostics["active_after_reap"] == 0
+    assert context._job_diagnostics["closed"]
 
 
 def _wait_for_file(path, timeout=5):

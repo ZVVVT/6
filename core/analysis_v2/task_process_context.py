@@ -2,9 +2,13 @@
 
 import threading
 import time
+import os
+import subprocess
 
 from core.analysis_process_registry import analysis_process_registry
 from .windows_process_tree import descendant_pids, terminate_owned_tree
+from .windows_job_object import WindowsJobObject, WindowsJobObjectError
+from .task_process_spawn import SuspendedPopen, AtomicProcessSpawnError
 
 
 class TaskProcessCancelled(Exception):
@@ -17,6 +21,12 @@ class TaskProcessContext:
         self._lock = threading.Lock()
         self._processes = {}
         self._tree_diagnostics = {}
+        self._job = WindowsJobObject()
+        self._job_diagnostics = {"created": self._job.available,
+                                 "creation_winerror": self._job.creation_error,
+                                 "assignments": [], "termination": None}
+        self._job_owned_pids = set()
+        self._job_terminated = False
 
     def check_cancelled(self):
         if self.cancel_event.is_set():
@@ -25,27 +35,101 @@ class TaskProcessContext:
     def register(self, process):
         analysis_process_registry.register(process)
         with self._lock:
+            assignment = self._assign_job_locked(process)
+            if assignment.get("assigned"):
+                self._job_owned_pids.add(process.pid)
             self._processes[process.pid] = process
             cancelled = self.cancel_event.is_set()
         # Covers cancellation between the pre-Popen check and registration.  The
         # process remains owned until wait()/unregister() has reaped it.
         if cancelled:
+            self._terminate_job_once()
             self._terminate(process)
         return process
+
+    def spawn_atomic(self, args, **popen_kwargs):
+        """Create, Job-own, register, and resume one task process atomically.
+
+        Windows uses a suspended CPython-3.8 ``Popen``.  The context lock makes
+        cancellation state, Job assignment, registration and resume one ordered
+        protocol.  Non-Windows keeps the explicitly non-atomic legacy path.
+        """
+        if os.name != "nt" or not self._job.available:
+            return self.register(subprocess.Popen(args, **popen_kwargs))
+        with self._lock:
+            if self.cancel_event.is_set():
+                raise TaskProcessCancelled("Analysis V2 task cancelled")
+            process = SuspendedPopen(args, **popen_kwargs)
+            assignment = self._assign_job_locked(process)
+            if not assignment.get("assigned"):
+                self._abort_atomic_locked(process)
+                raise AtomicProcessSpawnError(
+                    "AssignProcessToJobObject failed; suspended process was reaped: {}"
+                    .format(assignment))
+            self._job_owned_pids.add(process.pid)
+            self._processes[process.pid] = process
+            analysis_process_registry.register(process)
+            self._before_atomic_resume_locked(process)
+            if self.cancel_event.is_set():
+                self._abort_atomic_locked(process)
+                raise TaskProcessCancelled("Analysis V2 task cancelled")
+            try:
+                process.resume()
+            except Exception:
+                self._abort_atomic_locked(process)
+                raise
+        return process
+
+    def _before_atomic_resume_locked(self, process):
+        """A deliberately empty deterministic test seam; lock remains held."""
+
+    def _set_cancelled_locked(self):
+        self.cancel_event.set()
+
+    def _abort_atomic_locked(self, process):
+        """Reap a never-resumed process and remove its direct ownership entry."""
+        try:
+            process.abort_before_resume()
+        finally:
+            self._processes.pop(process.pid, None)
+            self._job_owned_pids.discard(process.pid)
+            analysis_process_registry.unregister(process)
+            self._close_job_if_reaped_locked()
+
+    def _assign_job_locked(self, process):
+        """Assign while the registration lock holds ownership state coherent."""
+        pid = getattr(process, "pid", None)
+        result = {"pid": pid, "assigned": False, "reason": "no-popen-handle"}
+        handle = getattr(process, "_handle", None)
+        if self._job.available and isinstance(handle, int) and handle:
+            result = self._job.assign_process(handle)
+            result["pid"] = pid
+        elif self._job.available:
+            result = {"pid": pid, "assigned": False, "reason": "no-popen-handle"}
+        self._job_diagnostics["assignments"].append(result)
+        return result
 
     def unregister(self, process):
         # Keep ownership if cleanup failed: shutdown must report the leak.
         if process.poll() is not None:
             try:
+                # poll() established terminal state; wait(0) performs the
+                # direct Popen reap path without allocating another deadline.
+                process.wait(timeout=0)
+            except (AttributeError, OSError, RuntimeError, TypeError):
+                pass
+            try:
                 descendants = descendant_pids(process.pid)
             except Exception:
                 descendants = []
-            if descendants:
+            if descendants or self._job_active_locked():
                 return
             with self._lock:
                 self._processes.pop(process.pid, None)
+                self._job_owned_pids.discard(process.pid)
                 self._tree_diagnostics.pop(process.pid, None)
             analysis_process_registry.unregister(process)
+            self._close_job_if_reaped_locked()
 
     def has_active_processes(self):
         with self._lock:
@@ -102,8 +186,40 @@ class TaskProcessContext:
             # Ownership is retained; wait() will retry and report a timeout.
             pass
 
+    def _job_active_locked(self):
+        if not self._job.available:
+            return False
+        try:
+            return self._job.active_process_count() > 0
+        except WindowsJobObjectError as error:
+            self._job_diagnostics["active_query_winerror"] = error.winerror
+            return True
+
+    def _close_job_if_reaped_locked(self):
+        if not self._processes and self._job.available and not self._job_active_locked():
+            self._job_diagnostics["active_after_reap"] = 0
+            self._job_diagnostics["closed"] = self._job.close()
+
+    def _terminate_job_once(self):
+        with self._lock:
+            if not self._job.available or self._job_terminated:
+                return False
+            self._job_terminated = True
+            result = self._job.terminate()
+            try:
+                result["active_processes_at_cancel_return"] = self._job.active_process_count()
+            except WindowsJobObjectError as error:
+                result["active_at_cancel_return_query_winerror"] = error.winerror
+            self._job_diagnostics["termination"] = result
+            return bool(result.get("requested"))
+
     def cancel(self, deadline=None):
-        self.cancel_event.set()
+        # Cancellation becomes visible under the same lock used by atomic spawn:
+        # a process is either resumed before cancellation takes ownership, or it
+        # observes the sticky event while still suspended and is never resumed.
+        with self._lock:
+            self._set_cancelled_locked()
+        job_terminated = self._terminate_job_once()
         with self._lock:
             processes = list(self._processes.values())
         for process in processes:
@@ -111,9 +227,17 @@ class TaskProcessContext:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
+                # Job termination is the primary ownership operation.  Keep the
+                # established tree/direct cleanup as bounded convergence fallback:
+                # TerminateJobObject returning does not mean every member has
+                # already exited at this instant.
                 self._terminate(process, timeout=min(1.0, remaining), deadline=deadline)
             else:
                 self._terminate(process)
+
+    def _is_job_owned(self, process):
+        with self._lock:
+            return getattr(process, "pid", None) in self._job_owned_pids
 
     def wait(self, deadline):
         while True:
