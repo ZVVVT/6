@@ -216,6 +216,18 @@ def test_input_manifest_checkpoint_failure_fails_before_head(harness, monkeypatc
     assert harness.calls == []
 
 
+def test_common_preparation_failure_fails_before_head_or_c18b(harness, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("common input failed")
+    monkeypatch.setattr(tasks, "prepare_common_task_input", fail)
+    with pytest.raises(tasks.AnalysisV2TaskError) as error:
+        harness.runner.run(tasks.AnalysisV2TaskRequest(
+            "case1", "protein3", harness.fields, protein_part="tail",
+        ))
+    assert error.value.stage == "common_preparation"
+    assert harness.calls == []
+
+
 def test_protein3_head_skips_c18b_and_uses_head_measurement(harness):
     fields = [{key: value for key, value in harness.fields[0].items() if key != "Merge"}]
     completion = harness.runner.run(tasks.AnalysisV2TaskRequest(
@@ -391,8 +403,6 @@ def test_runner_real_calibration_and_tail_measurement_contract(harness, tmp_path
     from core.analysis_v2 import tail_calibration_service as calibration
     from core.analysis_v2.head_calibration_service import HeadCalibrationService
     from core.analysis_v2.tail_measurement_service import TailMeasurementService
-    from core.analysis_v2.manifest_store import ManifestStore
-    from core.analysis_v2.task_state import TaskStateStore
     from core.mvimageid_runner import MvImageIDRunner, MvImageIDRunResult
     from test_tail_automatic_workset import TailAutomaticWorksetTests
     from test_tail_contract_counts import _write_csv
@@ -414,10 +424,7 @@ def test_runner_real_calibration_and_tail_measurement_contract(harness, tmp_path
         def segmentation(**kwargs):
             paths = kwargs["paths"]
             paths.create_directories()
-            TaskStateStore.from_task_paths(paths).initialize(case_no="case1", protein_key="protein3")
-            ManifestStore.from_task_paths(paths).initialize(case_no="case1", protein_key="protein3")
-            for channel in ("TRITC", "FITC", "Merge"):
-                shutil.copy2(str(source), str(paths.input_dir / ("001_" + channel + ".tif")))
+            assert kwargs["prepared_input"]["worker_input_path"].is_file()
             shutil.copy2(str(fixture.head_path), str(paths.segmentation_head_dir / "001_HeadInitialLabels.tif"))
             (paths.segmentation_head_dir / "001_HeadInitialObjects.json").write_text(json.dumps({"object_count": total}))
 

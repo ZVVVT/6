@@ -17,7 +17,9 @@ from .head_calibration_service import HeadCalibrationService
 from .head_input_adapter import build_head_segmentation_fields
 from .input_manifest_checkpoint import write_and_verify_input_manifest_checkpoint
 from .head_measurement_service import HeadMeasurementService
-from .segmentation_service import run_head_segmentation, _validate_field_id
+from .segmentation_service import (
+    prepare_common_task_input, run_head_segmentation, _validate_field_id,
+)
 from .tail_calibration_service import (
     save_initial_c18b_tail_workset, build_automatic_tail_final_contract,
     register_tail_final_contract, complete_tail_calibration,
@@ -197,6 +199,14 @@ class AnalysisV2TaskRunner:
                 workspace_root=workspace,
             )
             paths = self._paths
+            self._enter("common_preparation")
+            common_prepared = prepare_common_task_input(
+                paths=paths,
+                paired_fields=fields,
+                case_no=request.case_no,
+                protein_key=request.protein_key,
+                process_context=self._process_context,
+            )
             if part == "tail":
                 performance_logger = StageLogger.from_task_paths(
                     paths,
@@ -251,6 +261,7 @@ class AnalysisV2TaskRunner:
                 worker_path=project_root / "tools" / "analysis_v2" / "direct_cellpose_worker.py",
                 timeout_seconds=600.0, case_no=request.case_no,
                 protein_key=request.protein_key, process_context=self._process_context,
+                prepared_input=common_prepared,
             )
             self._enter("head_calibration")
             HeadCalibrationService(paths.task_root, interactive=False).complete(

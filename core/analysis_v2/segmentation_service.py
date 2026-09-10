@@ -187,6 +187,51 @@ def _build_worker_input(
     }
 
 
+def prepare_common_task_input(
+    paths: AnalysisTaskPaths,
+    paired_fields: Sequence[Dict[str, Any]],
+    case_no: Optional[str] = None,
+    protein_key: Optional[str] = None,
+    process_context=None,
+) -> Dict[str, Any]:
+    """Prepare the single shared task input contract for Head and C18B.
+
+    This intentionally retains the pre-P2B1 paths, worker-input schema and
+    manifest roles.  ``run_head_segmentation`` also calls it for legacy direct
+    callers when a prepared payload was not supplied.
+    """
+    if process_context is not None:
+        process_context.check_cancelled()
+    paths.create_directories()
+    state = TaskStateStore.from_task_paths(paths)
+    manifest = ManifestStore.from_task_paths(paths)
+    copied_fields = _copy_fields(
+        paired_fields, paths, process_context=process_context,
+    )
+    state.initialize(case_no=case_no, protein_key=protein_key)
+    manifest.initialize(case_no=case_no, protein_key=protein_key)
+    state.update("input_ready", "head_segmentation", "配对视野已复制到任务 input")
+    for item in copied_fields:
+        for channel in ("tritc", "fitc", "merge"):
+            source_value = str(item.get("{}_path".format(channel), "") or "").strip()
+            if source_value:
+                manifest.add_file(
+                    Path(source_value),
+                    role="{}_input".format(channel),
+                    stage="head_segmentation",
+                    metadata={"field_id": item["field_id"]},
+                )
+
+    worker_input = _build_worker_input(copied_fields, paths)
+    worker_input_path = paths.task_root / "worker_input.json"
+    atomic_write_json(worker_input_path, worker_input)
+    return {
+        "copied_fields": copied_fields,
+        "worker_input": worker_input,
+        "worker_input_path": worker_input_path,
+    }
+
+
 def validate_worker_field(field: Dict[str, Any]) -> Dict[str, Any]:
     if field.get("error") is not None:
         raise ValueError("视野 {} worker 失败：{}".format(field.get("field_id"), field["error"]))
@@ -238,8 +283,9 @@ def run_head_segmentation(
     case_no: Optional[str] = None,
     protein_key: Optional[str] = None,
     process_context=None,
+    prepared_input: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """复制输入并在一个 worker 进程中完成一个批次的全部 TRITC。"""
+    """Consume prepared input and run all TRITC fields in one worker process."""
     if process_context is not None:
         process_context.check_cancelled()
     paths.create_directories()
@@ -247,25 +293,20 @@ def run_head_segmentation(
     state = TaskStateStore.from_task_paths(paths)
     manifest = ManifestStore.from_task_paths(paths)
     try:
-        copied_fields = _copy_fields(paired_fields, paths, process_context=process_context)
-        state.initialize(case_no=case_no, protein_key=protein_key)
-        manifest.initialize(case_no=case_no, protein_key=protein_key)
-        state.update("input_ready", "head_segmentation", "配对视野已复制到任务 input")
-        for item in copied_fields:
-            for channel in ("tritc", "fitc", "merge"):
-                source_value = str(
-                    item.get("{}_path".format(channel), "") or ""
-                ).strip()
-
-                if not source_value:
-                    continue
-
-                manifest.add_file(
-                    Path(source_value),
-                    role="{}_input".format(channel),
-                    stage="head_segmentation",
-                    metadata={"field_id": item["field_id"]},
-                )
+        if prepared_input is None:
+            prepared_input = prepare_common_task_input(
+                paths=paths,
+                paired_fields=paired_fields,
+                case_no=case_no,
+                protein_key=protein_key,
+                process_context=process_context,
+            )
+        copied_fields = list(prepared_input["copied_fields"])
+        worker_input_path = Path(prepared_input["worker_input_path"])
+        if not worker_input_path.is_file():
+            raise FileNotFoundError("Analysis V2 缺少已准备 worker_input.json：{}".format(
+                worker_input_path
+            ))
 
         environment_writer = EnvironmentSnapshotWriter(
             paths=paths,
@@ -276,10 +317,7 @@ def run_head_segmentation(
             output_dir=paths.segmentation_head_dir,
         )
         environment_writer.write()
-        worker_input = _build_worker_input(copied_fields, paths)
-        worker_input_path = paths.task_root / "worker_input.json"
         worker_result_path = paths.task_root / "worker_result.json"
-        atomic_write_json(worker_input_path, worker_input)
         logger.info("head_segmentation", "开始直接 Cellpose 批量头部识别")
         logger.event("stage_started", "head_segmentation", "running", message="直接 Cellpose worker 启动")
         state.update("head_segmenting", "head_segmentation", "正在使用直接 Cellpose 识别头部")
