@@ -165,7 +165,7 @@ def test_all_formal_c18b_process_call_sites_name_their_atomic_stage():
     source = C18BExecution._ensure_c18b_result.__code__.co_consts
     assert "c18b_tail_core" in source
     source = C18BExecution._prepare_c18b_editor_payload.__code__.co_consts
-    assert "extreme_fragment_filter" in source
+    assert "c18b_head_dependent_finalize" in source
     assert "tail_editor_adapter" in source
 
 

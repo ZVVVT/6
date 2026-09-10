@@ -177,11 +177,14 @@ class C18BExtremeFragmentWiringTests(unittest.TestCase):
     def test_editor_adapter_receives_filtered_labels(self):
         source = (PROJECT_ROOT / "core" / "analysis_v2"
                   / "c18b_execution.py").read_text(encoding="utf-8")
+        backend = source[source.index("def _ensure_c18b_result"):
+                         source.index("def _prepare_c18b_editor_payload")]
         prepare = source[source.index("def _prepare_c18b_editor_payload"):
                          source.index("def _run_c18b_workflow")]
-        filter_call = prepare.index("extreme_fragment_filter.py")
+        self.assertIn('"--backend-only"', backend)
+        finalize_call = prepare.index('"--finalize-with-head"')
         adapter_call = prepare.index('"--instances", str(filtered_instances_path)')
-        self.assertLess(filter_call, adapter_call)
+        self.assertLess(finalize_call, adapter_call)
         self.assertIn("07_extreme_fragment_filtered_labels.tif", source)
         self.assertIn('"c18b_baseline_instances"', prepare)
         self.assertIn('"c18b_filtered_instances"', prepare)

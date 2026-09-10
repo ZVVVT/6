@@ -288,12 +288,6 @@ class C18BExecution:
             return instances_path
 
         fitc_path = _field_fitc_path(self.task_root, field_id)
-        head_labels = (
-            self.task_root
-            / "calibration"
-            / "head"
-            / (field_id + "_HeadFinalLabels.tif")
-        )
         runner = (
             self.project_root
             / "tools"
@@ -302,14 +296,10 @@ class C18BExecution:
         ).resolve()
         if not runner.is_file():
             raise FileNotFoundError("C18B运行器不存在：{}".format(runner))
-        compatibility_dir = (
-            self.task_root
-            / "segmentation"
-            / "c18b_runner_contract"
-            / field_id
-        )
         self._log(
-            "[C18B backend] {} 开始生成尾部实例。".format(field_id)
+            "[C18B backend] {} 开始生成 Head-independent 尾部实例。".format(
+                field_id
+            )
         )
         self._run_streaming_command(
             [
@@ -318,14 +308,11 @@ class C18BExecution:
                 str(runner),
                 "--green",
                 str(fitc_path),
-                "--head-labels",
-                str(head_labels),
-                "--output-dir",
-                str(compatibility_dir),
                 "--c18b-output-dir",
                 str(_c18b_output_dir(self.task_root, field_id)),
                 "--candidate-path-mode",
                 self.candidate_path_mode,
+                "--backend-only",
             ],
             "{} C18B backend".format(field_id),
             log_handle,
@@ -338,28 +325,54 @@ class C18BExecution:
     def _prepare_c18b_editor_payload(self, field_id, instances_path, log_handle,
                                       checkpoint=None, apply_filter=True):
         if apply_filter:
-            filter_script = (
+            runner = (
                 self.project_root
                 / "tools"
                 / "analysis_v2"
-                / "c18b_score015"
-                / "extreme_fragment_filter.py"
+                / "c18b_score015_adapter.py"
             ).resolve()
-            if not filter_script.is_file():
+            if not runner.is_file():
                 raise FileNotFoundError(
-                    "C18B极短碎片过滤器不存在：{}".format(filter_script)
+                    "C18B Head-dependent finalize 不存在：{}".format(runner)
                 )
-            filter_started = time.perf_counter()
+            head_labels = (
+                self.task_root
+                / "calibration"
+                / "head"
+                / (field_id + "_HeadFinalLabels.tif")
+            )
+            fitc_path = _field_fitc_path(self.task_root, field_id)
+            compatibility_dir = (
+                self.task_root
+                / "segmentation"
+                / "c18b_runner_contract"
+                / field_id
+            )
+            finalize_started = time.perf_counter()
             self._run_streaming_command(
                 [
                     str(self.python_executable),
                     "-u",
-                    str(filter_script),
-                    str(Path(instances_path).resolve().parent),
+                    str(runner),
+                    "--green",
+                    str(fitc_path),
+                    "--head-labels",
+                    str(head_labels),
+                    "--output-dir",
+                    str(compatibility_dir),
+                    "--c18b-output-dir",
+                    str(_c18b_output_dir(self.task_root, field_id)),
+                    "--candidate-path-mode",
+                    self.candidate_path_mode,
+                    "--finalize-with-head",
                 ],
-                "{} C18B extreme fragment filter".format(field_id),
+                "{} C18B Head-dependent finalize".format(field_id),
                 log_handle,
-                launch_stage="extreme_fragment_filter",
+                launch_stage="c18b_head_dependent_finalize",
+            )
+            self._add_phase_timing(
+                "c18b_head_dependent_finalize",
+                time.perf_counter() - finalize_started,
             )
         filtered_instances_path = _c18b_filtered_instances_path(
             self.task_root, field_id
@@ -372,10 +385,6 @@ class C18BExecution:
                 )
             )
         if apply_filter:
-            self._add_phase_timing(
-                "fragment_filter",
-                time.perf_counter() - filter_started,
-            )
             checkpoint = write_and_verify_tail_core_checkpoint(
                 self.task_root, self.project_root, Path(instances_path).resolve().parent,
                 field_id, self.candidate_path_mode,
