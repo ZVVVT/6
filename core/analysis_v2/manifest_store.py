@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from .environment_snapshot import sha256_file
 from .task_paths import AnalysisTaskPaths
-from .task_state import atomic_write_json, current_timestamp
+from .task_state import atomic_write_json, current_timestamp, target_lock
 
 
 def _file_modified_timestamp(path: Path) -> str:
@@ -65,26 +65,27 @@ class ManifestStore:
         overwrite: bool = False,
     ) -> Dict[str, Any]:
         """创建初始manifest.json。"""
-        if self.exists() and not overwrite:
-            raise FileExistsError(
-                "清单文件已经存在：{}".format(
-                    self.manifest_path
+        with target_lock(self.manifest_path):
+            if self.exists() and not overwrite:
+                raise FileExistsError(
+                    "清单文件已经存在：{}".format(
+                        self.manifest_path
+                    )
                 )
-            )
 
-        timestamp = current_timestamp()
+            timestamp = current_timestamp()
 
-        data: Dict[str, Any] = {
-            "schema_version": 1,
-            "task_id": self.task_id,
-            "case_no": case_no,
-            "protein_key": protein_key,
-            "created_at": timestamp,
-            "updated_at": timestamp,
-            "files": [],
-        }
+            data: Dict[str, Any] = {
+                "schema_version": 1,
+                "task_id": self.task_id,
+                "case_no": case_no,
+                "protein_key": protein_key,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "files": [],
+            }
 
-        atomic_write_json(self.manifest_path, data)
+            atomic_write_json(self.manifest_path, data)
         return data
 
     def load(self) -> Dict[str, Any]:
@@ -218,24 +219,25 @@ class ManifestStore:
             "registered_at": current_timestamp(),
         }
 
-        data = self.load()
-        existing_files: List[Dict[str, Any]] = data["files"]
+        with target_lock(self.manifest_path):
+            data = self.load()
+            existing_files: List[Dict[str, Any]] = data["files"]
 
-        replaced = False
+            replaced = False
 
-        for index, existing_record in enumerate(
-            existing_files
-        ):
-            if existing_record.get("record_id") == record_id:
-                existing_files[index] = record
-                replaced = True
-                break
+            for index, existing_record in enumerate(
+                existing_files
+            ):
+                if existing_record.get("record_id") == record_id:
+                    existing_files[index] = record
+                    replaced = True
+                    break
 
-        if not replaced:
-            existing_files.append(record)
+            if not replaced:
+                existing_files.append(record)
 
-        data["updated_at"] = current_timestamp()
-        atomic_write_json(self.manifest_path, data)
+            data["updated_at"] = current_timestamp()
+            atomic_write_json(self.manifest_path, data)
 
         return record
 

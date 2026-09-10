@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .task_paths import AnalysisTaskPaths
-from .task_state import current_timestamp
+from .task_state import current_timestamp, target_lock
 
 
 @dataclass
@@ -74,15 +74,15 @@ class StageLogger:
         """追加一行文本，并立即刷新到磁盘。"""
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        with path.open(
-            "a",
-            encoding="utf-8",
-            newline="\n",
-        ) as file:
-            file.write(line)
-            file.write("\n")
-            file.flush()
-            os.fsync(file.fileno())
+        with target_lock(path):
+            with path.open(
+                "a",
+                encoding="utf-8",
+                newline="\n",
+            ) as file:
+                file.write(line + "\n")
+                file.flush()
+                os.fsync(file.fileno())
 
     def log(
         self,

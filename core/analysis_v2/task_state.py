@@ -47,17 +47,18 @@ ALLOWED_STATUSES = {
 }
 
 _TARGET_LOCKS_GUARD = threading.Lock()
-_TARGET_LOCKS: Dict[str, threading.Lock] = {}
+_TARGET_LOCKS: Dict[str, Any] = {}
 _REPLACE_RETRY_DELAYS = (0.05, 0.10, 0.20, 0.40, 0.80)
 
 
-def _target_lock(path: Path) -> threading.Lock:
-    """返回规范化目标路径对应的进程内线程锁。"""
-    normalized = os.path.normcase(os.path.abspath(str(path)))
+def target_lock(path: Path) -> Any:
+    """返回规范化目标路径对应的进程内可重入线程锁。"""
+    resolved_path = Path(path).resolve()
+    normalized = os.path.normcase(os.path.abspath(str(resolved_path)))
     with _TARGET_LOCKS_GUARD:
         lock = _TARGET_LOCKS.get(normalized)
         if lock is None:
-            lock = threading.Lock()
+            lock = threading.RLock()
             _TARGET_LOCKS[normalized] = lock
         return lock
 
@@ -75,7 +76,7 @@ def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
     target_path = Path(path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with _target_lock(target_path):
+    with target_lock(target_path):
         temporary_path = None
         original_exception = None
 
@@ -154,35 +155,36 @@ class TaskStateStore:
 
         默认不允许覆盖已有状态文件，防止误删历史状态。
         """
-        if self.exists() and not overwrite:
-            raise FileExistsError(
-                "状态文件已经存在：{}".format(self.state_path)
-            )
+        with target_lock(self.state_path):
+            if self.exists() and not overwrite:
+                raise FileExistsError(
+                    "状态文件已经存在：{}".format(self.state_path)
+                )
 
-        timestamp = current_timestamp()
+            timestamp = current_timestamp()
 
-        data: Dict[str, Any] = {
-            "schema_version": 1,
-            "task_id": self.task_id,
-            "case_no": case_no,
-            "protein_key": protein_key,
-            "status": "created",
-            "stage": "task",
-            "message": "任务状态已创建",
-            "created_at": timestamp,
-            "updated_at": timestamp,
-            "error": None,
-            "history": [
-                {
-                    "timestamp": timestamp,
-                    "status": "created",
-                    "stage": "task",
-                    "message": "任务状态已创建",
-                }
-            ],
-        }
+            data: Dict[str, Any] = {
+                "schema_version": 1,
+                "task_id": self.task_id,
+                "case_no": case_no,
+                "protein_key": protein_key,
+                "status": "created",
+                "stage": "task",
+                "message": "任务状态已创建",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "error": None,
+                "history": [
+                    {
+                        "timestamp": timestamp,
+                        "status": "created",
+                        "stage": "task",
+                        "message": "任务状态已创建",
+                    }
+                ],
+            }
 
-        atomic_write_json(self.state_path, data)
+            atomic_write_json(self.state_path, data)
         return data
 
     def load(self) -> Dict[str, Any]:
@@ -233,27 +235,28 @@ class TaskStateStore:
         if not str(stage).strip():
             raise ValueError("stage不能为空")
 
-        data = self.load()
-        timestamp = current_timestamp()
+        with target_lock(self.state_path):
+            data = self.load()
+            timestamp = current_timestamp()
 
-        history_item: Dict[str, Any] = {
-            "timestamp": timestamp,
-            "status": status,
-            "stage": str(stage),
-            "message": str(message),
-        }
+            history_item: Dict[str, Any] = {
+                "timestamp": timestamp,
+                "status": status,
+                "stage": str(stage),
+                "message": str(message),
+            }
 
-        if error is not None:
-            history_item["error"] = error
+            if error is not None:
+                history_item["error"] = error
 
-        data["status"] = status
-        data["stage"] = str(stage)
-        data["message"] = str(message)
-        data["updated_at"] = timestamp
-        data["error"] = error
-        data["history"].append(history_item)
+            data["status"] = status
+            data["stage"] = str(stage)
+            data["message"] = str(message)
+            data["updated_at"] = timestamp
+            data["error"] = error
+            data["history"].append(history_item)
 
-        atomic_write_json(self.state_path, data)
+            atomic_write_json(self.state_path, data)
         return data
 
     def mark_failed(
