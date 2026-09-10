@@ -136,6 +136,7 @@ class TaskSupervisor:
         with self._lock:
             if self._root_failure is not None:
                 self._state = TaskSupervisorState.FAILED
+                self.process_context.finish()
                 return False
             if self._workers or self.process_context.has_active_processes():
                 return False
@@ -143,6 +144,7 @@ class TaskSupervisor:
                 self._state = TaskSupervisorState.CANCELLED
             else:
                 self._state = TaskSupervisorState.COMPLETED
+            self._finish_context_if_reaped_locked()
             return True
 
     def finalize(self):
@@ -150,11 +152,20 @@ class TaskSupervisor:
         with self._lock:
             if self._root_failure is not None:
                 self._state = TaskSupervisorState.FAILED
-                return self._state
-            if self._workers or self.process_context.has_active_processes():
-                return self._state
-            if self.cancel_event.is_set():
-                self._state = TaskSupervisorState.CANCELLED
+                # A failure is terminal even while cancellation cleanup is
+                # still reaping children; prevent any later spawn immediately.
+                self.process_context.finish()
             else:
-                self._state = TaskSupervisorState.COMPLETED
+                if self._workers or self.process_context.has_active_processes():
+                    return self._state
+                if self.cancel_event.is_set():
+                    self._state = TaskSupervisorState.CANCELLED
+                else:
+                    self._state = TaskSupervisorState.COMPLETED
+            self._finish_context_if_reaped_locked()
             return self._state
+
+    def _finish_context_if_reaped_locked(self):
+        """The supervisor alone closes its Context's future-spawn lifetime."""
+        if not self._workers and not self.process_context.has_active_processes():
+            self.process_context.finish()

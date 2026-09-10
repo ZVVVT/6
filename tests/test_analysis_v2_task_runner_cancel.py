@@ -480,8 +480,9 @@ def test_windows_job_post_assignment_three_level_orphan_is_killed(tmp_path, monk
         print("post-assignment Job diagnostic after cancel: {}".format(diagnostic))
         root.wait(timeout=5)
         assert context.wait(time.monotonic() + 5)
-        # wait() reaps ownership and closes the Job only after its final
-        # QueryInformationJobObject observed zero active members.
+        # Task completion, rather than a temporary empty direct-child
+        # registry, owns the final Job close.
+        assert context.finish()
         diagnostic["active_after_shared_deadline"] = context._job_diagnostics["active_after_reap"]
         diagnostic["grandchild_handle_after_shared_deadline"] = grandchild_kernel.WaitForSingleObject(
             grandchild_handle, 0)
@@ -553,6 +554,7 @@ def test_windows_job_contexts_are_isolated_and_handles_close():
         context_a.cancel()
         assert context_a.wait(time.monotonic() + 5)
         assert process_b.poll() is None
+        assert context_a.finish()
         assert context_a._job_diagnostics["closed"]
     finally:
         context_a.cancel()
@@ -566,6 +568,7 @@ def test_windows_job_normal_completion_closes_handle():
     process = context.register(subprocess.Popen([sys.executable, "-c", "pass"]))
     process.wait(timeout=5)
     assert context.wait(time.monotonic() + 5)
+    assert context.finish()
     assert context._job_diagnostics["active_after_reap"] == 0
     assert context._job_diagnostics["closed"]
 

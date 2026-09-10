@@ -49,6 +49,14 @@ def test_user_cancel_without_failure_finishes_cancelled():
     supervisor.request_cancel("user")
     assert supervisor.finalize() == TaskSupervisorState.CANCELLED
     assert not supervisor.cancellation_is_failure_triggered
+    assert supervisor.process_context._job_diagnostics["finish_requested"]
+
+
+def test_failure_finalize_ends_future_spawn_lifetime():
+    supervisor = TaskSupervisor()
+    supervisor.record_failure("head", "001", RuntimeError("primary"))
+    assert supervisor.finalize() == TaskSupervisorState.FAILED
+    assert supervisor.process_context._job_diagnostics["finish_requested"]
 
 
 def test_completion_waits_for_worker_and_process_cleanup():

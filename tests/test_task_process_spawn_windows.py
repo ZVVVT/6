@@ -135,6 +135,7 @@ def test_atomic_cancel_before_resume_never_runs_user_code(tmp_path, monkeypatch)
                               "from pathlib import Path; Path(r'{}').write_text('bad')".format(marker)])
     assert not marker.exists()
     assert not context.has_active_processes()
+    assert context.finish()
     assert context._job_diagnostics["active_after_reap"] == 0
 
 
@@ -148,6 +149,7 @@ def test_atomic_assign_failure_reaps_without_resume(tmp_path, monkeypatch):
                               "from pathlib import Path; Path(r'{}').write_text('bad')".format(marker)])
     assert not marker.exists()
     assert not context.has_active_processes()
+    assert context.finish()
     assert context._job_diagnostics["active_after_reap"] == 0
 
 
@@ -167,6 +169,7 @@ def test_atomic_stdio_cwd_env_unicode_and_normal_completion(tmp_path):
     assert "中文 value".encode("utf-8") in stdout
     assert process.returncode == 0
     assert context.wait(time.monotonic() + 5)
+    assert context.finish()
     assert context._job_diagnostics["active_after_reap"] == 0
     assert context._job_diagnostics["closed"]
 
