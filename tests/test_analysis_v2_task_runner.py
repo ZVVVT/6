@@ -57,10 +57,19 @@ def harness(tmp_path, monkeypatch):
 
         def __init__(self, *args):
             assert args[3] == "graph_preserving"
+            self._process_context = args[5]
 
         def run(self):
             calls.append("c18b")
-            return {"fields": [{"field_id": "001", "output_dir": str(tmp_path / "tail"),
+            return {"elapsed_seconds": 0.0, "phase_timings_seconds": {}, "fields": []}
+
+        def run_backend(self):
+            return self.run()
+
+        def finalize_with_head(self, backend):
+            calls.append("c18b_finalize")
+            return {"elapsed_seconds": 0.0, "phase_timings_seconds": {},
+                    "fields": [{"field_id": "001", "output_dir": str(tmp_path / "tail"),
                                 "head_labels": str(image), "fragments": str(image)}]}
 
     class Measurement:
@@ -125,12 +134,236 @@ def test_protein3_tail_order_and_counts(harness):
     completion = harness.runner.run(tasks.AnalysisV2TaskRequest(
         "case1", "protein3", harness.fields, protein_part="tail",
     ))
-    assert harness.calls == ["head_segmentation", "head_calibration", "c18b", "workset",
-                             "contract", "register", "tail_calibration", "tail_measurement"]
+    # The first three entries are intentionally concurrent: only the JOIN
+    # boundary (finalize) and all downstream work have a fixed order.
+    assert set(harness.calls[:3]) == {"head_segmentation", "head_calibration", "c18b"}
+    assert harness.calls[3:] == ["c18b_finalize", "workset", "contract", "register",
+                                 "tail_calibration", "tail_measurement"]
     assert completion["status"] == "measured"
     assert tuple(completion[k] for k in ("tail_object_count", "associated_object_count",
                                        "unresolved_object_count")) == (89, 68, 21)
     assert completion["part"] == "tail"
+
+
+def test_protein3_parallel_branches_overlap_before_join(harness, monkeypatch):
+    """Event gates prove both branch bodies execute before either can finish."""
+    head_entered = threading.Event()
+    backend_entered = threading.Event()
+    release = threading.Event()
+    errors = []
+
+    def gated_head(**kwargs):
+        head_entered.set()
+        assert release.wait(2)
+        harness.calls.append("head_segmentation")
+        kwargs["paths"].create_directories()
+
+    def gated_backend(self):
+        backend_entered.set()
+        assert release.wait(2)
+        harness.calls.append("c18b")
+        return {"elapsed_seconds": 0.0, "phase_timings_seconds": {}, "fields": []}
+
+    monkeypatch.setattr(tasks, "run_head_segmentation", gated_head)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", gated_backend)
+
+    thread = threading.Thread(
+        target=lambda: _run_capture(harness.runner, tasks.AnalysisV2TaskRequest(
+            "case1", "protein3", harness.fields, protein_part="tail",
+        ), errors),
+    )
+    thread.start()
+    assert head_entered.wait(2)
+    assert backend_entered.wait(2)
+    assert "c18b_finalize" not in harness.calls
+    release.set()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert errors == []
+    assert harness.calls.index("c18b_finalize") > harness.calls.index("c18b")
+    assert harness.calls.index("c18b_finalize") > harness.calls.index("head_calibration")
+
+
+def _run_capture(runner, request, errors):
+    try:
+        runner.run(request)
+    except Exception as error:
+        errors.append(error)
+
+
+def _tail_request(harness):
+    return tasks.AnalysisV2TaskRequest(
+        "case1", "protein3", harness.fields, protein_part="tail",
+    )
+
+
+def _run_tail_in_thread(harness):
+    errors = []
+    thread = threading.Thread(
+        target=lambda: _run_capture(harness.runner, _tail_request(harness), errors),
+    )
+    thread.start()
+    return thread, errors
+
+
+def _assert_parallel_abort(harness, thread, errors, message, root_stage):
+    thread.join(5)
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], tasks.AnalysisV2TaskError)
+    assert str(errors[0].cause) == message
+    root = harness.runner._supervisor.root_failure
+    assert (root.stage, root.message) == (root_stage, message)
+    assert harness.runner._supervisor.cancellation_is_failure_triggered
+    assert "c18b_finalize" not in harness.calls
+    assert "workset" not in harness.calls
+    assert "contract" not in harness.calls
+    assert "register" not in harness.calls
+    assert "tail_calibration" not in harness.calls
+    assert "tail_measurement" not in harness.calls
+    assert not harness.runner._process_context.has_active_processes()
+
+
+def test_parallel_head_first_failure_cancels_backend_and_preserves_root(harness, monkeypatch):
+    backend_entered = threading.Event()
+    backend_exited = threading.Event()
+
+    def head_fail(**kwargs):
+        assert backend_entered.wait(2)
+        raise RuntimeError("HEAD_ROOT_ERROR")
+
+    def backend_wait(self):
+        backend_entered.set()
+        assert self._process_context.cancel_event.wait(2)
+        backend_exited.set()
+        self._process_context.check_cancelled()
+
+    monkeypatch.setattr(tasks, "run_head_segmentation", head_fail)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", backend_wait)
+    thread, errors = _run_tail_in_thread(harness)
+    _assert_parallel_abort(harness, thread, errors, "HEAD_ROOT_ERROR", "head_segmentation")
+    assert backend_exited.is_set()
+
+
+def test_parallel_c18b_first_failure_cancels_head_and_preserves_root(harness, monkeypatch):
+    head_entered = threading.Event()
+    head_exited = threading.Event()
+
+    def head_wait(**kwargs):
+        head_entered.set()
+        context = kwargs["process_context"]
+        assert context.cancel_event.wait(2)
+        head_exited.set()
+        context.check_cancelled()
+
+    def backend_fail(self):
+        assert head_entered.wait(2)
+        raise RuntimeError("C18B_ROOT_ERROR")
+
+    monkeypatch.setattr(tasks, "run_head_segmentation", head_wait)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", backend_fail)
+    thread, errors = _run_tail_in_thread(harness)
+    _assert_parallel_abort(harness, thread, errors, "C18B_ROOT_ERROR", "c18b")
+    assert head_exited.is_set()
+
+
+def test_parallel_head_success_then_c18b_failure_never_finalizes(harness, monkeypatch):
+    head_done = threading.Event()
+
+    class HeadThenSignal:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def complete(self, process_context=None):
+            harness.calls.append("head_calibration")
+            head_done.set()
+
+    def backend_fail(self):
+        assert head_done.wait(2)
+        raise RuntimeError("C18B_AFTER_HEAD_ERROR")
+
+    monkeypatch.setattr(tasks, "HeadCalibrationService", HeadThenSignal)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", backend_fail)
+    thread, errors = _run_tail_in_thread(harness)
+    _assert_parallel_abort(harness, thread, errors, "C18B_AFTER_HEAD_ERROR", "c18b")
+
+
+def test_parallel_c18b_success_then_head_failure_never_finalizes(harness, monkeypatch):
+    backend_done = threading.Event()
+
+    def head_fail(**kwargs):
+        assert backend_done.wait(2)
+        raise RuntimeError("HEAD_AFTER_C18B_ERROR")
+
+    def backend_success(self):
+        backend_done.set()
+        return {"elapsed_seconds": 0.0, "phase_timings_seconds": {}, "fields": []}
+
+    monkeypatch.setattr(tasks, "run_head_segmentation", head_fail)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", backend_success)
+    thread, errors = _run_tail_in_thread(harness)
+    _assert_parallel_abort(harness, thread, errors, "HEAD_AFTER_C18B_ERROR", "head_segmentation")
+
+
+def test_parallel_near_simultaneous_failures_keep_single_recorded_root(harness, monkeypatch):
+    barrier = threading.Barrier(2)
+
+    def head_fail(**kwargs):
+        barrier.wait(2)
+        raise RuntimeError("HEAD_SIMULTANEOUS_ERROR")
+
+    def backend_fail(self):
+        barrier.wait(2)
+        raise RuntimeError("C18B_SIMULTANEOUS_ERROR")
+
+    monkeypatch.setattr(tasks, "run_head_segmentation", head_fail)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", backend_fail)
+    thread, errors = _run_tail_in_thread(harness)
+    thread.join(5)
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    root = harness.runner._supervisor.root_failure
+    assert root.message in {"HEAD_SIMULTANEOUS_ERROR", "C18B_SIMULTANEOUS_ERROR"}
+    assert str(errors[0].cause) == root.message
+    assert "c18b_finalize" not in harness.calls
+    assert not harness.runner._process_context.has_active_processes()
+
+
+def test_parallel_user_cancel_reaps_python_and_child_wait_branches(harness, monkeypatch):
+    head_entered = threading.Event()
+    child_entered = threading.Event()
+    observed_contexts = []
+
+    def python_wait(**kwargs):
+        context = kwargs["process_context"]
+        observed_contexts.append(context)
+        head_entered.set()
+        assert context.cancel_event.wait(2)
+        context.check_cancelled()
+
+    def child_wait(self):
+        observed_contexts.append(self._process_context)
+        child_entered.set()
+        # This is the C18B child-wait boundary seam: cancellation must travel
+        # through the existing task context rather than a second mechanism.
+        assert self._process_context.cancel_event.wait(2)
+        self._process_context.check_cancelled()
+
+    monkeypatch.setattr(tasks, "run_head_segmentation", python_wait)
+    monkeypatch.setattr(tasks.C18BExecution, "run_backend", child_wait)
+    thread, errors = _run_tail_in_thread(harness)
+    assert head_entered.wait(2)
+    assert child_entered.wait(2)
+    harness.runner.cancel()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], tasks.AnalysisV2TaskCancelled)
+    assert harness.runner._supervisor.root_failure is None
+    assert observed_contexts == [harness.runner._process_context, harness.runner._process_context]
+    assert "c18b_finalize" not in harness.calls
+    assert "tail_measurement" not in harness.calls
+    assert not harness.runner._process_context.has_active_processes()
 
 
 def test_protein3_tail_emits_v3_unified_timing(harness):
@@ -304,7 +537,7 @@ def test_stage_failure_stops_chain(harness, monkeypatch, stage):
     if stage == "head_segmentation":
         monkeypatch.setattr(tasks, "run_head_segmentation", fail)
     elif stage == "c18b":
-        monkeypatch.setattr(tasks.C18BExecution, "run", fail)
+        monkeypatch.setattr(tasks.C18BExecution, "run_backend", fail)
     else:
         monkeypatch.setattr(harness.measurement, "run", fail)
     with pytest.raises(tasks.AnalysisV2TaskError) as error:
@@ -432,7 +665,11 @@ def test_runner_real_calibration_and_tail_measurement_contract(harness, tmp_path
             field_id = "001"
             def __init__(self, project_root, task_root, *args):
                 self.root = task_root
-            def run(self):
+
+            def run_backend(self):
+                return {"elapsed_seconds": 0.0, "phase_timings_seconds": {}, "fields": []}
+
+            def finalize_with_head(self, backend):
                 output = self.root / "calibration" / "tail" / "001"
                 shutil.copytree(str(fixture.adapter), str(output))
                 return {"fields": [{"field_id": "001", "output_dir": str(output),

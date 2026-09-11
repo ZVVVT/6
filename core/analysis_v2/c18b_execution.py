@@ -28,6 +28,29 @@ class C18BExecutionError(RuntimeError):
         self.field_id = field_id
 
 
+def _resolve_c18b_score015_python(project_root: Path) -> Path:
+    """Locate the dedicated Score015 runtime relative to the product root.
+
+    The C18B adapter requires ``cv2.ximgproc``.  Its runtime is deliberately
+    separate from the MvImageID runtime used by Measurement and association.
+    This mirrors both the legacy adapter bootstrap and the packaged product
+    layout without putting a development-machine path in business code.
+    """
+    runtime_root = Path(project_root).resolve() / ".venv-c18b"
+    candidates = (
+        runtime_root / "python.exe",
+        runtime_root / "Scripts" / "python.exe",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise C18BExecutionError(
+        "C18B runtime unavailable; attempted: {}".format(
+            ", ".join(str(candidate) for candidate in candidates)
+        )
+    )
+
+
 def _task_protein_key(task_root: Path) -> str:
     manifest_path = Path(task_root) / "manifest.json"
     if not manifest_path.is_file():
@@ -91,7 +114,10 @@ class C18BExecution:
                  process_context=None, tail_core_recovery_sources=None):
         self.project_root = Path(project_root).resolve()
         self.task_root = Path(task_root).resolve()
+        # Retained for the tail editor adapter.  That association child has
+        # its established MvImageID runtime and must not follow Score015.
         self.python_executable = Path(python_executable).resolve()
+        self.c18b_score015_python_executable = None
         self.candidate_path_mode = candidate_path_mode
         self.log_callback = log_callback
         self.process_context = process_context
@@ -114,15 +140,41 @@ class C18BExecution:
             raise TaskProcessCancelled("C18B interrupted")
 
     def run(self):
+        """Compatibility entry point for the historical serial workflow."""
+        return self.finalize_with_head(self.run_backend())
+
+    def run_backend(self):
+        """Run only the Head-independent C18B backend.
+
+        This deliberately stops after FITC/backend output (and recovery
+        materialization).  In particular it must not read HeadFinalLabels or
+        create TailCore/Association/Revision checkpoints; the task runner uses
+        ``finalize_with_head`` only after its Head branch has joined.
+        """
         self._check_cancelled()
-        if not self.python_executable.is_file():
-            raise FileNotFoundError(str(self.python_executable))
+        self._get_c18b_score015_python_executable()
         if _task_protein_key(self.task_root) != "protein3":
             raise ValueError("C18B requires protein3")
         log_path = self.task_root / "logs" / "c18b_tail_ui_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8", newline="\n") as handle:
-            return self._run_c18b_workflow(self._discover_fields(), handle, time.perf_counter())
+            return self._run_c18b_backend(self._discover_fields(), handle, time.perf_counter())
+
+    def _get_c18b_score015_python_executable(self):
+        if self.c18b_score015_python_executable is None:
+            self.c18b_score015_python_executable = _resolve_c18b_score015_python(
+                self.project_root
+            )
+        return self.c18b_score015_python_executable
+
+    def finalize_with_head(self, backend_result):
+        """Run the historical Head-dependent C18B tail after a successful JOIN."""
+        self._check_cancelled()
+        if not isinstance(backend_result, dict):
+            raise TypeError("C18B backend result 必须是对象")
+        log_path = self.task_root / "logs" / "c18b_tail_ui_worker.log"
+        with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+            return self._finalize_backend_with_head(backend_result, handle)
 
     def _add_phase_timing(self, phase, elapsed):
         timings = getattr(self, "_phase_timings_seconds", None)
@@ -200,7 +252,7 @@ class C18BExecution:
                 "field_id": getattr(self, "field_id", None),
                 "mode": "atomic",
                 "worker_pid": int(process.pid),
-                "worker_python": str(self.python_executable),
+                "worker_python": str(command[0]),
                 "job_owned": True,
                 "assign_completed": True,
                 "resume_completed": True,
@@ -215,7 +267,7 @@ class C18BExecution:
                 "field_id": getattr(self, "field_id", None),
                 "mode": "legacy",
                 "worker_pid": int(process.pid),
-                "worker_python": str(self.python_executable),
+                "worker_python": str(command[0]),
                 "job_owned": False,
             }
         # This is deliberately after spawn_atomic returns: no disk I/O occurs
@@ -303,7 +355,7 @@ class C18BExecution:
         )
         self._run_streaming_command(
             [
-                str(self.python_executable),
+                str(self._get_c18b_score015_python_executable()),
                 "-u",
                 str(runner),
                 "--green",
@@ -351,7 +403,7 @@ class C18BExecution:
             finalize_started = time.perf_counter()
             self._run_streaming_command(
                 [
-                    str(self.python_executable),
+                    str(self._get_c18b_score015_python_executable()),
                     "-u",
                     str(runner),
                     "--green",
@@ -529,10 +581,10 @@ class C18BExecution:
         shutil.copyfile(str(probability_source), str(probability_target))
         return output_dir / "06_final_tail_instances.tif", time.perf_counter() - started
 
-    def _run_c18b_workflow(self, fields, log_handle, started):
+    def _run_c18b_backend(self, fields, log_handle, started):
         self._log("Analysis V2：开始C18B尾部处理。")
         self._phase_timings_seconds = {}
-        editor_payloads = []
+        backend_fields = []
         for field_id in fields:
             self.field_id = field_id
             self._check_cancelled()
@@ -541,9 +593,9 @@ class C18BExecution:
                 core_started = time.perf_counter()
                 instances_path = self._ensure_c18b_result(field_id, log_handle)
                 self._add_phase_timing("tail_core", time.perf_counter() - core_started)
-                payload = self._prepare_c18b_editor_payload(field_id, instances_path, log_handle)
-                if payload.get("tail_core_checkpoint") is not None:
-                    payload["tail_core_checkpoint"]["tail_core_mode"] = "computed"
+                backend_fields.append({"field_id": field_id,
+                                       "instances_path": str(instances_path),
+                                       "checkpoint": None})
             else:
                 try:
                     validation_started = time.perf_counter()
@@ -560,19 +612,110 @@ class C18BExecution:
                     self._add_phase_timing("tail_core_recovery_validation", validation_seconds)
                     self._add_phase_timing("tail_core_reuse_materialization", materialization_seconds)
                     self._log("TailCoreResult recovered/reused: field={} C18B compute skipped".format(field_id))
-                    payload = self._prepare_c18b_editor_payload(
-                        field_id, instances_path, log_handle, checkpoint=checkpoint,
-                        apply_filter=False)
+                    backend_fields.append({"field_id": field_id,
+                                           "instances_path": str(instances_path),
+                                           "checkpoint": checkpoint})
                 except Exception as error:
                     self._log("TailCoreResult recovery rejected: field={} cause={}".format(field_id, error))
                     raise
-            editor_payloads.append(payload)
             self._check_cancelled()
         elapsed_seconds = float(time.perf_counter() - started)
         phase_timings = dict(self._phase_timings_seconds)
         phase_timings["c18b_orchestration_overhead"] = max(
             0.0,
             elapsed_seconds - sum(phase_timings.values()),
+        )
+        return {
+            "success": True,
+            "workflow": "c18b_backend",
+            "tail_backend": "C18B",
+            "manual_calibration_completed": False,
+            "ready_for_measurement": False,
+            "task_root": str(self.task_root),
+            "fields": backend_fields,
+            "elapsed_seconds": elapsed_seconds,
+            "phase_timings_seconds": phase_timings,
+        }
+
+    def _run_c18b_workflow(self, fields, log_handle, started):
+        """Legacy private workflow hook used by the interactive Tail worker.
+
+        Keep this serial composition while the task-runner uses the two public
+        phases to create its explicit parallel/JOIN boundary.
+        """
+        self._log("Analysis V2：开始C18B尾部处理。")
+        self._phase_timings_seconds = {}
+        editor_payloads = []
+        for field_id in fields:
+            self.field_id = field_id
+            self._check_cancelled()
+            source = self._recovery_source_for_field(field_id)
+            if source is None:
+                core_started = time.perf_counter()
+                instances_path = self._ensure_c18b_result(field_id, log_handle)
+                self._add_phase_timing("tail_core", time.perf_counter() - core_started)
+                payload = self._prepare_c18b_editor_payload(field_id, instances_path, log_handle)
+                if payload.get("tail_core_checkpoint") is not None:
+                    payload["tail_core_checkpoint"]["tail_core_mode"] = "computed"
+            else:
+                validation_started = time.perf_counter()
+                checkpoint = recover_and_verify_tail_core_checkpoint(
+                    self.task_root, self.project_root, field_id,
+                    self.candidate_path_mode, source["generation"],
+                )
+                validation_seconds = time.perf_counter() - validation_started
+                instances_path, materialization_seconds = self._materialize_recovered_editor_inputs(
+                    field_id, checkpoint, source)
+                checkpoint["tail_core_mode"] = "reused"
+                checkpoint["tail_core_recovery_validation_seconds"] = validation_seconds
+                checkpoint["tail_core_reuse_materialization_seconds"] = materialization_seconds
+                self._add_phase_timing("tail_core_recovery_validation", validation_seconds)
+                self._add_phase_timing("tail_core_reuse_materialization", materialization_seconds)
+                self._log("TailCoreResult recovered/reused: field={} C18B compute skipped".format(field_id))
+                payload = self._prepare_c18b_editor_payload(
+                    field_id, instances_path, log_handle, checkpoint=checkpoint,
+                    apply_filter=False)
+            editor_payloads.append(payload)
+            self._check_cancelled()
+        elapsed_seconds = float(time.perf_counter() - started)
+        phase_timings = dict(self._phase_timings_seconds)
+        phase_timings["c18b_orchestration_overhead"] = max(
+            0.0, elapsed_seconds - sum(phase_timings.values()),
+        )
+        return {
+            "success": True, "workflow": "c18b_tail_editor", "tail_backend": "C18B",
+            "manual_calibration_completed": False, "ready_for_measurement": False,
+            "task_root": str(self.task_root), "fields": editor_payloads,
+            "elapsed_seconds": elapsed_seconds, "phase_timings_seconds": phase_timings,
+        }
+
+    def _finalize_backend_with_head(self, backend_result, log_handle):
+        """Preserve the serial post-backend workflow and checkpoint contract."""
+        self._check_cancelled()
+        started = time.perf_counter()
+        self._phase_timings_seconds = dict(
+            backend_result.get("phase_timings_seconds") or {}
+        )
+        editor_payloads = []
+        for backend_field in list(backend_result.get("fields") or []):
+            field_id = str(backend_field["field_id"])
+            self.field_id = field_id
+            self._check_cancelled()
+            checkpoint = backend_field.get("checkpoint")
+            payload = self._prepare_c18b_editor_payload(
+                field_id, Path(backend_field["instances_path"]), log_handle,
+                checkpoint=checkpoint, apply_filter=checkpoint is None,
+            )
+            if payload.get("tail_core_checkpoint") is not None:
+                payload["tail_core_checkpoint"]["tail_core_mode"] = "computed"
+            editor_payloads.append(payload)
+            self._check_cancelled()
+        elapsed_seconds = float(backend_result.get("elapsed_seconds", 0.0)) + (
+            time.perf_counter() - started
+        )
+        phase_timings = dict(self._phase_timings_seconds)
+        phase_timings["c18b_orchestration_overhead"] = max(
+            0.0, elapsed_seconds - sum(phase_timings.values()),
         )
         return {
             "success": True,

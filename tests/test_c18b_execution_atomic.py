@@ -9,7 +9,8 @@ import time
 
 import pytest
 
-from core.analysis_v2.c18b_execution import C18BExecution
+from core.analysis_v2.c18b_execution import C18BExecution, C18BExecutionError
+from core.analysis_v2 import c18b_execution
 from core.analysis_v2.task_process_context import TaskProcessContext
 from core.analysis_v2.task_process_spawn import AtomicProcessSpawnError
 
@@ -102,7 +103,7 @@ def test_context_uses_atomic_launcher_preserves_popen_contract_and_reaps(
         "field_id": "field-001",
         "mode": "atomic",
         "worker_pid": 525252,
-        "worker_python": str((tmp_path / "configured runtime" / "python.exe").resolve()),
+        "worker_python": "configured-python",
         "job_owned": True,
         "assign_completed": True,
         "resume_completed": True,
@@ -167,6 +168,101 @@ def test_all_formal_c18b_process_call_sites_name_their_atomic_stage():
     source = C18BExecution._prepare_c18b_editor_payload.__code__.co_consts
     assert "c18b_head_dependent_finalize" in source
     assert "tail_editor_adapter" in source
+
+
+def test_score015_runtime_resolver_prefers_root_style_over_mvimageid(tmp_path):
+    root_python = tmp_path / ".venv-c18b" / "python.exe"
+    root_python.parent.mkdir(parents=True)
+    root_python.touch()
+    mvimageid_python = tmp_path / "MvImageID" / ".venv" / "Scripts" / "python.exe"
+    mvimageid_python.parent.mkdir(parents=True)
+    mvimageid_python.touch()
+
+    execution = C18BExecution(tmp_path, tmp_path, mvimageid_python)
+
+    assert execution._get_c18b_score015_python_executable() == root_python.resolve()
+    assert execution.python_executable == mvimageid_python.resolve()
+
+
+def test_score015_runtime_resolver_accepts_windows_venv_style(tmp_path):
+    runtime_python = tmp_path / ".venv-c18b" / "Scripts" / "python.exe"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.touch()
+
+    assert c18b_execution._resolve_c18b_score015_python(tmp_path) == runtime_python.resolve()
+
+
+def test_score015_runtime_resolver_fails_early_with_attempted_paths(tmp_path):
+    with pytest.raises(C18BExecutionError, match="C18B runtime unavailable") as error:
+        c18b_execution._resolve_c18b_score015_python(tmp_path)
+
+    message = str(error.value)
+    assert str(tmp_path / ".venv-c18b" / "python.exe") in message
+    assert str(tmp_path / ".venv-c18b" / "Scripts" / "python.exe") in message
+
+
+def test_score015_backend_and_finalize_use_dedicated_runtime(tmp_path, monkeypatch):
+    score015_python = tmp_path / ".venv-c18b" / "python.exe"
+    score015_python.parent.mkdir(parents=True)
+    score015_python.touch()
+    mvimageid_python = tmp_path / "MvImageID" / ".venv" / "Scripts" / "python.exe"
+    mvimageid_python.parent.mkdir(parents=True)
+    mvimageid_python.touch()
+    runner = tmp_path / "tools" / "analysis_v2" / "c18b_score015_adapter.py"
+    runner.parent.mkdir(parents=True)
+    runner.touch()
+    (runner.parent / "c18b_tail_editor_adapter.py").touch()
+    editor_script = runner.parent / "tail_legacy" / "tail_result_editor_v2_3_draft_mvp.py"
+    editor_script.parent.mkdir(parents=True)
+    editor_script.touch()
+    task_root = tmp_path / "task"
+    (task_root / "input").mkdir(parents=True)
+    (task_root / "input" / "001_FITC.tif").touch()
+    (task_root / "input" / "001_Merge.tif").touch()
+    (task_root / "calibration" / "head").mkdir(parents=True)
+    (task_root / "calibration" / "head" / "001_HeadFinalLabels.tif").touch()
+    execution = C18BExecution(tmp_path, task_root, mvimageid_python, process_context=_AtomicContext())
+    execution.field_id = "001"
+    commands = []
+    labels = c18b_execution._c18b_instances_path(task_root, "001")
+    filtered = c18b_execution._c18b_filtered_instances_path(task_root, "001")
+
+    def run_command(command, *args, **kwargs):
+        commands.append(command)
+        if "--backend-only" in command:
+            labels.parent.mkdir(parents=True, exist_ok=True)
+            labels.write_bytes(b"x")
+        elif "--finalize-with-head" in command:
+            filtered.parent.mkdir(parents=True, exist_ok=True)
+            filtered.write_bytes(b"x")
+        return "", 0
+
+    monkeypatch.setattr(execution, "_run_streaming_command", run_command)
+    monkeypatch.setattr(
+        c18b_execution, "write_and_verify_tail_core_checkpoint", lambda *args: {
+            "tail_core_checkpoint_seconds": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        c18b_execution, "write_and_verify_association_checkpoint", lambda *args: {
+            "association_checkpoint_seconds": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        c18b_execution, "write_and_verify_revision0_checkpoint", lambda *args: {
+            "tail_objects_revision_checkpoint_seconds": 0.0,
+        },
+    )
+
+    instances = execution._ensure_c18b_result("001", io.StringIO())
+    execution._prepare_c18b_editor_payload("001", instances, io.StringIO())
+
+    assert commands[0][0] == str(score015_python.resolve())
+    assert "--backend-only" in commands[0]
+    assert commands[1][0] == str(score015_python.resolve())
+    assert "--finalize-with-head" in commands[1]
+    assert commands[2][0] == str(mvimageid_python.resolve())
+    assert commands[2][2].endswith("c18b_tail_editor_adapter.py")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job inheritance contract")

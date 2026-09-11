@@ -7,6 +7,7 @@ shutdown create a new runner. The caller owns the thread that invokes run().
 import threading
 import time
 import math
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -109,6 +110,107 @@ class AnalysisV2TaskRunner:
             self.log_callback("Analysis V2: {}".format(stage))
         self._process_context.check_cancelled()
 
+    def _flush_branch_logs(self, messages):
+        """Invoke an application callback only on the caller's runner thread.
+
+        The public callback can be a Qt bridge, but C18B runs in a pool worker
+        for tail tasks.  Buffering avoids calling an arbitrary GUI callback
+        from that worker while retaining its log lines after the JOIN.
+        """
+        if self.log_callback is not None:
+            for message in messages:
+                self.log_callback(message)
+
+    def _run_tail_parallel_branches(self, paths, fields, project_root, request,
+                                    common_prepared):
+        """Run Head and the strictly Head-independent C18B backend together."""
+        branch_logs = []
+        branch_log_lock = threading.Lock()
+        first_failure = {"error": None, "stage": None, "field_id": None}
+        first_failure_lock = threading.Lock()
+
+        def buffered_log(message):
+            with branch_log_lock:
+                branch_logs.append(message)
+
+        execution = C18BExecution(
+            project_root, paths.task_root, self.config.get_python_exe(),
+            request.candidate_path_mode, buffered_log, self._process_context,
+            request.tail_core_recovery_sources,
+        )
+
+        def run_head_branch():
+            started = time.perf_counter()
+            run_head_segmentation(
+                paths=paths, paired_fields=fields,
+                mvimageid_root=self.config.get_source_project_dir(),
+                mvimageid_python=self.config.get_python_exe(),
+                worker_path=project_root / "tools" / "analysis_v2" / "direct_cellpose_worker.py",
+                timeout_seconds=600.0, case_no=request.case_no,
+                protein_key=request.protein_key, process_context=self._process_context,
+                prepared_input=common_prepared,
+            )
+            self._process_context.check_cancelled()
+            HeadCalibrationService(paths.task_root, interactive=False).complete(
+                process_context=self._process_context,
+            )
+            return time.perf_counter() - started
+
+        def run_branch(stage, callable_):
+            try:
+                return callable_()
+            except BaseException as error:
+                # The worker that observes the business exception linearizes it
+                # immediately.  Secondary cancellation/termination exceptions
+                # cannot replace this root failure in TaskSupervisor.
+                if not self.cancel_event.is_set() and not isinstance(error, TaskProcessCancelled):
+                    with first_failure_lock:
+                        if first_failure["error"] is None:
+                            field_id = getattr(error, "field_id", None) or execution.field_id
+                            first_failure.update(error=error, stage=stage, field_id=field_id)
+                            self._supervisor.record_failure(
+                                stage, field_id, error,
+                                details={"case_no": request.case_no,
+                                         "protein_key": request.protein_key},
+                            )
+                            self._supervisor.request_cancel(
+                                "parallel failure at {}".format(stage),
+                                failure_triggered=True,
+                            )
+                raise
+
+        parallel_started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="analysis-v2-p2c") as executor:
+            futures = {
+                executor.submit(run_branch, "head_segmentation", run_head_branch): "head_segmentation",
+                executor.submit(run_branch, "c18b", execution.run_backend): "c18b",
+            }
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    stage = futures[future]
+                    try:
+                        future.result()
+                    except BaseException:
+                        pass
+                # Do not leave a successfully completed future unobserved, and
+                # always reap a running sibling after cancellation.
+            # All futures have completed before executor shutdown / context.finish.
+            if first_failure["error"] is not None:
+                self._stage = first_failure["stage"]
+                self._field_id = first_failure["field_id"]
+                raise first_failure["error"]
+            self._process_context.check_cancelled()
+            head_future = next(item for item, stage in futures.items()
+                               if stage == "head_segmentation")
+            backend_future = next(item for item, stage in futures.items() if stage == "c18b")
+            head_seconds = float(head_future.result())
+            backend = backend_future.result()
+        parallel_window_seconds = time.perf_counter() - parallel_started
+        self._flush_branch_logs(branch_logs)
+        return execution, backend, head_seconds, parallel_window_seconds
+
     def cancel(self):
         self._supervisor.request_cancel("user requested cancellation")
 
@@ -200,6 +302,7 @@ class AnalysisV2TaskRunner:
             )
             paths = self._paths
             self._enter("common_preparation")
+            common_preparation_started = time.perf_counter()
             common_prepared = prepare_common_task_input(
                 paths=paths,
                 paired_fields=fields,
@@ -207,6 +310,7 @@ class AnalysisV2TaskRunner:
                 protein_key=request.protein_key,
                 process_context=self._process_context,
             )
+            common_preparation_seconds = time.perf_counter() - common_preparation_started
             if part == "tail":
                 performance_logger = StageLogger.from_task_paths(
                     paths,
@@ -252,34 +356,25 @@ class AnalysisV2TaskRunner:
             else:
                 input_checkpoints = []
                 input_checkpoint_seconds = 0.0
-            head_started = time.perf_counter()
-            self._enter("head_segmentation")
-            run_head_segmentation(
-                paths=paths, paired_fields=fields,
-                mvimageid_root=self.config.get_source_project_dir(),
-                mvimageid_python=self.config.get_python_exe(),
-                worker_path=project_root / "tools" / "analysis_v2" / "direct_cellpose_worker.py",
-                timeout_seconds=600.0, case_no=request.case_no,
-                protein_key=request.protein_key, process_context=self._process_context,
-                prepared_input=common_prepared,
-            )
-            self._enter("head_calibration")
-            HeadCalibrationService(paths.task_root, interactive=False).complete(
-                process_context=self._process_context,
-            )
-            head_seconds = time.perf_counter() - head_started
             if part == "tail":
+                self._enter("parallel_head_c18b")
+                # Preserve the established C18B cancellation boundary while
+                # the following call owns the actual two-branch window.
                 self._enter("c18b")
-                execution = C18BExecution(
-                    project_root, paths.task_root, self.config.get_python_exe(),
-                    request.candidate_path_mode, self.log_callback, self._process_context,
-                    request.tail_core_recovery_sources,
+                execution, backend, head_seconds, parallel_window_seconds = (
+                    self._run_tail_parallel_branches(
+                        paths, fields, project_root, request, common_prepared,
+                    )
                 )
+                c18b_backend_seconds = float(backend.get("elapsed_seconds", 0.0))
+                self._enter("c18b_head_dependent_finalize")
+                finalize_with_head_started = time.perf_counter()
                 try:
-                    prepared = execution.run()
+                    prepared = execution.finalize_with_head(backend)
                 except Exception:
                     self._field_id = execution.field_id
                     raise
+                finalize_with_head_seconds = time.perf_counter() - finalize_with_head_started
                 c18b_seconds = float(prepared.get("elapsed_seconds", 0.0))
                 c18b_phases = dict(prepared.get("phase_timings_seconds") or {})
                 tail_core_checkpoints = [
@@ -363,6 +458,23 @@ class AnalysisV2TaskRunner:
                 self._process_context.check_cancelled()
                 complete_tail_calibration(paths.task_root, results, automatic=True)
                 finalizer_seconds = time.perf_counter() - finalizer_started
+            else:
+                head_started = time.perf_counter()
+                self._enter("head_segmentation")
+                run_head_segmentation(
+                    paths=paths, paired_fields=fields,
+                    mvimageid_root=self.config.get_source_project_dir(),
+                    mvimageid_python=self.config.get_python_exe(),
+                    worker_path=project_root / "tools" / "analysis_v2" / "direct_cellpose_worker.py",
+                    timeout_seconds=600.0, case_no=request.case_no,
+                    protein_key=request.protein_key, process_context=self._process_context,
+                    prepared_input=common_prepared,
+                )
+                self._enter("head_calibration")
+                HeadCalibrationService(paths.task_root, interactive=False).complete(
+                    process_context=self._process_context,
+                )
+                head_seconds = time.perf_counter() - head_started
             self._enter("{}_measurement".format(part))
             service_class = TailMeasurementService if part == "tail" else HeadMeasurementService
             service = service_class(
@@ -393,6 +505,20 @@ class AnalysisV2TaskRunner:
                         "boundary": "prepared_request_to_tail_measured",
                         "interactive": False,
                         "machine_wall_seconds": measured_seconds,
+                        "common_preparation_seconds": common_preparation_seconds,
+                        "head_branch_seconds": head_seconds,
+                        "c18b_backend_branch_seconds": c18b_backend_seconds,
+                        "parallel_window_seconds": parallel_window_seconds,
+                        "parallel_join_overhead_seconds": max(
+                            0.0, parallel_window_seconds - max(
+                                head_seconds, c18b_backend_seconds,
+                            ),
+                        ),
+                        "parallel_overlap_saved_seconds": max(
+                            0.0, head_seconds + c18b_backend_seconds
+                            - parallel_window_seconds,
+                        ),
+                        "finalize_with_head_seconds": finalize_with_head_seconds,
                         "input_checkpoint_seconds": input_checkpoint_seconds,
                         "input_checkpoints": [{
                             "field_id": item["field_id"],
@@ -486,7 +612,8 @@ class AnalysisV2TaskRunner:
             self._process_context.check_cancelled()
             return completion
         except Exception as cause:
-            if self.cancel_event.is_set() or isinstance(cause, TaskProcessCancelled):
+            if ((self.cancel_event.is_set() or isinstance(cause, TaskProcessCancelled))
+                    and self._supervisor.root_failure is None):
                 cancelled = self._error(AnalysisV2TaskCancelled, "Analysis V2 task cancelled", cause)
                 if self._paths and self._paths.state_path.is_file():
                     try:
