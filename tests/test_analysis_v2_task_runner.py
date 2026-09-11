@@ -604,6 +604,17 @@ def test_interactive_tail_worker_delegates_shared_execution(tmp_path):
     (tmp_path / "worker_input.json").write_text('{"fields":[{"field_id":"001"}]}')
     worker = TailPathWorker(tmp_path, tmp_path, Path(sys.executable))
     assert isinstance(worker.process_context, TaskProcessContext)
+    # The worker borrows C18BExecution methods without running its __init__,
+    # so it must mirror the same unresolved-runtime sentinel state.
+    assert worker.c18b_score015_python_executable is None
+    score015_python = tmp_path / ".venv-c18b" / "python.exe"
+    score015_python.parent.mkdir(parents=True)
+    score015_python.touch()
+    expected_score015_python = score015_python.resolve()
+    assert worker._get_c18b_score015_python_executable() == expected_score015_python
+    # First call resolves through project_root; later calls reuse the cache.
+    assert worker.c18b_score015_python_executable == expected_score015_python
+    assert worker._get_c18b_score015_python_executable() == expected_score015_python
     results = []
     worker.finished_signal.connect(lambda *args: results.append(args))
     with mock.patch.object(C18BExecution, "_ensure_c18b_result", return_value=tmp_path / "labels") as ensure:

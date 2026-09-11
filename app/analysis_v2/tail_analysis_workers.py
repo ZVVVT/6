@@ -49,6 +49,9 @@ class TailPathWorker(QThread, C18BExecution):
         self.candidate_path_mode = str(
             candidate_path_mode or "graph_preserving"
         )
+        # Mirrors C18BExecution.__init__: None means the Score015 runtime has
+        # not been resolved yet; the inherited getter resolves and caches it.
+        self.c18b_score015_python_executable = None
         self._cancel_requested = False
         self._process = None
         # This fallback worker must not reuse the completed Head worker's Job.
