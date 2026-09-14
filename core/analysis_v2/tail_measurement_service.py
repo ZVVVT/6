@@ -10,6 +10,8 @@ import csv
 import json
 import math
 import shutil
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -21,6 +23,10 @@ from core.result_parser import ResultParser
 from .environment_snapshot import EnvironmentSnapshotWriter
 from .label_image_io import read_label_image, validate_label_image
 from .manifest_store import ManifestStore
+from .lightweight_tail_measurement import (
+    LightweightGenerationError, generate_tail_measurement,
+    validate_standardized_tail_fields,
+)
 from .stage_logger import StageLogger
 from .tail_calibration_service import task_paths_from_root
 from .task_state import TaskStateStore, atomic_write_json
@@ -527,6 +533,7 @@ def validate_tail_measurement_output(
     output_dir: Path,
     fields: Sequence[Dict[str, Any]],
     result_path: Optional[Path] = None,
+    timing_callback=None,
 ) -> Dict[str, Any]:
     """严格验证新版尾部 CSV、对象数量、公式和三类叠加图。"""
     output = Path(output_dir).resolve()
@@ -735,11 +742,14 @@ def validate_tail_measurement_output(
             )
         )
 
+    parser_started = time.perf_counter()
     parser_result = ResultParser(
         str(output),
         protein_part="tail",
         calculation_mode=CALCULATION_MODE,
     ).parse_image_summary("tail")
+    if timing_callback is not None:
+        timing_callback(time.perf_counter() - parser_started)
 
     if not parser_result.get("success"):
         raise ValueError(
@@ -822,6 +832,7 @@ class TailMeasurementService:
         python_exe: Path,
         timeout_seconds: float = 900.0,
         plugins_directory: Optional[Path] = None,
+        backend: Optional[str] = None,
     ) -> None:
         self.paths = task_paths_from_root(Path(task_root))
         self.pipeline = Path(pipeline).resolve()
@@ -842,6 +853,10 @@ class TailMeasurementService:
         self.manifest = ManifestStore.from_task_paths(self.paths)
         self.logger = StageLogger.from_task_paths(self.paths)
         self.timeout_seconds = float(timeout_seconds)
+        if backend is None:
+            from core.config_manager import ConfigManager
+            backend = ConfigManager().get_tail_measurement_backend()
+        self.backend = str(backend).strip().lower()
 
         from core.mvimageid_runner import MvImageIDRunner
 
@@ -874,6 +889,11 @@ class TailMeasurementService:
         if process_context is not None:
             process_context.check_cancelled()
         try:
+            if self.backend not in {"auto", "mvimageid"}:
+                raise ValueError("未知 tail_measurement_backend：{}".format(self.backend))
+            check_cancelled = (process_context.check_cancelled if process_context is not None
+                               else lambda: None)
+            service_started = time.perf_counter()
             current = self.state.load()
             calibrated_before = any(
                 item.get("status") == "tail_calibrated"
@@ -901,7 +921,11 @@ class TailMeasurementService:
             self._prepare_builtin_only_plugins_dir()
             fields = collect_tail_measurement_fields(self.paths.task_root)
             prepared = prepare_standardized_tail_input(fields, self.input_dir)
-            _reset_directory(self.output_dir)
+            validate_standardized_tail_fields(prepared["records"], check_cancelled)
+            attempt_id = uuid.uuid4().hex
+            attempt_root = self.tail_measurement_dir / "attempts" / attempt_id
+            attempt_root.mkdir(parents=True, exist_ok=False)
+            self.output_dir = attempt_root / ("lightweight" if self.backend == "auto" else "mvimageid")
 
             atomic_write_json(
                 self.measurement_input_path,
@@ -912,22 +936,6 @@ class TailMeasurementService:
                     "fields": prepared["records"],
                 },
             )
-            atomic_write_json(
-                self.measurement_manifest_path,
-                {
-                    "schema_version": 1,
-                    "analysis_version": "analysis_v2",
-                    "protein_part": "tail",
-                    "calculation_mode": CALCULATION_MODE,
-                    "formula_version": FORMULA_VERSION,
-                    "pipeline_path": str(self.pipeline),
-                    "plugins_directory": str(self.plugins_dir),
-                    "input_dir": str(self.input_dir),
-                    "candidate_output_dir": str(self.output_dir),
-                    "field_count": len(fields),
-                },
-            )
-
             self.state.update(
                 "tail_measuring",
                 STAGE,
@@ -937,42 +945,78 @@ class TailMeasurementService:
                 STAGE,
                 "开始一次性测量 {} 个尾部视野".format(len(fields)),
             )
-            self.logger.info(
-                STAGE,
-                "尾部标签测量仅使用 CellProfiler 内置模块。",
-            )
-            self.logger.info(STAGE, "插件目录：{}".format(self.plugins_dir))
-            self.logger.info(STAGE, "Pipeline：{}".format(self.pipeline))
+            if self.backend == "mvimageid":
+                self.logger.info(STAGE, "尾部标签测量仅使用 CellProfiler 内置模块。")
+                self.logger.info(STAGE, "插件目录：{}".format(self.plugins_dir))
+                self.logger.info(STAGE, "Pipeline：{}".format(self.pipeline))
             self.logger.info(STAGE, "输入目录：{}".format(self.input_dir))
             self.logger.info(STAGE, "输出目录：{}".format(self.output_dir))
+            self.logger.info(STAGE, "requested backend={} attempt={}".format(self.backend, attempt_id))
 
+            run_result = None
+            generation = None
+            fallback_error = None
+            fallback_seconds = None
+            if self.backend == "auto":
+                lightweight_started = time.perf_counter()
+                try:
+                    generation = generate_tail_measurement(
+                        prepared["records"], self.output_dir, check_cancelled,
+                        lambda message: self.logger.info(STAGE, message),
+                    )
+                    winning_backend = "lightweight"
+                except LightweightGenerationError as error:
+                    fallback_error = error
+                    fallback_seconds = time.perf_counter() - lightweight_started
+                    self.logger.info(STAGE, "Lightweight attempt-local failure; fallback: {}: {}".format(
+                        type(error).__name__, error))
+                    check_cancelled()
+                    self.output_dir = attempt_root / "mvimageid"
+                    winning_backend = "mvimageid"
+            else:
+                winning_backend = "mvimageid"
+
+            check_cancelled()
+            atomic_write_json(
+                self.measurement_manifest_path,
+                {
+                    "schema_version": 1,
+                    "analysis_version": "analysis_v2",
+                    "protein_part": "tail",
+                    "calculation_mode": CALCULATION_MODE,
+                    "formula_version": FORMULA_VERSION,
+                    "pipeline_path": str(self.pipeline) if winning_backend == "mvimageid" else "",
+                    "plugins_directory": str(self.plugins_dir) if winning_backend == "mvimageid" else "",
+                    "input_dir": str(self.input_dir),
+                    "candidate_output_dir": str(self.output_dir),
+                    "field_count": len(fields),
+                },
+            )
             environment = EnvironmentSnapshotWriter(
                 self.paths,
                 mvimageid_root=self.mvimageid_root,
                 mvimageid_python=self.python_exe,
-                plugins_dir=self.plugins_dir,
-                pipeline_path=self.pipeline,
+                plugins_dir=self.plugins_dir if winning_backend == "mvimageid" else None,
+                pipeline_path=self.pipeline if winning_backend == "mvimageid" else None,
                 input_dir=self.input_dir,
                 output_dir=self.output_dir,
             )
             environment.write()
-
-            run_result = self.runner.run(
-                pipeline_file=str(self.pipeline),
-                input_dir=str(self.input_dir),
-                output_dir=str(self.output_dir),
-                log_callback=lambda message: self.logger.info(
-                    STAGE,
-                    str(message),
-                ),
-                **({"process_context": process_context} if process_context is not None else {}),
-                cancel_callback=None,
-                log_file="",
-            )
+            if winning_backend == "mvimageid":
+                self.output_dir.mkdir(parents=True, exist_ok=False)
+                run_result = self.runner.run(
+                    pipeline_file=str(self.pipeline),
+                    input_dir=str(self.input_dir),
+                    output_dir=str(self.output_dir),
+                    log_callback=lambda message: self.logger.info(STAGE, str(message)),
+                    **({"process_context": process_context} if process_context is not None else {}),
+                    cancel_callback=None,
+                    log_file="",
+                )
 
             if process_context is not None:
                 process_context.check_cancelled()
-            run_payload = {
+            run_payload = ({
                 "command": run_result.command,
                 "return_code": run_result.return_code,
                 "duration_seconds": run_result.elapsed_seconds,
@@ -980,17 +1024,29 @@ class TailMeasurementService:
                 "stdout_path": str(run_result.log_file or ""),
                 "success": run_result.success,
                 "runner_class": "core.mvimageid_runner.MvImageIDRunner",
-            }
-            self.logger.event(
-                "mvimageid_tail_measurement",
-                STAGE,
-                "succeeded" if run_result.success else "failed",
-                duration_seconds=run_result.elapsed_seconds,
-                return_code=run_result.return_code,
-                extra=run_payload,
-            )
+                "backend": "mvimageid",
+            } if run_result is not None else {
+                "backend": "lightweight", "runtime": generation["runtime"],
+                "duration_seconds": generation["generation_seconds"],
+                "field_count": generation["field_count"],
+            })
+            if fallback_error is not None:
+                run_payload["fallback_reason"] = {
+                    "type": type(fallback_error).__name__, "message": str(fallback_error),
+                    "attempt": attempt_id,
+                    "duration_seconds": round(fallback_seconds, 4),
+                }
+            if run_result is not None:
+                self.logger.event(
+                    "mvimageid_tail_measurement",
+                    STAGE,
+                    "succeeded" if run_result.success else "failed",
+                    duration_seconds=run_result.elapsed_seconds,
+                    return_code=run_result.return_code,
+                    extra=run_payload,
+                )
 
-            if not run_result.success:
+            if run_result is not None and not run_result.success:
                 error = RuntimeError(
                     run_result.error_message
                     or "MvImageID 尾部测量失败，退出码 {}。".format(
@@ -999,14 +1055,30 @@ class TailMeasurementService:
                 )
                 error.return_code = run_result.return_code
                 error.log_path = run_result.log_file
+                if fallback_error is not None:
+                    error.fallback_summary = run_payload["fallback_reason"]
                 raise error
 
-            validation = validate_tail_measurement_output(
-                output_dir=self.output_dir,
-                fields=fields,
-                result_path=self.result_path,
-            )
+            check_cancelled()
+            validator_started = time.perf_counter()
+            parser_seconds = []
+            try:
+                validation = validate_tail_measurement_output(
+                    output_dir=self.output_dir,
+                    fields=fields,
+                    result_path=self.result_path,
+                    timing_callback=parser_seconds.append,
+                )
+            except BaseException:
+                self.logger.info(STAGE, "validator FAIL backend={} seconds={:.3f}".format(
+                    winning_backend, time.perf_counter() - validator_started))
+                raise
+            check_cancelled()
+            self.logger.info(STAGE, "validator PASS backend={} seconds={:.3f} parser_seconds={:.3f}".format(
+                winning_backend, time.perf_counter() - validator_started,
+                parser_seconds[0] if parser_seconds else 0.0))
 
+            manifest_state_started = time.perf_counter()
             registrations = [
                 (self.measurement_input_path, "tail_measurement_input", "application/json"),
                 (self.measurement_manifest_path, "tail_measurement_manifest", "application/json"),
@@ -1021,13 +1093,13 @@ class TailMeasurementService:
                     "tail_measurement_overlay",
                     "image/png",
                 ))
-            if run_result.command_file is not None:
+            if run_result is not None and run_result.command_file is not None:
                 registrations.append((
                     run_result.command_file,
                     "tail_measurement_command",
                     "text/plain",
                 ))
-            if run_result.log_file is not None:
+            if run_result is not None and run_result.log_file is not None:
                 registrations.append((
                     run_result.log_file,
                     "tail_measurement_stdout",
@@ -1043,6 +1115,10 @@ class TailMeasurementService:
                 "人工校准后尾部测量完成，等待安全发布",
             )
             self.logger.info(STAGE, "尾部测量和严格校验完成")
+            self.logger.info(STAGE, "manifest_state_seconds={:.3f}".format(
+                time.perf_counter() - manifest_state_started))
+            self.logger.info(STAGE, "winning backend={} attempt={} service_seconds={:.3f}".format(
+                winning_backend, attempt_id, time.perf_counter() - service_started))
 
             return {
                 "run": run_payload,

@@ -317,7 +317,7 @@ class SettingsWindow(QWidget):
         hint = QLabel(
             "说明：运行环境参数仅从 config.ini 读取并显示，界面已锁定以避免误操作。"
             "如需临时调整，请直接修改 config.ini 后点击“重新加载”。"
-            "每次分析日志会自动写入对应蛋白输出目录的 run_mvimageid.log。"
+            "使用 MvImageID 执行分析时，会在对应输出目录生成 run_mvimageid.log。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666666;")

@@ -203,6 +203,12 @@ class ConfigManager:
             return value
         return default
 
+    def get_tail_measurement_backend(self) -> str:
+        value = self.get("AnalysisV2", "tail_measurement_backend", "auto").strip().lower()
+        if value not in {"auto", "mvimageid"}:
+            raise ValueError("未知 tail_measurement_backend：{}".format(value))
+        return value
+
     # ------------------------------------------------------------------
     # 工作目录 / 图片规则 / 蛋白配置
     # ------------------------------------------------------------------
