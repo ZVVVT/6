@@ -822,8 +822,9 @@ sys._MEIPASS = str(product_root / "_internal")
 sys.executable = str(product_root / "SpermProteinAnalyzer.exe")
 
 from app.batch_analysis_dialog import BatchAnalysisDialog
+from core.config_manager import ConfigManager
 
-harness = SimpleNamespace()
+harness = SimpleNamespace(config=ConfigManager(str(product_root / "config.ini")))
 harness.get_project_root = lambda: BatchAnalysisDialog.get_project_root(harness)
 if harness.get_project_root() != product_root:
     raise SystemExit("Batch frozen root 错误：{}".format(harness.get_project_root()))
