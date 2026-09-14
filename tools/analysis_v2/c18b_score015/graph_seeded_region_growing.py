@@ -35,6 +35,22 @@ def seed_geometry(groups,shape):
     return owner,tx,ty
 
 def grow(fitc,groups,max_distance,intensity_weight,direction_weight):
+    use_priority_lower_bound=False
+    if type(fitc) is np.ndarray and fitc.ndim==2 and fitc.dtype==np.float32 and fitc.size:
+        # Check each endpoint in Python float; float32 max-min can overflow.
+        fitc_min=float(np.min(fitc)); fitc_max=float(np.max(fitc))
+        safe_limit=float(np.finfo(np.float32).max)/4
+        if (np.isfinite(fitc_min) and np.isfinite(fitc_max)
+                and fitc_min>=-safe_limit and fitc_max<=safe_limit
+                and isinstance(intensity_weight,(int,float,np.integer,np.floating))
+                and isinstance(direction_weight,(int,float,np.integer,np.floating))):
+            try:
+                use_priority_lower_bound=(
+                    bool(np.isfinite(intensity_weight)) and intensity_weight>=0
+                    and bool(np.isfinite(direction_weight)) and direction_weight>=0
+                )
+            except (TypeError,ValueError,OverflowError,FloatingPointError):
+                pass
     labels,tx,ty=seed_geometry(groups,fitc.shape)
     seed_mask=labels>0
     seed_values=[]; thresholds=np.zeros(len(groups)+1,np.float32); levels=np.ones(len(groups)+1,np.float32)
@@ -57,6 +73,7 @@ def grow(fitc,groups,max_distance,intensity_weight,direction_weight):
             if seed_mask[yy,xx] and labels[yy,xx]!=iid: continue
             ndist=float(dist[y,x])+step
             if ndist>max_distance or fitc[yy,xx]<thresholds[iid]: continue
+            if use_priority_lower_bound and d+step+1e-5>=cost[yy,xx]: continue
             jump=abs(float(fitc[yy,xx]-fitc[y,x]))/levels[iid]
             deficit=max(0.,float(levels[iid]-fitc[yy,xx]))/levels[iid]
             # Growth across the centerline is preferred; travel parallel to
