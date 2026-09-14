@@ -61,6 +61,7 @@ def install_success_backend(monkeypatch, events, parts=None):
 
     class Runner:
         def __init__(self, config, log_callback=None):
+            self.supervisor = Mock()
             self.cancelled = False
             self.shutdown_called = False
             runners.append(self)
@@ -78,7 +79,7 @@ def install_success_backend(monkeypatch, events, parts=None):
             events.append(("shutdown",))
             return True
 
-    def publisher(completion, database):
+    def publisher(completion, database, *, supervisor):
         events.append(("publish", completion["protein_key"], database))
         request = SimpleNamespace(protein_key=completion["protein_key"])
         return published(request)
@@ -216,7 +217,7 @@ def test_publisher_or_database_failure_marks_protein_failed(
     events = []
     runners = install_success_backend(monkeypatch, events)
 
-    def fail_publish(completion, database):
+    def fail_publish(completion, database, *, supervisor):
         raise batch.AnalysisV2CompletionPublishError(
             "write failed", stage=stage, completion=completion,
         )
@@ -250,8 +251,8 @@ def test_cancel_calls_current_runner_and_stops_following_protein(tmp_path, monke
         object(),
     )
 
-    def publish_then_cancel(completion, database):
-        value = original_publish(completion, database)
+    def publish_then_cancel(completion, database, *, supervisor):
+        value = original_publish(completion, database, supervisor=supervisor)
         worker.request_cancel_after_current()
         return value
 

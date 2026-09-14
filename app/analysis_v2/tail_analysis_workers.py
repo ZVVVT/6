@@ -25,7 +25,8 @@ from core.analysis_v2.c18b_execution import (
     C18BExecution, _task_protein_key, _field_fitc_path, _field_merge_path,
     _c18b_output_dir, _c18b_instances_path, _c18b_filtered_instances_path,
 )
-from core.analysis_v2.task_process_context import TaskProcessContext
+from core.analysis_v2.task_process_context import TaskProcessContext, TaskProcessCancelled
+from core.analysis_v2.task_supervisor import TaskSupervisor
 
 
 class TailPathWorker(QThread, C18BExecution):
@@ -272,22 +273,30 @@ class TailMeasurementWorker(QThread):
         config: ConfigManager,
         timeout_seconds: float = 900.0,
         parent=None,
+        supervisor=None,
     ) -> None:
         super().__init__(parent)
         self.project_root = Path(project_root).resolve()
         self.task_root = Path(task_root).resolve()
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
-        self.process_context = TaskProcessContext()
+        self.supervisor = supervisor if supervisor is not None else TaskSupervisor(TaskProcessContext())
+        self.process_context = self.supervisor.process_context
 
-    def request_cancel(self) -> None:
-        self.requestInterruption()
-        self.process_context.cancel()
+    def request_cancel(self) -> bool:
+        accepted = self.supervisor.request_cancel("GUI measurement cancelled")
+        if accepted:
+            self.requestInterruption()
+        return accepted
 
     def run(self) -> None:
         started = time.perf_counter()
 
         try:
+            if not self.supervisor.register_worker(self):
+                self.process_context.check_cancelled()
+                raise RuntimeError("Measurement owner is not running")
+            self.process_context.check_cancelled()
             pipeline = (
                 self.project_root
                 / "pipelines"
@@ -317,6 +326,7 @@ class TailMeasurementWorker(QThread):
                 timeout_seconds=self.timeout_seconds,
             )
             result = service.run(process_context=self.process_context)
+            self.supervisor.expect_publication()
             elapsed = time.perf_counter() - started
 
             payload = {
@@ -337,6 +347,8 @@ class TailMeasurementWorker(QThread):
             self.finished_signal.emit(True, elapsed, payload, "")
 
         except BaseException as exception:
+            if not isinstance(exception, TaskProcessCancelled):
+                self.supervisor.record_failure("measurement", None, exception)
             elapsed = time.perf_counter() - started
             detail = "".join(
                 traceback.format_exception(
@@ -346,3 +358,7 @@ class TailMeasurementWorker(QThread):
                 )
             )
             self.finished_signal.emit(False, elapsed, {}, detail)
+
+        finally:
+            self.supervisor.mark_worker_done(self)
+            self.supervisor.finalize()

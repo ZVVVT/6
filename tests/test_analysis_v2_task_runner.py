@@ -571,11 +571,18 @@ def test_stage_failure_records_root_failure_and_requests_failure_cancel(harness,
     assert harness.runner._supervisor.cancellation_is_failure_triggered
 
 
-def test_successful_runner_finalizes_supervisor_completed(harness):
+def test_successful_runner_waits_for_publication_after_context_finish(harness):
     harness.runner.run(tasks.AnalysisV2TaskRequest(
         "case1", "protein1", harness.fields, protein_part="head",
     ))
-    assert harness.runner._supervisor.state == "COMPLETED"
+    owner = harness.runner.supervisor
+    assert owner.state == "RUNNING"
+    assert owner.process_context._finish_requested
+    owner.begin_publication()
+    owner.mark_publication_completed()
+    harness.runner.shutdown()
+    assert owner.state == "COMPLETED"
+    assert not owner.cancel_event.is_set()
 
 
 def test_user_cancel_is_not_recorded_as_computation_failure(harness):
@@ -720,5 +727,24 @@ def test_runner_real_calibration_and_tail_measurement_contract(harness, tmp_path
         assert {"head_final_labels", "tail_final_labels", "tail_positive_head_labels",
                 "tail_final_objects", "tail_measurement_image_csv"}.issubset({row["role"] for row in manifest["files"]})
         assert not result["target_dir"].exists()
+        # Extend the existing MvImageID service integration through the real
+        # Publisher and SQLite; only the external CSV producer is substituted.
+        from core.database import Database
+        from core.analysis_v2.result_completion_service import publish_measured_completion
+        database = Database(str(tmp_path / "tail_publication.db"))
+        with database.connect() as conn:
+            case_id = conn.execute("INSERT INTO cases (case_no) VALUES ('tail-integration')").lastrowid
+            conn.commit()
+        result["context"]["case_id"] = case_id
+        owner = harness.runner.supervisor
+        assert owner.state == "RUNNING"
+        assert owner.process_context._finish_requested
+        published = publish_measured_completion(result, database, supervisor=owner)
+        assert published.summary["total"]["positive_count"] == associated
+        assert len(database.get_protein_analysis_by_case(case_id)) == 1
+        assert (published.output_dir / "Image.csv").is_file()
+        harness.runner.shutdown()
+        assert owner.state == "COMPLETED"
+        assert not owner.cancel_event.is_set()
     finally:
         fixture.doCleanups()

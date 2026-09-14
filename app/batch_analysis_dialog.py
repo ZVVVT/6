@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from core.analysis_v2.task_process_context import TaskProcessCancelled
+
 import configparser
 import shutil
 from pathlib import Path
@@ -660,7 +662,7 @@ class BatchProteinWorker(QThread):
         runner = self.current_runner
         if runner is not None:
             runner.cancel()
-        self.log_signal.emit("已请求取消批量分析：正在停止当前蛋白，后续未开始项目将跳过。")
+        self.log_signal.emit("已请求取消批量分析：后续未开始项目将跳过；当前结果若已开始发布，将完成提交或失败清理。")
 
     def run(self):
         results = []
@@ -684,7 +686,7 @@ class BatchProteinWorker(QThread):
                 results.append(result)
                 self.task_status_signal.emit(protein_key, "已完成")
                 self.log_signal.emit(f"{protein_name} 分析完成。")
-            except AnalysisV2TaskCancelled:
+            except (AnalysisV2TaskCancelled, TaskProcessCancelled):
                 self.cancel_after_current = True
                 self.task_status_signal.emit(protein_key, "已取消")
                 errors.append({
@@ -766,7 +768,9 @@ class BatchProteinWorker(QThread):
                     case_no=request.case_no,
                     protein_key=request.protein_key,
                 )
-            published = publish_measured_completion(completion, self.database)
+            published = publish_measured_completion(
+                completion, self.database, supervisor=runner.supervisor,
+            )
             self.log_signal.emit(published.database_message)
             if published.cleanup_warning:
                 self.log_signal.emit("结果发布清理提示：{}".format(published.cleanup_warning))

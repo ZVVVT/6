@@ -19,7 +19,8 @@ from core.analysis_v2.input_manifest_checkpoint import (
 )
 from core.config_manager import ConfigManager
 from core.analysis_process_registry import analysis_process_registry
-from core.analysis_v2.task_process_context import TaskProcessContext
+from core.analysis_v2.task_process_context import TaskProcessContext, TaskProcessCancelled
+from core.analysis_v2.task_supervisor import TaskSupervisor
 
 
 class HeadSegmentationWorker(QThread):
@@ -180,22 +181,30 @@ class HeadMeasurementWorker(QThread):
         config: ConfigManager,
         timeout_seconds: float = 900.0,
         parent=None,
+        supervisor=None,
     ) -> None:
         super().__init__(parent)
         self.project_root = Path(project_root).resolve()
         self.task_root = Path(task_root).resolve()
         self.config = config
         self.timeout_seconds = float(timeout_seconds)
-        self.process_context = TaskProcessContext()
+        self.supervisor = supervisor if supervisor is not None else TaskSupervisor(TaskProcessContext())
+        self.process_context = self.supervisor.process_context
 
-    def request_cancel(self) -> None:
-        self.requestInterruption()
-        self.process_context.cancel()
+    def request_cancel(self) -> bool:
+        accepted = self.supervisor.request_cancel("GUI measurement cancelled")
+        if accepted:
+            self.requestInterruption()
+        return accepted
 
     def run(self) -> None:
         started = time.perf_counter()
 
         try:
+            if not self.supervisor.register_worker(self):
+                self.process_context.check_cancelled()
+                raise RuntimeError("Measurement owner is not running")
+            self.process_context.check_cancelled()
             pipeline = (
                 self.project_root
                 / "pipelines"
@@ -224,6 +233,7 @@ class HeadMeasurementWorker(QThread):
             )
 
             result = service.run(process_context=self.process_context)
+            self.supervisor.expect_publication()
             elapsed = time.perf_counter() - started
 
             payload = {
@@ -249,6 +259,8 @@ class HeadMeasurementWorker(QThread):
             )
 
         except BaseException as exception:
+            if not isinstance(exception, TaskProcessCancelled):
+                self.supervisor.record_failure("measurement", None, exception)
             elapsed = time.perf_counter() - started
             detail = "".join(
                 traceback.format_exception(
@@ -263,3 +275,7 @@ class HeadMeasurementWorker(QThread):
                 {},
                 detail,
             )
+
+        finally:
+            self.supervisor.mark_worker_done(self)
+            self.supervisor.finalize()

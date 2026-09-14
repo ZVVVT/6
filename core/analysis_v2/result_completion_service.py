@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 from .head_result_publisher import stage_head_measurement_output
 from .tail_result_publisher import stage_tail_measurement_output
+from .task_process_context import TaskProcessCancelled
 
 
 class AnalysisV2CompletionPublishError(RuntimeError):
@@ -101,13 +102,21 @@ def _database_message(part, protein_name, total):
     )
 
 
-def publish_measured_completion(completion_result, database):
+def publish_measured_completion(completion_result, database, *, supervisor):
     """Publish one measured result, atomically replace its DB rows, then commit files."""
-    completion = dict(completion_result or {})
+    # Rejections (including TaskProcessCancelled and duplicates) are control
+    # flow outside the failure wrapper; they must not poison another publisher.
+    try:
+        supervisor.begin_publication()
+    except TaskProcessCancelled:
+        supervisor.finalize()
+        raise
+    completion = {}
     publication = None
     stage = "validation"
 
     try:
+        completion = dict(completion_result or {})
         if completion.get("status") != "measured":
             raise ValueError("Analysis V2 CompletionResult 状态必须为 measured。")
 
@@ -183,11 +192,11 @@ def publish_measured_completion(completion_result, database):
             status="完成",
         )
 
-        stage = "commit"
+        stage = "post-DB-commit publication finalization failure"
         cleanup_warning = publication.commit()
         publication = None
 
-        return PublishedAnalysisV2Completion(
+        result = PublishedAnalysisV2Completion(
             analysis_id=analysis_id,
             protein_key=protein_key,
             part=part,
@@ -200,7 +209,11 @@ def publish_measured_completion(completion_result, database):
             associated_object_count=completion.get("associated_object_count"),
             unresolved_object_count=completion.get("unresolved_object_count"),
         )
+        supervisor.mark_publication_completed()
+        return result
     except BaseException as cause:
+        diagnostics = {"rollback_error": None}
+        supervisor.record_failure(stage, None, cause, details=diagnostics)
         error = AnalysisV2CompletionPublishError(
             str(cause), stage=stage, completion=completion, cause=cause,
         )
@@ -209,4 +222,6 @@ def publish_measured_completion(completion_result, database):
                 publication.rollback()
             except BaseException as rollback_error:
                 error.rollback_error = rollback_error
+                diagnostics["rollback_error"] = rollback_error
+        supervisor.finalize()
         raise error from cause

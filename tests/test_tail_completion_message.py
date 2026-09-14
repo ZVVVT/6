@@ -6,6 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from core.analysis_v2.task_supervisor import TaskSupervisor
+
+
+def publication_owner():
+    owner = TaskSupervisor()
+    owner.expect_publication()
+    return owner
+
 
 from core.analysis_v2.result_completion_service import publish_measured_completion
 
@@ -85,7 +93,7 @@ def test_save_message_names_associated_count_without_changing_database_value(tmp
         "core.analysis_v2.result_completion_service.stage_tail_measurement_output",
         return_value=publication,
     ):
-        result = publish_measured_completion(completion, database)
+        result = publish_measured_completion(completion, database, supervisor=publication_owner())
     assert "关联尾部数 65，" in result.database_message
     assert "有效尾部数" not in result.database_message
     database.replace_protein_analysis_with_fields.assert_called_once()

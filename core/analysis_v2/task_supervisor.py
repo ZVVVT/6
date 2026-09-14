@@ -3,7 +3,7 @@
 import threading
 from dataclasses import dataclass
 
-from .task_process_context import TaskProcessContext
+from .task_process_context import TaskProcessContext, TaskProcessCancelled
 
 
 class TaskSupervisorState:
@@ -12,6 +12,10 @@ class TaskSupervisorState:
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     COMPLETED = "COMPLETED"
+
+
+class TaskPublicationRejected(RuntimeError):
+    """Invalid or duplicate publication; does not change the owner's outcome."""
 
 
 @dataclass(frozen=True)
@@ -43,9 +47,58 @@ class TaskSupervisor:
         self._cancel_reason = None
         self._failure_triggered_cancel = False
         self._workers = set()
+        self._publication_required = False
+        self._publication_started = False
+        self._publication_completed = False
         self.configure_shutdown_deadlines(
             graceful_deadline_seconds, force_deadline_seconds,
         )
+
+    @property
+    def publication_started(self):
+        with self._lock:
+            return self._publication_started
+
+    @property
+    def publication_completed(self):
+        with self._lock:
+            return self._publication_completed
+
+    def expect_publication(self):
+        """Register the formal-result obligation before worker finalization."""
+        with self._lock:
+            self._check_publication_allowed_locked()
+            if self._publication_required:
+                raise RuntimeError("Publication obligation already registered")
+            self._publication_required = True
+
+    def _check_publication_allowed_locked(self):
+        if self._root_failure is not None:
+            raise TaskPublicationRejected("Task already failed: {}".format(self._root_failure.message))
+        if self._cancel_reason is not None or self.cancel_event.is_set():
+            raise TaskProcessCancelled("Analysis V2 task cancelled")
+        if self._state != TaskSupervisorState.RUNNING:
+            raise TaskPublicationRejected("Task is already terminal: {}".format(self._state))
+        if self._publication_started:
+            raise TaskPublicationRejected("Publication already started")
+
+    def begin_publication(self):
+        """Linearize ownership against cancellation; perform no publication I/O."""
+        with self._lock:
+            self._check_publication_allowed_locked()
+            if not self._publication_required:
+                raise TaskPublicationRejected("No publication obligation registered")
+            self._publication_started = True
+            return True
+
+    def mark_publication_completed(self):
+        with self._lock:
+            if not self._publication_started or self._publication_completed:
+                raise RuntimeError("Publication is not pending completion")
+            if self._root_failure is not None:
+                raise RuntimeError("Cannot complete failed publication")
+            self._publication_completed = True
+        return self.finalize()
 
     @property
     def state(self):
@@ -97,7 +150,7 @@ class TaskSupervisor:
 
     def register_worker(self, worker):
         with self._lock:
-            if self._state != TaskSupervisorState.RUNNING:
+            if self._state != TaskSupervisorState.RUNNING or self._publication_required:
                 return False
             self._workers.add(worker)
             return True
@@ -123,6 +176,12 @@ class TaskSupervisor:
     def request_cancel(self, reason, failure_triggered=False, deadline=None):
         """Set sticky cancellation and notify currently registered resources."""
         with self._lock:
+            # Failure cleanup during publication is local rollback, never a
+            # Context kill. record_failure remains available throughout it.
+            if self._publication_started or self._state in (
+                TaskSupervisorState.COMPLETED, TaskSupervisorState.CANCELLED,
+            ):
+                return False
             if self._cancel_reason is None:
                 self._cancel_reason = str(reason)
             self._failure_triggered_cancel = (
@@ -131,21 +190,12 @@ class TaskSupervisor:
             if self._root_failure is None and self._state == TaskSupervisorState.RUNNING:
                 self._state = TaskSupervisorState.CANCELLING
         self.process_context.cancel(deadline=deadline)
+        return True
 
     def mark_completed(self):
-        with self._lock:
-            if self._root_failure is not None:
-                self._state = TaskSupervisorState.FAILED
-                self.process_context.finish()
-                return False
-            if self._workers or self.process_context.has_active_processes():
-                return False
-            if self.cancel_event.is_set():
-                self._state = TaskSupervisorState.CANCELLED
-            else:
-                self._state = TaskSupervisorState.COMPLETED
-            self._finish_context_if_reaped_locked()
-            return True
+        return self.finalize() in (
+            TaskSupervisorState.COMPLETED, TaskSupervisorState.CANCELLED,
+        )
 
     def finalize(self):
         """Set the terminal state after registered workers have finished."""
@@ -158,9 +208,14 @@ class TaskSupervisor:
             else:
                 if self._workers or self.process_context.has_active_processes():
                     return self._state
-                if self.cancel_event.is_set():
+                if self._publication_completed:
+                    self._state = TaskSupervisorState.COMPLETED
+                elif self._publication_started:
+                    # Only completion or a real failure can settle this segment.
+                    pass
+                elif self._cancel_reason is not None or self.cancel_event.is_set():
                     self._state = TaskSupervisorState.CANCELLED
-                else:
+                elif not self._publication_required:
                     self._state = TaskSupervisorState.COMPLETED
             self._finish_context_if_reaped_locked()
             return self._state

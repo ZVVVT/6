@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from core.analysis_v2.task_supervisor import TaskSupervisor
 
 from app.analysis_window import AnalysisWindow
 from core.analysis_v2.completion import build_completion_result
@@ -28,6 +29,7 @@ def page(tmp_path, part, interactive, running=False):
     payload, context = inputs(tmp_path, part)
     context["interactive"] = interactive
     window = SimpleNamespace(
+        current_analysis_v2_supervisor=TaskSupervisor(),
         current_analysis_v2_context=context, current_analysis_v2_task_root=tmp_path,
         _shutdown_cancel_requested=False, head_measurement_worker=object(),
         _analysis_running=True,
@@ -41,6 +43,7 @@ def page(tmp_path, part, interactive, running=False):
     window._clear_analysis_v2_state = lambda: AnalysisWindow._clear_analysis_v2_state(window)
     window._finish_analysis_v2_ui = lambda **kw: AnalysisWindow._finish_analysis_v2_ui(window, **kw)
     window._show_analysis_v2_error = lambda *args: AnalysisWindow._show_analysis_v2_error(window, *args)
+    window.current_analysis_v2_supervisor.expect_publication()
     return window, payload
 
 

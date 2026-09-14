@@ -5,6 +5,14 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+from core.analysis_v2.task_supervisor import TaskSupervisor
+
+
+def publication_owner():
+    owner = TaskSupervisor()
+    owner.expect_publication()
+    return owner
+
 
 from core.analysis_v2.result_completion_service import (
     AnalysisV2CompletionPublishError,
@@ -78,7 +86,7 @@ def test_measured_completion_publishes_and_atomically_saves(tmp_path, part):
         "core.analysis_v2.result_completion_service.stage_{}_measurement_output".format(part),
         return_value=published,
     ) as publisher:
-        result = publish_measured_completion(value, database)
+        result = publish_measured_completion(value, database, supervisor=publication_owner())
 
     assert result.analysis_id == 19
     assert result.part == part
@@ -99,7 +107,7 @@ def test_invalid_completion_is_rejected_before_publication(tmp_path, key, value)
     measured[key] = value
     database = Mock()
     with pytest.raises(AnalysisV2CompletionPublishError) as error:
-        publish_measured_completion(measured, database)
+        publish_measured_completion(measured, database, supervisor=publication_owner())
     assert error.value.stage == "validation"
     assert error.value.cause is not None
     database.replace_protein_analysis_with_fields.assert_not_called()
@@ -118,7 +126,7 @@ def test_publication_summary_defines_database_summary_and_fields(tmp_path, part)
         "core.analysis_v2.result_completion_service.stage_{}_measurement_output".format(part),
         return_value=published,
     ):
-        result = publish_measured_completion(value, database)
+        result = publish_measured_completion(value, database, supervisor=publication_owner())
 
     saved = database.replace_protein_analysis_with_fields.call_args.kwargs
     assert saved["total_sperm_count"] == 91
@@ -139,7 +147,7 @@ def test_protein3_database_part_comes_from_completion(tmp_path, part):
         "core.analysis_v2.result_completion_service.stage_{}_measurement_output".format(part),
         return_value=publication(summary),
     ):
-        publish_measured_completion(value, database)
+        publish_measured_completion(value, database, supervisor=publication_owner())
     assert database.replace_protein_analysis_with_fields.call_args.kwargs[
         "protein_part"
     ] == part
@@ -159,7 +167,7 @@ def test_tail_counts_remain_distinct_and_legal(
         "core.analysis_v2.result_completion_service.stage_tail_measurement_output",
         return_value=published,
     ) as publisher:
-        result = publish_measured_completion(value, database)
+        result = publish_measured_completion(value, database, supervisor=publication_owner())
 
     contract = publisher.call_args.kwargs["measurement_contract"]
     saved = database.replace_protein_analysis_with_fields.call_args.kwargs
@@ -181,7 +189,7 @@ def test_database_failure_rolls_back_publication_and_preserves_cause(tmp_path):
         return_value=published,
     ):
         with pytest.raises(AnalysisV2CompletionPublishError) as error:
-            publish_measured_completion(value, database)
+            publish_measured_completion(value, database, supervisor=publication_owner())
     assert error.value.stage == "database"
     assert error.value.cause is cause
     assert error.value.__cause__ is cause
@@ -200,7 +208,7 @@ def test_publisher_failure_never_writes_database(tmp_path):
         side_effect=cause,
     ):
         with pytest.raises(AnalysisV2CompletionPublishError) as error:
-            publish_measured_completion(value, database)
+            publish_measured_completion(value, database, supervisor=publication_owner())
     assert error.value.stage == "publication"
     assert error.value.cause is cause
     database.replace_protein_analysis_with_fields.assert_not_called()
@@ -216,7 +224,7 @@ def test_precommit_validation_failure_rolls_back(tmp_path):
         return_value=published,
     ):
         with pytest.raises(AnalysisV2CompletionPublishError):
-            publish_measured_completion(value, database)
+            publish_measured_completion(value, database, supervisor=publication_owner())
     published.rollback.assert_called_once_with()
     database.replace_protein_analysis_with_fields.assert_not_called()
 
@@ -229,7 +237,7 @@ def test_cleanup_warning_is_success_after_database_commit(tmp_path):
         "core.analysis_v2.result_completion_service.stage_head_measurement_output",
         return_value=published,
     ):
-        result = publish_measured_completion(value, database)
+        result = publish_measured_completion(value, database, supervisor=publication_owner())
     assert result.cleanup_warning == "backup cleanup warning"
     published.rollback.assert_not_called()
 
@@ -242,7 +250,7 @@ def test_only_atomic_database_api_is_used(tmp_path):
         "core.analysis_v2.result_completion_service.stage_head_measurement_output",
         return_value=published,
     ):
-        publish_measured_completion(value, database)
+        publish_measured_completion(value, database, supervisor=publication_owner())
     database.replace_protein_analysis_with_fields.assert_called_once()
     database.save_protein_analysis.assert_not_called()
     database.save_field_result.assert_not_called()
@@ -261,7 +269,7 @@ def test_publication_database_commit_order_is_preserved(tmp_path):
         "core.analysis_v2.result_completion_service.stage_head_measurement_output",
         side_effect=lambda **_kwargs: events.append("publication") or published,
     ):
-        publish_measured_completion(value, database)
+        publish_measured_completion(value, database, supervisor=publication_owner())
     assert events == ["publication", "database", "commit"]
 
 

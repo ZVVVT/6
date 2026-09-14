@@ -2,6 +2,9 @@ import shutil
 import time
 from pathlib import Path
 
+from core.analysis_v2.task_supervisor import TaskSupervisor, TaskPublicationRejected
+from core.analysis_v2.task_process_context import TaskProcessCancelled
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QWidget,
@@ -140,6 +143,7 @@ class AnalysisWindow(QWidget):
         self.tail_measurement_worker = None
         self.tail_calibration_controller = None
         self.current_analysis_v2_task_root = None
+        self.current_analysis_v2_supervisor = None
         self.current_analysis_v2_context = None
         self._analysis_running = False
         self.analysis_v2_completion_result = None
@@ -1474,6 +1478,8 @@ class AnalysisWindow(QWidget):
         if dict(self.current_analysis_v2_context or {}).get("interactive", True) is False:
             self._analysis_running = False
         # Keep the completion snapshot/error available until the next run.
+        # The window retains its supervisor independently of QThread disposal.
+        # A new analysis replaces it; UI cleanup must not drop publication ownership.
         self.current_analysis_v2_task_root = None
         self.current_analysis_v2_context = None
         self._analysis_v2_finish_pending = False
@@ -1579,6 +1585,7 @@ class AnalysisWindow(QWidget):
         self._analysis_v2_select_next_pending = False
         self.analysis_v2_completion_result = None
         self.analysis_v2_completion_error = None
+        self.current_analysis_v2_supervisor = None
         self.current_analysis_v2_context = {
             "case": case_snapshot,
             "case_id": case_snapshot.get("id"),
@@ -2182,11 +2189,13 @@ class AnalysisWindow(QWidget):
                 self._maybe_start_tail_path_after_field_prepare()
                 return
 
+            self.current_analysis_v2_supervisor = TaskSupervisor()
             worker = HeadMeasurementWorker(
                 project_root=project_root,
                 task_root=task_root,
                 config=self.config,
                 parent=self,
+                supervisor=self.current_analysis_v2_supervisor,
             )
             worker.log_signal.connect(self.append_log)
             worker.finished_signal.connect(
@@ -2425,11 +2434,13 @@ class AnalysisWindow(QWidget):
             context["tail_calibration_result"] = payload
             self.current_analysis_v2_context = context
 
+            self.current_analysis_v2_supervisor = TaskSupervisor()
             worker = TailMeasurementWorker(
                 project_root=project_root,
                 task_root=task_root,
                 config=self.config,
                 parent=self,
+                supervisor=self.current_analysis_v2_supervisor,
             )
             worker.log_signal.connect(self.append_log)
             worker.finished_signal.connect(
@@ -2584,6 +2595,7 @@ class AnalysisWindow(QWidget):
             published_completion = publish_measured_completion(
                 completion_result=completion,
                 database=self.database,
+                supervisor=self.current_analysis_v2_supervisor,
             )
             transaction_committed = True
             target_dir = published_completion.output_dir
@@ -2680,6 +2692,18 @@ class AnalysisWindow(QWidget):
                 ),
             )
 
+        except TaskPublicationRejected as exception:
+            self.append_log("Analysis V2：拒绝重复或无效发布：{}".format(exception))
+            return
+
+        except TaskProcessCancelled:
+            self.current_analysis_v2_supervisor.finalize()
+            self._analysis_v2_finish_pending = True
+            self.append_log("Analysis V2：发布前已取消。")
+            if not self._worker_is_running(self.tail_measurement_worker):
+                self._finish_analysis_v2_ui()
+            return
+
         except BaseException as exception:
             task_root_text = str(self.current_analysis_v2_task_root or "")
             self._analysis_v2_finish_pending = True
@@ -2695,6 +2719,8 @@ class AnalysisWindow(QWidget):
                 )
                 return
 
+            self.current_analysis_v2_supervisor.record_failure("completion", None, exception)
+            self.current_analysis_v2_supervisor.finalize()
             rollback_error = getattr(exception, "rollback_error", None)
             rollback_detail = (
                 "\n\n文件回滚异常：{}".format(rollback_error)
@@ -2704,7 +2730,7 @@ class AnalysisWindow(QWidget):
 
             self._show_analysis_v2_error(
                 "尾部结果发布失败",
-                "新结果未能完成发布，系统已尽力恢复旧文件和旧数据库记录。",
+                "新结果未能完成发布，已按现有机制尝试回滚；已提交的数据库记录不会撤销。",
                 "{}{}\n\nAnalysis V2 任务目录：{}".format(
                     exception,
                     rollback_detail,
@@ -2868,6 +2894,7 @@ class AnalysisWindow(QWidget):
             published_completion = publish_measured_completion(
                 completion_result=completion,
                 database=self.database,
+                supervisor=self.current_analysis_v2_supervisor,
             )
             transaction_committed = True
             target_dir = published_completion.output_dir
@@ -2942,6 +2969,18 @@ class AnalysisWindow(QWidget):
                 ),
             )
 
+        except TaskPublicationRejected as exception:
+            self.append_log("Analysis V2：拒绝重复或无效发布：{}".format(exception))
+            return
+
+        except TaskProcessCancelled:
+            self.current_analysis_v2_supervisor.finalize()
+            self._analysis_v2_finish_pending = True
+            self.append_log("Analysis V2：发布前已取消。")
+            if not self._worker_is_running(self.head_measurement_worker):
+                self._finish_analysis_v2_ui()
+            return
+
         except BaseException as exception:
             task_root_text = str(
                 self.current_analysis_v2_task_root or ""
@@ -2959,6 +2998,8 @@ class AnalysisWindow(QWidget):
                 )
                 return
 
+            self.current_analysis_v2_supervisor.record_failure("completion", None, exception)
+            self.current_analysis_v2_supervisor.finalize()
             rollback_error = getattr(exception, "rollback_error", None)
             rollback_detail = (
                 "\n\n文件回滚异常：{}".format(rollback_error)
@@ -2968,7 +3009,7 @@ class AnalysisWindow(QWidget):
 
             self._show_analysis_v2_error(
                 "头部结果发布失败",
-                "新结果未能完成发布，系统已尽力恢复旧文件和旧数据库记录。",
+                "新结果未能完成发布，已按现有机制尝试回滚；已提交的数据库记录不会撤销。",
                 "{}{}\n\nAnalysis V2 任务目录：{}".format(
                     exception,
                     rollback_detail,
@@ -3327,10 +3368,14 @@ class AnalysisWindow(QWidget):
 
     def _cancel_analysis_for_shutdown(self):
         """Cancel owned work and preserve all previously published results."""
+        owner = getattr(self, "current_analysis_v2_supervisor", None)
+        if owner is not None and not owner.request_cancel("GUI shutdown"):
+            # Synchronous publication owns commit/rollback; do not reenter Qt
+            # or invoke the registry-wide Context cancellation path.
+            return
         self._shutdown_cancel_requested = True
         self.btn_run_analysis.setText("正在终止分析并关闭后台任务，请稍候……")
         self.btn_run_analysis.setEnabled(False)
-        QApplication.processEvents()
 
         window = self.head_calibration_window
         if window is not None:
@@ -3392,8 +3437,11 @@ class AnalysisWindow(QWidget):
                 worker.wait(2000)
         analysis_process_registry.clear_finished()
 
+        if owner is not None:
+            owner.finalize()
+
         task_root_text = str(self.current_analysis_v2_task_root or "").strip()
-        if task_root_text:
+        if task_root_text and (owner is None or owner.root_failure is None):
             task_root = Path(task_root_text).resolve()
             try:
                 TaskStateStore.from_task_paths(

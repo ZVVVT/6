@@ -211,8 +211,13 @@ class AnalysisV2TaskRunner:
         self._flush_branch_logs(branch_logs)
         return execution, backend, head_seconds, parallel_window_seconds
 
+    @property
+    def supervisor(self):
+        """The existing task owner, retained through formal publication."""
+        return self._supervisor
+
     def cancel(self):
-        self._supervisor.request_cancel("user requested cancellation")
+        return self._supervisor.request_cancel("user requested cancellation")
 
     def shutdown(self, timeout_seconds=10.0):
         timeout = float(timeout_seconds)
@@ -241,6 +246,7 @@ class AnalysisV2TaskRunner:
             error = self._error(AnalysisV2TaskError, message)
             error.stage = "shutdown"
             raise error
+        self._supervisor.finalize()
         return True
 
     def _validate(self, request):
@@ -610,6 +616,7 @@ class AnalysisV2TaskRunner:
                 part, payload, context, paths.task_root, time.perf_counter() - started,
             )
             self._process_context.check_cancelled()
+            self._supervisor.expect_publication()
             return completion
         except Exception as cause:
             if ((self.cancel_event.is_set() or isinstance(cause, TaskProcessCancelled))
