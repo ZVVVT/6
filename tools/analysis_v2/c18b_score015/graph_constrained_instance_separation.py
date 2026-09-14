@@ -116,8 +116,9 @@ def _path_geometry_region(path: np.ndarray, shape: tuple[int, int],
     arithmetic, and alignment calculation are indexed to the parent region.
     """
     seed = np.zeros(shape, np.uint8)
-    tangent_x = np.zeros(shape, np.float32)
-    tangent_y = np.zeros(shape, np.float32)
+    seed_indices = []
+    tangent_x_values = []
+    tangent_y_values = []
     for k, (x, y) in enumerate(path):
         if not (0 <= x < shape[1] and 0 <= y < shape[0]):
             continue
@@ -126,15 +127,24 @@ def _path_geometry_region(path: np.ndarray, shape: tuple[int, int],
         v = b - a
         norm = max(float(np.linalg.norm(v)), 1.)
         seed[y, x] = 1
-        tangent_x[y, x], tangent_y[y, x] = v / norm
+        tx, ty = v / norm
+        seed_indices.append(y * shape[1] + x)
+        tangent_x_values.append(tx)
+        tangent_y_values.append(ty)
     distance, nearest = cv2.distanceTransformWithLabels(1 - seed, cv2.DIST_L2, 5,
                                                         labelType=cv2.DIST_LABEL_PIXEL)
-    ys, xs = np.where(seed)
-    order = np.lexsort((xs, ys)); ys, xs = ys[order], xs[order]
+    # np.unique sorts linear coordinates in the same row-major order as
+    # np.where(seed). The first occurrence in reverse path order is the last
+    # tangent write at a duplicate coordinate.
+    linear = np.asarray(seed_indices, dtype=np.intp)
+    unique_linear, reverse_first = np.unique(linear[::-1], return_index=True)
+    last_write = len(linear) - 1 - reverse_first
+    ys, xs = np.divmod(unique_linear, shape[1])
     lut_x = np.zeros(len(xs) + 1, np.float32); lut_y = np.zeros(len(xs) + 1, np.float32)
     lut_tx = np.zeros(len(xs) + 1, np.float32); lut_ty = np.zeros(len(xs) + 1, np.float32)
     lut_x[1:], lut_y[1:] = xs, ys
-    lut_tx[1:], lut_ty[1:] = tangent_x[ys, xs], tangent_y[ys, xs]
+    lut_tx[1:] = np.asarray(tangent_x_values, dtype=np.float32)[last_write]
+    lut_ty[1:] = np.asarray(tangent_y_values, dtype=np.float32)[last_write]
     nearest_region = nearest[region_y, region_x]
     np.minimum(nearest_region, len(xs), out=nearest_region)
     distance_region = distance[region_y, region_x]
