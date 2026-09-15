@@ -22,6 +22,7 @@ ADAPTER_VERSION = "c18b_tail_editor_adapter_v1"
 DILATION_RADIUS_PX = 20
 MAX_MATCHING_DISTANCE_PX = 80.0
 CENTERLINE_ROI_MARGIN_PX = 2
+EROSION_BOUNDARY_HALO_PX = 1
 NEIGHBOURS_8 = (
     (-1, -1), (-1, 0), (-1, 1),
     (0, -1), (0, 1),
@@ -104,6 +105,27 @@ def _raw_label_bboxes(labels: np.ndarray, label_ids: Sequence[int]) -> Dict[int,
     )
 
 
+def _boundary_from_label_roi(
+    labels: np.ndarray,
+    label_id: int,
+    raw_bbox: Tuple[int, int, int, int],
+    kernel: np.ndarray,
+) -> Tuple[np.ndarray, int]:
+    """Return the full-frame-equivalent erosion boundary in global YX order."""
+    y0, y1, x0, x1 = raw_bbox
+    halo = EROSION_BOUNDARY_HALO_PX
+    ry0 = max(0, y0 - halo)
+    ry1 = min(labels.shape[0], y1 + halo)
+    rx0 = max(0, x0 - halo)
+    rx1 = min(labels.shape[1], x1 + halo)
+    local_mask = (labels[ry0:ry1, rx0:rx1] == label_id).astype(np.uint8)
+    eroded = cv2.erode(local_mask, kernel, iterations=1)
+    boundary_yx = np.argwhere((local_mask > 0) & (eroded == 0))
+    boundary_yx[:, 0] += ry0
+    boundary_yx[:, 1] += rx0
+    return boundary_yx, int(np.count_nonzero(local_mask))
+
+
 def maximum_weight_assignment(score_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Return a maximum-weight rectangular assignment using NumPy only."""
     scores = np.asarray(score_matrix, dtype=np.float64)
@@ -179,16 +201,18 @@ def match_instances(
     if not head_ids:
         raise ValueError("HeadFinalLabels没有非零头部对象。")
     boundary_kernel = np.ones((3, 3), dtype=np.uint8)
+    head_raw_bboxes = _raw_label_bboxes(head_labels, head_ids)
     head_boundaries: Dict[int, np.ndarray] = {}
     head_bboxes: Dict[int, Tuple[int, int, int, int]] = {}
     head_pixel_counts: Dict[int, int] = {}
     for head_id in head_ids:
-        head_mask = (head_labels == head_id).astype(np.uint8)
-        eroded = cv2.erode(head_mask, boundary_kernel, iterations=1)
-        head_boundaries[head_id] = np.argwhere((head_mask > 0) & (eroded == 0))
+        head_boundary, head_pixel_count = _boundary_from_label_roi(
+            head_labels, head_id, head_raw_bboxes[head_id], boundary_kernel
+        )
+        head_boundaries[head_id] = head_boundary
         if len(head_boundaries[head_id]):
             head_bboxes[head_id] = _point_bbox(head_boundaries[head_id])
-        head_pixel_counts[head_id] = int(np.count_nonzero(head_mask))
+        head_pixel_counts[head_id] = head_pixel_count
 
     try:
         threshold = float(maximum_distance)
@@ -201,15 +225,15 @@ def match_instances(
 
     proposals_by_instance: Dict[int, List[Dict[str, Any]]] = {}
     no_candidate_ids = set()
+    ximgproc = getattr(cv2, "ximgproc", None)
+    use_ximgproc = ximgproc is not None and hasattr(ximgproc, "thinning")
     for instance_id in instance_ids:
-        instance_mask = instances == instance_id
-        tail_pixels = int(np.count_nonzero(instance_mask))
         y0, y1, x0, x1 = instance_bboxes[instance_id]
         ry0 = max(0, y0 - int(dilation_radius))
         ry1 = min(instances.shape[0], y1 + int(dilation_radius))
         rx0 = max(0, x0 - int(dilation_radius))
         rx1 = min(instances.shape[1], x1 + int(dilation_radius))
-        local_mask = instance_mask[ry0:ry1, rx0:rx1].astype(np.uint8)
+        local_mask = (instances[ry0:ry1, rx0:rx1] == instance_id).astype(np.uint8)
         dilated = cv2.dilate(local_mask, kernel, iterations=1) > 0
         overlapping = head_labels[ry0:ry1, rx0:rx1][dilated]
         overlapping = overlapping[overlapping > 0].astype(np.int64, copy=False)
@@ -220,12 +244,12 @@ def match_instances(
                 (int(head_id), int(count))
                 for head_id, count in zip(overlap_ids.tolist(), counts.tolist())
             )
-        tail_uint8 = instance_mask.astype(np.uint8)
-        tail_eroded = cv2.erode(tail_uint8, boundary_kernel, iterations=1)
-        boundary_yx = np.argwhere((tail_uint8 > 0) & (tail_eroded == 0))
+        boundary_yx, tail_pixels = _boundary_from_label_roi(
+            instances, instance_id, instance_bboxes[instance_id], boundary_kernel
+        )
         skeleton_points = np.empty((0, 2), dtype=np.int64)
-        ximgproc = getattr(cv2, "ximgproc", None)
-        if ximgproc is not None and hasattr(ximgproc, "thinning"):
+        if use_ximgproc:
+            tail_uint8 = (instances == instance_id).astype(np.uint8)
             skeleton = ximgproc.thinning(tail_uint8 * 255) > 0
             neighbours = cv2.filter2D(
                 skeleton.astype(np.uint8), cv2.CV_16U, np.ones((3, 3), dtype=np.uint8)
