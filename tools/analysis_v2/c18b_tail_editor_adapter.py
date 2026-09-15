@@ -81,6 +81,29 @@ def _point_bbox(points_yx: np.ndarray) -> Tuple[int, int, int, int]:
     )
 
 
+def _raw_label_bboxes(labels: np.ndarray, label_ids: Sequence[int]) -> Dict[int, Tuple[int, int, int, int]]:
+    """Return half-open raw object bounds from one scan of the label image."""
+    if not label_ids:
+        return {}
+    height, width = labels.shape
+    maximum_id = max(label_ids)
+    y0 = np.full(maximum_id + 1, height, dtype=np.int64)
+    y1 = np.zeros(maximum_id + 1, dtype=np.int64)
+    x0 = np.full(maximum_id + 1, width, dtype=np.int64)
+    x1 = np.zeros(maximum_id + 1, dtype=np.int64)
+    ys, xs = np.nonzero(labels)
+    object_ids = labels[ys, xs].astype(np.int64, copy=False)
+    np.minimum.at(y0, object_ids, ys)
+    np.maximum.at(y1, object_ids, ys + 1)
+    np.minimum.at(x0, object_ids, xs)
+    np.maximum.at(x1, object_ids, xs + 1)
+    return dict(
+        (label_id, (int(y0[label_id]), int(y1[label_id]),
+                    int(x0[label_id]), int(x1[label_id])))
+        for label_id in label_ids
+    )
+
+
 def maximum_weight_assignment(score_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Return a maximum-weight rectangular assignment using NumPy only."""
     scores = np.asarray(score_matrix, dtype=np.float64)
@@ -151,6 +174,7 @@ def match_instances(
     kernel_size = 2 * int(dilation_radius) + 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     instance_ids = positive_ids(instances)
+    instance_bboxes = _raw_label_bboxes(instances, instance_ids)
     head_ids = positive_ids(head_labels)
     if not head_ids:
         raise ValueError("HeadFinalLabels没有非零头部对象。")
@@ -180,8 +204,14 @@ def match_instances(
     for instance_id in instance_ids:
         instance_mask = instances == instance_id
         tail_pixels = int(np.count_nonzero(instance_mask))
-        dilated = cv2.dilate(instance_mask.astype(np.uint8), kernel, iterations=1) > 0
-        overlapping = head_labels[dilated]
+        y0, y1, x0, x1 = instance_bboxes[instance_id]
+        ry0 = max(0, y0 - int(dilation_radius))
+        ry1 = min(instances.shape[0], y1 + int(dilation_radius))
+        rx0 = max(0, x0 - int(dilation_radius))
+        rx1 = min(instances.shape[1], x1 + int(dilation_radius))
+        local_mask = instance_mask[ry0:ry1, rx0:rx1].astype(np.uint8)
+        dilated = cv2.dilate(local_mask, kernel, iterations=1) > 0
+        overlapping = head_labels[ry0:ry1, rx0:rx1][dilated]
         overlapping = overlapping[overlapping > 0].astype(np.int64, copy=False)
         overlap_counts: Dict[int, int] = {}
         if overlapping.size:

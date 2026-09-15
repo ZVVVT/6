@@ -35,7 +35,8 @@ adapter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adapter)
 
 
-def _run(monkeypatch, tail_yx, head_yx, threshold, overlap=False):
+def _run(monkeypatch, tail_yx, head_yx, threshold, overlap=False,
+         dilation_radius=0):
     shape = (220, 220)
     instances = np.zeros(shape, dtype=np.uint16)
     heads = np.zeros(shape, dtype=np.uint16)
@@ -50,7 +51,7 @@ def _run(monkeypatch, tail_yx, head_yx, threshold, overlap=False):
 
     monkeypatch.setattr(adapter, "nearest_distances", counted)
     try:
-        result = adapter.match_instances(instances, heads, 0, threshold)
+        result = adapter.match_instances(instances, heads, dilation_radius, threshold)
     finally:
         monkeypatch.setattr(adapter, "nearest_distances", original)
     return result, calls
@@ -94,22 +95,26 @@ def test_unconvertible_threshold_preserves_overlap_old_path(monkeypatch):
 
 
 def test_overlap_bypasses_even_far_bbox(monkeypatch):
-    original_dilate = adapter.cv2.dilate
-
-    def all_overlapping(image, kernel, iterations=1):
-        return np.ones_like(image)
-
-    monkeypatch.setattr(adapter.cv2, "dilate", all_overlapping)
-    result, calls = _run(monkeypatch, (20, 20), (20, 101), 80.0)
+    result, calls = _run(monkeypatch, (20, 20), (20, 101), 80.0,
+                         dilation_radius=81)
     assert len(calls) == 1
     assert result[0][0]["matching_method"] == "dilated_overlap_20px"
-    monkeypatch.setattr(adapter.cv2, "dilate", original_dilate)
 
 
 def test_empty_query_keeps_existing_numpy_error(monkeypatch):
-    monkeypatch.setattr(adapter, "positive_ids", lambda labels: [1])
+    original_erode = adapter.cv2.erode
+    count = [0]
+
+    def empty_tail_boundary(image, kernel, iterations=1):
+        count[0] += 1
+        if count[0] == 2:
+            return image
+        return original_erode(image, kernel, iterations=iterations)
+
+    monkeypatch.setattr(adapter.cv2, "erode", empty_tail_boundary)
     with pytest.raises(ValueError, match="zero-size array to reduction operation minimum"):
-        adapter.match_instances(np.zeros((3, 3), dtype=np.uint16),
+        adapter.match_instances(np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+                                         dtype=np.uint16),
                                 np.array([[1, 0, 0], [0, 0, 0], [0, 0, 0]], dtype=np.uint16),
                                 0, 80.0)
 
