@@ -81,8 +81,16 @@ def reconstruct(args, fitc, performance_timings=None):
     branch = skel & (crossing_number(skel) >= 3)
     cut = branch_cut_mask(branch, getattr(args, "branch_cut_mode", "dilate3"))
     n, labels, stats, _ = cv2.connectedComponentsWithStats((skel & ~cut).astype(np.uint8), 8)
-    paths = [ordered_segment(labels == i) for i in range(1, n)
-             if stats[i, cv2.CC_STAT_AREA] >= args.min_segment_length]
+    paths = []
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] >= args.min_segment_length:
+            left = int(stats[i, cv2.CC_STAT_LEFT])
+            top = int(stats[i, cv2.CC_STAT_TOP])
+            width = int(stats[i, cv2.CC_STAT_WIDTH])
+            height = int(stats[i, cv2.CC_STAT_HEIGHT])
+            component = labels[top:top + height, left:left + width] == i
+            path = ordered_segment(component)
+            paths.append([(x + left, y + top) for x, y in path])
     proposals = connection_candidates(paths, args.max_gap, args.max_angle,
                                       args.max_curvature_delta)
     links = select_links(proposals, len(paths))
