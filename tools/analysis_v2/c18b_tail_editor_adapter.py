@@ -73,6 +73,14 @@ def nearest_distances(
     return result
 
 
+def _point_bbox(points_yx: np.ndarray) -> Tuple[int, int, int, int]:
+    """Inclusive pixel-center bounds of the actual distance point array."""
+    return (
+        int(np.min(points_yx[:, 0])), int(np.max(points_yx[:, 0])),
+        int(np.min(points_yx[:, 1])), int(np.max(points_yx[:, 1])),
+    )
+
+
 def maximum_weight_assignment(score_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Return a maximum-weight rectangular assignment using NumPy only."""
     scores = np.asarray(score_matrix, dtype=np.float64)
@@ -148,12 +156,24 @@ def match_instances(
         raise ValueError("HeadFinalLabels没有非零头部对象。")
     boundary_kernel = np.ones((3, 3), dtype=np.uint8)
     head_boundaries: Dict[int, np.ndarray] = {}
+    head_bboxes: Dict[int, Tuple[int, int, int, int]] = {}
     head_pixel_counts: Dict[int, int] = {}
     for head_id in head_ids:
         head_mask = (head_labels == head_id).astype(np.uint8)
         eroded = cv2.erode(head_mask, boundary_kernel, iterations=1)
         head_boundaries[head_id] = np.argwhere((head_mask > 0) & (eroded == 0))
+        if len(head_boundaries[head_id]):
+            head_bboxes[head_id] = _point_bbox(head_boundaries[head_id])
         head_pixel_counts[head_id] = int(np.count_nonzero(head_mask))
+
+    try:
+        threshold = float(maximum_distance)
+    except (TypeError, ValueError, OverflowError):
+        bbox_threshold_sq = None
+    else:
+        bbox_threshold_sq = (
+            threshold * threshold if np.isfinite(threshold) and threshold >= 0 else None
+        )
 
     proposals_by_instance: Dict[int, List[Dict[str, Any]]] = {}
     no_candidate_ids = set()
@@ -185,11 +205,19 @@ def match_instances(
             indices = np.linspace(0, len(boundary_yx) - 1, 2048).astype(np.int64)
             boundary_yx = boundary_yx[indices]
         sample_yx = np.vstack((boundary_yx, skeleton_points)).astype(np.float32)
+        tail_bbox = _point_bbox(sample_yx) if len(sample_yx) else None
         rows: List[Dict[str, Any]] = []
         size_score = min(1.0, np.log1p(float(tail_pixels)) / np.log1p(10000.0))
         for head_id in head_ids:
-            distance = float(np.min(nearest_distances(sample_yx, head_boundaries[head_id])))
             overlap_count = int(overlap_counts.get(head_id, 0))
+            if (overlap_count == 0 and bbox_threshold_sq is not None
+                    and tail_bbox is not None and head_id in head_bboxes):
+                head_bbox = head_bboxes[head_id]
+                dy = max(0, head_bbox[0] - tail_bbox[1], tail_bbox[0] - head_bbox[1])
+                dx = max(0, head_bbox[2] - tail_bbox[3], tail_bbox[2] - head_bbox[3])
+                if dx * dx + dy * dy > bbox_threshold_sq:
+                    continue
+            distance = float(np.min(nearest_distances(sample_yx, head_boundaries[head_id])))
             if overlap_count > 0:
                 overlap_score = min(
                     1.0, overlap_count / float(max(1, head_pixel_counts[head_id]))
