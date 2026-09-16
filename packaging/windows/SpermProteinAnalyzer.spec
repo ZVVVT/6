@@ -11,6 +11,17 @@ from PyInstaller.utils.hooks import (
 
 project_root = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
 
+provenance_sources = (
+    "input_fingerprint.py",
+    "input_manifest_checkpoint.py",
+    "tail_core_result.py",
+    "association_result.py",
+    "tail_objects_revision_checkpoint.py",
+    "tail_objects_revision.py",
+)
+provenance_source_root = os.path.join(project_root, "core", "analysis_v2")
+provenance_destination = "core/analysis_v2"
+
 hiddenimports = [
     "PySide6.QtCore",
     "PySide6.QtGui",
@@ -32,6 +43,10 @@ datas = [
     (os.path.join(project_root, "assets"), "assets"),
     (os.path.join(project_root, "pipelines"), "pipelines"),
     (os.path.join(project_root, "config.ini"), "."),
+]
+datas += [
+    (os.path.join(provenance_source_root, name), provenance_destination)
+    for name in provenance_sources
 ]
 datas += collect_data_files("cv2")
 datas += collect_data_files("tifffile")

@@ -1,13 +1,62 @@
+import ast
+import hashlib
 from pathlib import Path
+import re
+import sys
 
 import numpy as np
+import pytest
 import tifffile
 from PIL import Image
 
+from core.analysis_v2 import input_manifest_checkpoint
 from core.analysis_v2.head_measurement_service import (
     _prepare_measurement_channel_image,
     prepare_standardized_head_input,
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROVENANCE_SOURCES = (
+    "input_fingerprint.py",
+    "input_manifest_checkpoint.py",
+    "tail_core_result.py",
+    "association_result.py",
+    "tail_objects_revision_checkpoint.py",
+    "tail_objects_revision.py",
+)
+
+
+def _spec_literal(spec_text, name):
+    tree = ast.parse(spec_text)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == name
+                   for target in node.targets):
+                return ast.literal_eval(node.value)
+    raise AssertionError("spec missing assignment: {}".format(name))
+
+
+def _create_frozen_provenance_fixture(tmp_path):
+    product = tmp_path / "product"
+    internal_root = product / "_internal"
+    internal = internal_root / "core" / "analysis_v2"
+    internal.mkdir(parents=True)
+    (product / "SpermProteinAnalyzer.exe").touch()
+    source = PROJECT_ROOT / "core" / "analysis_v2"
+    for name in PROVENANCE_SOURCES:
+        (internal / name).write_bytes((source / name).read_bytes())
+    return source, product, internal_root, internal
+
+
+def _powershell_array(script_text, name):
+    match = re.search(
+        r"\$" + re.escape(name) + r"\s*=\s*@\((.*?)\n\)",
+        script_text,
+        flags=re.DOTALL,
+    )
+    assert match is not None, "build script missing array: {}".format(name)
+    return tuple(re.findall(r"'([^']+)'", match.group(1)))
 
 
 def _prepare(tmp_path, channel_path):
@@ -100,7 +149,7 @@ def test_jpeg_compressed_tiff_uses_formal_head_prepare_path(tmp_path):
 
 
 def test_packaging_contract_collects_imagecodecs_and_runs_exe_smoke():
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = PROJECT_ROOT
     requirements = (
         project_root / "packaging/windows/requirements-build.txt"
     ).read_text(encoding="utf-8")
@@ -119,6 +168,77 @@ def test_packaging_contract_collects_imagecodecs_and_runs_exe_smoke():
     assert "--packaging-smoke-jpeg-tiff" in build
     assert "verify_batch_readiness.py" in build
     assert '(("protein1", "Q9BYW3"), ("protein3", "Q96P56"))' in build
+    assert tuple(_spec_literal(spec, "provenance_sources")) == PROVENANCE_SOURCES
+    assert _spec_literal(spec, "provenance_destination") == "core/analysis_v2"
+    assert 'os.path.join(project_root, "core", "analysis_v2")' in spec
+    assert (
+        "(os.path.join(provenance_source_root, name), provenance_destination)"
+        in spec
+    )
+    assert _powershell_array(build, "FrozenProvenanceResources") == tuple(
+        "core\\analysis_v2\\{}".format(name) for name in PROVENANCE_SOURCES
+    )
+    assert "F:\\" not in spec
+    assert "Join-Path $SourceRoot $relative" in build
+    assert "Join-Path $InternalPath $relative" in build
+    assert "missing frozen provenance resource:" in build
+    assert "Frozen provenance resource SHA256 mismatch:" in build
+    assert "input_manifest_checkpoint._producer_resources()" in build
+
+
+def test_frozen_provenance_resources_are_opened_and_hashed(tmp_path, monkeypatch):
+    source, product, internal_root, internal = _create_frozen_provenance_fixture(
+        tmp_path
+    )
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(internal_root), raising=False)
+    monkeypatch.setattr(sys, "executable", str(product / "SpermProteinAnalyzer.exe"))
+    monkeypatch.setattr(
+        input_manifest_checkpoint,
+        "__file__",
+        str(internal / "input_manifest_checkpoint.py"),
+    )
+
+    resources = input_manifest_checkpoint._producer_resources()
+
+    assert set(resources) == {
+        "input_fingerprint.py", "input_manifest_checkpoint.py",
+    }
+    for name in PROVENANCE_SOURCES:
+        source_bytes = (source / name).read_bytes()
+        packaged_bytes = (internal / name).read_bytes()
+        assert packaged_bytes == source_bytes
+        assert hashlib.sha256(packaged_bytes).hexdigest() == hashlib.sha256(
+            source_bytes
+        ).hexdigest()
+
+
+def test_frozen_provenance_missing_input_fingerprint_reproduces_old_bug(
+    tmp_path, monkeypatch,
+):
+    _source, product, internal_root, internal = _create_frozen_provenance_fixture(
+        tmp_path
+    )
+    (internal / "input_fingerprint.py").unlink()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(internal_root), raising=False)
+    monkeypatch.setattr(sys, "executable", str(product / "SpermProteinAnalyzer.exe"))
+    monkeypatch.setattr(
+        input_manifest_checkpoint,
+        "__file__",
+        str(internal / "input_manifest_checkpoint.py"),
+    )
+
+    with pytest.raises(FileNotFoundError, match="input_fingerprint.py"):
+        input_manifest_checkpoint._producer_resources()
+
+
+def test_source_mode_producer_resources_remain_readable():
+    resources = input_manifest_checkpoint._producer_resources()
+
+    assert set(resources) == {
+        "input_fingerprint.py", "input_manifest_checkpoint.py",
+    }
 
 
 def test_uint16_head_labels_are_copied_without_any_change(tmp_path):

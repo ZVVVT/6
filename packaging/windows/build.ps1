@@ -287,6 +287,14 @@ $C18BPipelineFiles = @(
     'tools\analysis_v2\c18b_score015\config\frozen_parameters.json'
 )
 $C18BRuntimeRequirements = 'packaging\windows\requirements-c18b.txt'
+$FrozenProvenanceResources = @(
+    'core\analysis_v2\input_fingerprint.py',
+    'core\analysis_v2\input_manifest_checkpoint.py',
+    'core\analysis_v2\tail_core_result.py',
+    'core\analysis_v2\association_result.py',
+    'core\analysis_v2\tail_objects_revision_checkpoint.py',
+    'core\analysis_v2\tail_objects_revision.py'
+)
 $RequiredExternalFiles = @(
     $ToolsWhitelist + $C18BPipelineFiles + $C18BRuntimeRequirements
 )
@@ -491,6 +499,55 @@ print("JPEG-compressed TIFF 构建环境读取检查通过：{}".format(path))
     }
     if (-not (Test-Path -LiteralPath $InternalPath -PathType Container)) {
         throw '未生成 _internal 目录。'
+    }
+
+    foreach ($relative in $FrozenProvenanceResources) {
+        $sourceResource = Join-Path $SourceRoot $relative
+        $packagedResource = Join-Path $InternalPath $relative
+        if (-not (Test-Path -LiteralPath $packagedResource -PathType Leaf)) {
+            throw "missing frozen provenance resource: $relative"
+        }
+        $sourceHash = (Get-FileHash -LiteralPath $sourceResource -Algorithm SHA256).Hash
+        $packagedHash = (Get-FileHash -LiteralPath $packagedResource -Algorithm SHA256).Hash
+        if ($sourceHash -ne $packagedHash) {
+            throw (
+                "Frozen provenance resource SHA256 mismatch: $relative; " +
+                "source=$sourceHash; packaged=$packagedHash"
+            )
+        }
+        Write-Host "Frozen provenance resource OK: $relative SHA256=$packagedHash"
+    }
+
+    $FrozenProvenanceSmoke = @'
+import sys
+from pathlib import Path
+
+source_root = Path(sys.argv[1]).resolve()
+internal_root = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(source_root))
+
+from core.analysis_v2 import input_manifest_checkpoint
+
+input_manifest_checkpoint.__file__ = str(
+    internal_root / "core" / "analysis_v2" / "input_manifest_checkpoint.py"
+)
+resources = input_manifest_checkpoint._producer_resources()
+expected = {"input_fingerprint.py", "input_manifest_checkpoint.py"}
+if set(resources) != expected:
+    raise SystemExit(
+        "Frozen provenance resource keys mismatch: {}".format(sorted(resources))
+    )
+print("Frozen provenance _producer_resources() smoke passed")
+'@
+    $FrozenProvenanceSmokePath = Join-Path $BuildRoot 'verify_frozen_provenance.py'
+    [System.IO.File]::WriteAllText(
+        $FrozenProvenanceSmokePath,
+        $FrozenProvenanceSmoke,
+        $Utf8NoBomForChecks
+    )
+    & $BuildPython $FrozenProvenanceSmokePath $SourceRoot $InternalPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Frozen provenance resource functional smoke failed.'
     }
 
     $PackagedJpegCodecBinary = Get-ChildItem -LiteralPath $InternalPath `
