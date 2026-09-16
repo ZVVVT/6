@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import tifffile
 
+from .checkpoint_store import _native_io_path
 from .input_fingerprint import canonical_json_bytes, fingerprint
 
 
@@ -34,7 +35,7 @@ def _positive_ids(labels):
 
 def _sha256(path):
     digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
+    with open(_native_io_path(path), "rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
@@ -229,9 +230,9 @@ def validate_revision0(result, tail_core_result, association_result, geometry_la
         if root_dir is None:
             raise TailObjectsRevisionError("验证 geometry TIFF 需要 root_dir")
         path = Path(root_dir) / relative
-        if not path.is_file():
+        if not os.path.isfile(_native_io_path(path)):
             raise TailObjectsRevisionError("Revision geometry TIFF 不存在")
-        labels = tifffile.imread(str(path))
+        labels = tifffile.imread(_native_io_path(path))
         if geometry.get("sha256") != _sha256(path):
             raise TailObjectsRevisionError("Revision geometry TIFF SHA256 不匹配")
     labels = np.asarray(labels)
@@ -326,7 +327,8 @@ def serialize_revision0(result, output_dir, tail_core_result, association_result
 def load_revision0(output_dir, tail_core_result, association_result, expected_field_id=None):
     root = Path(output_dir)
     try:
-        result = json.loads((root / REVISION_JSON_NAME).read_text(encoding="utf-8"))
+        with open(_native_io_path(root / REVISION_JSON_NAME), "r", encoding="utf-8") as handle:
+            result = json.loads(handle.read())
     except (OSError, ValueError) as error:
         raise TailObjectsRevisionError("无法读取 TailObjects Revision JSON：{}".format(error))
     validate_revision0(result, tail_core_result, association_result, root_dir=root,

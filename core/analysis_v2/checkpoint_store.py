@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 import shutil
 import tempfile
@@ -54,9 +55,30 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _native_io_path(path: Path) -> str:
+    """Return a Windows extended-length path only at a filesystem boundary.
+
+    Checkpoint metadata deliberately retains ordinary ``Path`` values.  This
+    adapter is solely for calls that reach the operating system, where a
+    legacy Windows client can otherwise reject a valid checkpoint path over
+    the traditional MAX_PATH budget.
+    """
+    text = os.fspath(path)
+    if os.name != "nt":
+        return text
+    if text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    drive, tail = ntpath.splitdrive(text)
+    if not drive or not tail.startswith(("\\", "/")):
+        raise ValueError("checkpoint I/O 路径必须是绝对路径：{}".format(text))
+    return "\\\\?\\" + text
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with open(_native_io_path(path), "rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
@@ -99,9 +121,9 @@ def _safe_relative_path(value: Any) -> str:
 
 
 def _safe_generation_path(root: Path, relative_path: str) -> Path:
-    candidate = (root / Path(*relative_path.split("/"))).resolve()
+    candidate = root / Path(*relative_path.split("/"))
     try:
-        candidate.relative_to(root.resolve())
+        candidate.relative_to(root)
     except ValueError:
         raise _corrupt("payload 路径逃离 generation root：{}".format(relative_path))
     return candidate
@@ -109,22 +131,22 @@ def _safe_generation_path(root: Path, relative_path: str) -> Path:
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     """Write one file with flush/fsync then same-directory ``os.replace``."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(_native_io_path(path.parent), exist_ok=True)
     temporary = None
     try:
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix="t.", suffix=".tmp", dir=str(path.parent)
+            prefix="t.", suffix=".tmp", dir=_native_io_path(path.parent)
         )
         temporary = Path(temporary_name)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(str(temporary), str(path))
+        os.replace(_native_io_path(temporary), _native_io_path(path))
         temporary = None
     finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+        if temporary is not None and os.path.exists(_native_io_path(temporary)):
+            os.unlink(_native_io_path(temporary))
 
 
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -151,7 +173,7 @@ class CheckpointAttempt(object):
         self.staging_path = store.staging_root / attempt_id
         self._files = []  # type: Sequence[Dict[str, Any]]
         self._closed = False
-        self.staging_path.mkdir(parents=True, exist_ok=False)
+        os.makedirs(_native_io_path(self.staging_path), exist_ok=False)
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -174,7 +196,6 @@ class CheckpointAttempt(object):
         if any(item["relative_path"] == relative_path for item in self._files):
             raise ValueError("payload relative_path 必须唯一：{}".format(relative_path))
         path = _safe_generation_path(self.staging_path, relative_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_bytes(path, data)
         if failure_injector is not None:
             failure_injector("payload_written")
@@ -198,8 +219,10 @@ class CheckpointAttempt(object):
         relative-path validation, or the immutable-generation contract.
         """
         self._ensure_open()
-        source = Path(source_path).resolve()
-        if not source.is_file():
+        # ``absolute`` is lexical and therefore does not make a legacy
+        # Windows filesystem call before the native-path boundary below.
+        source = Path(source_path).absolute()
+        if not os.path.isfile(_native_io_path(source)):
             raise FileNotFoundError("checkpoint source payload 不存在：{}".format(source))
         role = _require_text(role, "payload role")
         relative_path = _safe_relative_path(relative_path)
@@ -212,24 +235,24 @@ class CheckpointAttempt(object):
         if any(item["relative_path"] == relative_path for item in self._files):
             raise ValueError("payload relative_path 必须唯一：{}".format(relative_path))
         target = _safe_generation_path(self.staging_path, relative_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_native_io_path(target.parent), exist_ok=True)
         try:
-            shutil.copyfile(str(source), str(target))
+            shutil.copyfile(_native_io_path(source), _native_io_path(target))
             # Windows does not permit fsync on a read-only file descriptor.
             # ``rb+`` does not change copied bytes and permits the durability
             # barrier required before the manifest records this payload.
-            with target.open("rb+") as handle:
+            with open(_native_io_path(target), "rb+") as handle:
                 os.fsync(handle.fileno())
         except Exception:
-            if target.exists():
-                target.unlink()
+            if os.path.exists(_native_io_path(target)):
+                os.unlink(_native_io_path(target))
             raise
         if failure_injector is not None:
             failure_injector("file_payload_written")
         self._files = list(self._files) + [{
             "role": role,
             "relative_path": relative_path,
-            "byte_size": target.stat().st_size,
+            "byte_size": os.stat(_native_io_path(target)).st_size,
             "sha256": _sha256_file(target),
         }]
         return target
@@ -265,12 +288,12 @@ class CheckpointAttempt(object):
             _validate_generation(self.staging_path, require_marker=False)
             injector("staging_validated")
             target = self.store.generations_root / self.checkpoint_id
-            if target.exists():
+            if os.path.exists(_native_io_path(target)):
                 raise CheckpointConflictError("generation 已存在，拒绝覆盖：{}".format(target))
             # staging and generations are children of one root, so this is a
             # same-volume directory rename, not a copy-and-delete operation.
             # rename (rather than replace) preserves the no-overwrite contract.
-            os.rename(str(self.staging_path), str(target))
+            os.rename(_native_io_path(self.staging_path), _native_io_path(target))
             injector("promoted")
             marker = {
                 "checkpoint_id": self.checkpoint_id,
@@ -299,8 +322,8 @@ class CheckpointStore(object):
         self.root = Path(root).resolve()
         self.staging_root = self.root / "staging"
         self.generations_root = self.root / "generations"
-        self.staging_root.mkdir(parents=True, exist_ok=True)
-        self.generations_root.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_native_io_path(self.staging_root), exist_ok=True)
+        os.makedirs(_native_io_path(self.generations_root), exist_ok=True)
 
     def begin(self, checkpoint_id: str, stage: str, field_id: str,
               input_fingerprint: str, parameter_fingerprint: str,
@@ -313,9 +336,9 @@ class CheckpointStore(object):
             "parameter_fingerprint": _require_fingerprint(parameter_fingerprint, "parameter_fingerprint"),
             "producer_fingerprint": _require_fingerprint(producer_fingerprint, "producer_fingerprint"),
         }
-        if (self.staging_root / attempt_id).exists():
+        if os.path.exists(_native_io_path(self.staging_root / attempt_id)):
             raise CheckpointConflictError("attempt staging 已存在：{}".format(attempt_id))
-        if (self.generations_root / checkpoint_id).exists():
+        if os.path.exists(_native_io_path(self.generations_root / checkpoint_id)):
             raise CheckpointConflictError("generation 已存在，拒绝覆盖：{}".format(checkpoint_id))
         return CheckpointAttempt(self, checkpoint_id, _require_text(stage, "stage"),
                                  _require_text(field_id, "field_id"), fingerprints,
@@ -332,10 +355,11 @@ class CheckpointStore(object):
 
 
 def _read_json(path: Path, label: str) -> Tuple[Dict[str, Any], bytes]:
-    if not path.is_file():
+    if not os.path.isfile(_native_io_path(path)):
         raise _corrupt("{} 不存在".format(label))
     try:
-        raw = path.read_bytes()
+        with open(_native_io_path(path), "rb") as handle:
+            raw = handle.read()
         value = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise _corrupt("{} 无法读取：{}".format(label, error))
@@ -391,9 +415,9 @@ def _validate_generation(root: Path, require_marker: bool,
         normalized.append({"role": role, "relative_path": relative_path,
                            "byte_size": byte_size, "sha256": digest})
         payload = _safe_generation_path(root, relative_path)
-        if not payload.is_file():
+        if not os.path.isfile(_native_io_path(payload)):
             raise _corrupt("payload 不存在：{}".format(relative_path))
-        if payload.stat().st_size != byte_size:
+        if os.stat(_native_io_path(payload)).st_size != byte_size:
             raise _corrupt("payload byte_size 不匹配：{}".format(relative_path))
         if _sha256_file(payload) != digest:
             raise _corrupt("payload SHA256 不匹配：{}".format(relative_path))

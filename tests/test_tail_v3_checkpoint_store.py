@@ -7,7 +7,7 @@ import pytest
 
 from core.analysis_v2.checkpoint_store import (
     COMPLETION_MARKER_NAME, MANIFEST_NAME, CheckpointConflictError,
-    CheckpointStore, CheckpointValidationError,
+    CheckpointStore, CheckpointValidationError, _native_io_path,
 )
 from core.analysis_v2 import checkpoint_store as checkpoint_module
 from core.analysis_v2.input_fingerprint import canonical_json_bytes
@@ -45,8 +45,8 @@ def test_atomic_write_uses_short_same_directory_temporary_name(tmp_path, monkeyp
 
     temporary = Path(captured["temporary_name"])
     assert target.read_bytes() == b"exact-bytes"
-    assert captured["dir"] == str(target.parent)
-    assert temporary.parent == target.parent
+    assert captured["dir"] == _native_io_path(target.parent)
+    assert str(temporary.parent) == _native_io_path(target.parent)
     assert captured["prefix"] == "t."
     assert captured["suffix"] == ".tmp"
     assert target.name not in temporary.name
@@ -54,6 +54,21 @@ def test_atomic_write_uses_short_same_directory_temporary_name(tmp_path, monkeyp
     assert temporary.name.endswith(".tmp")
     assert len(temporary.name) == 14
     assert not temporary.exists()
+
+
+def test_native_io_path_converts_windows_drive_unc_and_existing_prefix(monkeypatch):
+    monkeypatch.setattr(checkpoint_module.os, "name", "nt")
+    assert _native_io_path(r"F:\checkpoint\payload.bin") == r"\\?\F:\checkpoint\payload.bin"
+    assert _native_io_path(r"\\server\share\checkpoint\payload.bin") == r"\\?\UNC\server\share\checkpoint\payload.bin"
+    assert _native_io_path(r"\\?\F:\checkpoint\payload.bin") == r"\\?\F:\checkpoint\payload.bin"
+
+
+def test_native_io_path_is_noop_off_windows_and_rejects_relative_windows_path(monkeypatch):
+    monkeypatch.setattr(checkpoint_module.os, "name", "posix")
+    assert _native_io_path("relative/payload.bin") == "relative/payload.bin"
+    monkeypatch.setattr(checkpoint_module.os, "name", "nt")
+    with pytest.raises(ValueError, match="绝对路径"):
+        _native_io_path("relative\\payload.bin")
 
 
 def test_atomic_write_replaces_existing_target_bytes_exact(tmp_path):
@@ -100,6 +115,78 @@ def test_client_path_budget_uses_short_temporary_basename_contract():
     assert new_temporary_chars == 233
     assert new_temporary_chars < 260
     assert old_temporary_chars - new_temporary_chars == 32
+
+
+def test_real_265_character_target_keeps_logical_path_and_native_io_distinct(monkeypatch):
+    target_name = "tail_objects_revision_labels.tif"
+    target_text = "F:\\" + ("x" * (265 - 4 - len(target_name))) + "\\" + target_name
+    target = PureWindowsPath(target_text)
+    temporary = target.parent / "t.4qooo52a.tmp"
+
+    assert len(str(target)) == 265
+    assert len(str(temporary)) == 247
+    assert str(target).startswith("F:\\")
+    monkeypatch.setattr(checkpoint_module.os, "name", "nt")
+    assert _native_io_path(str(target)) == "\\\\?\\" + str(target)
+
+
+def test_windows_long_target_uses_native_io_for_atomic_write_replace_verify_and_cleanup(
+        tmp_path, monkeypatch):
+    root = tmp_path / ("x" * 210)
+    target = root / "labels" / "tail_objects_revision_labels.tif"
+    captured = {"replace": [], "mkstemp_dirs": []}
+    original_mkstemp = checkpoint_module.tempfile.mkstemp
+    original_replace = checkpoint_module.os.replace
+
+    def capture_mkstemp(**kwargs):
+        captured["mkstemp_dirs"].append(kwargs["dir"])
+        return original_mkstemp(**kwargs)
+
+    def capture_replace(source, destination):
+        captured["replace"].append((source, destination))
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(checkpoint_module.os, "name", "nt")
+    monkeypatch.setattr(checkpoint_module.tempfile, "mkstemp", capture_mkstemp)
+    monkeypatch.setattr(checkpoint_module.os, "replace", capture_replace)
+    checkpoint_module._atomic_write_bytes(target, b"long-target")
+
+    assert len(str(target)) >= 260
+    assert target.read_bytes() == b"long-target"
+    assert captured["mkstemp_dirs"] == [_native_io_path(target.parent)]
+    assert len(captured["replace"]) == 1
+    assert captured["replace"][0][0].startswith("\\\\?\\")
+    assert captured["replace"][0][1] == _native_io_path(target)
+    assert not list(target.parent.glob("t.*.tmp"))
+
+
+def test_real_265_character_checkpoint_target_commits_and_verifies(tmp_path):
+    checkpoint_id = "tail_objects_revision_0000"
+    attempt_id = "3bb3f9721a654a60bd470054e900fd57"
+    target_name = "tail_objects_revision_labels.tif"
+    baseline = (tmp_path / "staging" / attempt_id / "labels" / target_name)
+    padding = 265 - len(str(baseline)) - 1
+    assert padding > 0
+    store = CheckpointStore(tmp_path / ("x" * padding))
+    attempt = begin(store, checkpoint_id, attempt_id)
+    logical_target = attempt.staging_path / "labels" / target_name
+    assert len(str(logical_target)) == 265
+    assert str(logical_target).startswith(str(tmp_path))
+
+    attempt.add_bytes("revision_geometry_labels", "labels/" + target_name, b"labels")
+    generation = attempt.commit()
+    promoted_target = generation / "labels" / target_name
+
+    assert len(str(promoted_target)) == 263
+    assert store.load_checkpoint(generation)["files"] == [{
+        "role": "revision_geometry_labels",
+        "relative_path": "labels/" + target_name,
+        "byte_size": 6,
+        "sha256": hashlib.sha256(b"labels").hexdigest(),
+    }]
+    with open(_native_io_path(promoted_target), "rb") as handle:
+        assert handle.read() == b"labels"
+    assert not list(attempt.staging_path.parent.glob("t.*.tmp"))
 
 
 def test_create_staging_promote_marker_reader_and_unicode_payload(tmp_path):
