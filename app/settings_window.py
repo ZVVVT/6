@@ -327,8 +327,10 @@ class SettingsWindow(QWidget):
         layout.addStretch()
 
     def init_qc_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        # 保留质控微球测试页和全部控件，供配置加载、保存及路径检查继续使用；
+        # 交付版不将该页加入正式 Tab，避免用户从界面进入。
+        self.qc_tab = QWidget()
+        layout = QVBoxLayout(self.qc_tab)
 
         group = QGroupBox("质控微球荧光强度测试")
         form = QFormLayout(group)
@@ -377,8 +379,6 @@ class SettingsWindow(QWidget):
         self.btn_run_qc.clicked.connect(self.run_qc_beads_test)
         self.btn_open_qc_output.clicked.connect(self.open_qc_output_dir)
         self.qc_output_dir_edit.textEdited.connect(self.mark_qc_output_manual)
-
-        self.tabs.addTab(tab, "质控微球测试")
 
     def init_workspace_tab(self):
         tab = QWidget()
