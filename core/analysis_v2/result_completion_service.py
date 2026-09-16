@@ -1,5 +1,6 @@
 """Publish a measured Analysis V2 completion and atomically save its database rows."""
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
@@ -58,6 +59,24 @@ def _format_rate_for_display(value):
         return "{}%".format(value) if value not in (None, "") else "0.00%"
 
 
+def _preferred_intensity(source, default=0):
+    """Return the measured intensity with its published precision.
+
+    ResultParser publishes the legacy integer ``mean_intensity`` next to the
+    exact ``mean_intensity_raw``.  Persisting only the integer collapsed the
+    configurable ``display_decimals`` to ``.0``, so the raw value is preferred
+    here while payloads that only carry the legacy key keep working unchanged.
+    """
+    value = source.get("mean_intensity_raw")
+    if value is None:
+        value = source.get("mean_intensity", default)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
 def _build_field_rows(summary):
     image_csv = str(summary.get("image_csv", "") or "")
     field_rows = []
@@ -66,7 +85,7 @@ def _build_field_rows(summary):
             "field_no": str(item.get("image_number", "") or ""),
             "sperm_count": item.get("sperm_count", 0),
             "positive_count": item.get("positive_count", 0),
-            "mean_intensity": item.get("mean_intensity", 0),
+            "mean_intensity": _preferred_intensity(item),
             "expression_rate": item.get("expression_rate", 0),
             "overlay_image_path": "",
             "csv_path": image_csv,
@@ -186,7 +205,7 @@ def publish_measured_completion(completion_result, database, *, supervisor):
             total_fields=total.get("field_count", 0),
             total_sperm_count=total.get("sperm_count", 0),
             positive_count=total.get("positive_count", 0),
-            mean_intensity=total.get("mean_intensity", 0),
+            mean_intensity=_preferred_intensity(total),
             expression_rate=total.get("expression_rate", 0),
             field_results=field_rows,
             status="完成",

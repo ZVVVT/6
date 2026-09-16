@@ -466,9 +466,13 @@ class ResultViewer(QWidget):
     # -------------------------
 
     def _adjust_item(self, item: dict) -> dict:
+        # 现场解析 output 目录时 ResultParser 会同时给出旧兼容整数
+        # mean_intensity 与精确 mean_intensity_raw；显示链必须使用 raw，
+        # 否则 display_decimals 只能格式化出 .0。
+        intensity = item.get("mean_intensity_raw", item.get("mean_intensity"))
         if not self.adjustment_service:
             return {
-                "adjusted_mean_intensity": item.get("mean_intensity"),
+                "adjusted_mean_intensity": intensity,
                 "adjusted_expression_rate": item.get("expression_rate"),
                 "adjusted_positive_count": item.get("positive_count"),
                 "message": "",
@@ -477,7 +481,7 @@ class ResultViewer(QWidget):
             case_id=self.case_id,
             protein_key=self.protein_key,
             protein_part=self.protein_part,
-            raw_mean_intensity=item.get("mean_intensity"),
+            raw_mean_intensity=intensity,
             raw_expression_rate=item.get("expression_rate"),
             raw_total_sperm_count=item.get("sperm_count"),
             raw_positive_count=item.get("positive_count"),
