@@ -109,11 +109,15 @@ def _path_geometry(path: np.ndarray, shape: tuple[int, int],
 def _path_geometry_region(path: np.ndarray, shape: tuple[int, int],
                           region_y: np.ndarray, region_x: np.ndarray
                           ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Full-frame path distance with derived geometry evaluated only in a region.
+    """Seed-aware ROI path distance with derived geometry evaluated only in a region.
 
-    ``distanceTransformWithLabels`` deliberately remains full-frame: its labels
-    define the frozen nearest-seed semantics.  Only the nearest lookup, vector
-    arithmetic, and alignment calculation are indexed to the parent region.
+    ``distanceTransformWithLabels`` runs on the bounding box of the parent
+    region unioned with every in-bounds path seed (halo 0, never the parent
+    bounding box alone).  Because the ROI contains every seed pixel, the
+    nearest-seed distances and labels inside it are identical to the frozen
+    full-frame result while the OpenCV call only covers ROI pixels.  Labels
+    remain row-major over the ROI seeds, which is the same relative order as
+    the frozen full-frame labels, so the LUT mapping is unchanged.
     """
     seed = np.zeros(shape, np.uint8)
     seed_indices = []
@@ -131,8 +135,6 @@ def _path_geometry_region(path: np.ndarray, shape: tuple[int, int],
         seed_indices.append(y * shape[1] + x)
         tangent_x_values.append(tx)
         tangent_y_values.append(ty)
-    distance, nearest = cv2.distanceTransformWithLabels(1 - seed, cv2.DIST_L2, 5,
-                                                        labelType=cv2.DIST_LABEL_PIXEL)
     # np.unique sorts linear coordinates in the same row-major order as
     # np.where(seed). The first occurrence in reverse path order is the last
     # tangent write at a duplicate coordinate.
@@ -145,9 +147,24 @@ def _path_geometry_region(path: np.ndarray, shape: tuple[int, int],
     lut_x[1:], lut_y[1:] = xs, ys
     lut_tx[1:] = np.asarray(tangent_x_values, dtype=np.float32)[last_write]
     lut_ty[1:] = np.asarray(tangent_y_values, dtype=np.float32)[last_write]
-    nearest_region = nearest[region_y, region_x]
+    if not len(region_y):
+        return (np.zeros(0, np.float32), np.zeros(0, np.float32), seed)
+    y0, y1 = int(region_y.min()), int(region_y.max()) + 1
+    x0, x1 = int(region_x.min()), int(region_x.max()) + 1
+    if len(xs):
+        y0 = min(y0, int(ys.min())); y1 = max(y1, int(ys.max()) + 1)
+        x0 = min(x0, int(xs.min())); x1 = max(x1, int(xs.max()) + 1)
+    # ROI source is byte-identical to (1 - seed) restricted to the ROI slice.
+    roi_src = np.ones((y1 - y0, x1 - x0), np.uint8)
+    if len(xs):
+        roi_src[ys - y0, xs - x0] = 0
+    distance, nearest = cv2.distanceTransformWithLabels(roi_src, cv2.DIST_L2, 5,
+                                                        labelType=cv2.DIST_LABEL_PIXEL)
+    local_y = region_y - y0
+    local_x = region_x - x0
+    nearest_region = nearest[local_y, local_x]
     np.minimum(nearest_region, len(xs), out=nearest_region)
-    distance_region = distance[region_y, region_x]
+    distance_region = distance[local_y, local_x]
     x = region_x.astype(np.float32, copy=False)
     y = region_y.astype(np.float32, copy=False)
     vx = x - lut_x[nearest_region]
