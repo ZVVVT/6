@@ -5,8 +5,12 @@ with full-frame ``np.nonzero``/``np.argwhere`` scans.  Both lookups are now
 resolved inside the raw label bbox of the very same object.  These tests pin
 that the bbox scoped values are byte-for-byte the full-frame values and that
 the legacy two-argument ``ordered_centerline`` call keeps its old semantics.
+
+The OLD oracle of this suite is pinned to the adapter revision *before* the
+locality optimisation (``d6091bc``).  See ``_legacy_adapter_source``.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -32,6 +36,57 @@ SPEC = importlib.util.spec_from_file_location(
 adapter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(adapter)
 
+ADAPTER_REPO_PATH = "tools/analysis_v2/c18b_tail_editor_adapter.py"
+OLD_ADAPTER_COMMIT = "d6091bc63d75c17e12552b43165d3aa5c75f07c5"
+OLD_ADAPTER_BLOB = "50bb42371be415d2db504fab622f07be1e4c5e60"
+
+
+def _source_digest(source):
+    """SHA256 of adapter source text with normalised line endings."""
+    return hashlib.sha256(source.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
+def _legacy_adapter_source():
+    """Return the pinned pre-G1 adapter source used as the OLD oracle.
+
+    The oracle must stay on a fixed revision: an oracle read from ``HEAD``
+    turns the comparison into NEW-vs-NEW as soon as the optimisation lands,
+    which both hides regressions and can produce stale false failures.  Any
+    git failure (missing executable, unreachable commit, missing blob, blob
+    that no longer matches ``commit:path``) is a hard failure - never a skip
+    and never a fallback to workspace or ``HEAD`` source.
+    """
+    root = str(PROJECT_ROOT)
+    revision = "{}:{}".format(OLD_ADAPTER_COMMIT, ADAPTER_REPO_PATH)
+    try:
+        actual_blob = subprocess.check_output(
+            ["git", "rev-parse", revision],
+            cwd=root, encoding="utf-8", stderr=subprocess.STDOUT,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise AssertionError(
+            "legacy association oracle unavailable: git rev-parse {} failed: {}"
+            .format(revision, error))
+    if actual_blob != OLD_ADAPTER_BLOB:
+        raise AssertionError(
+            "legacy association oracle blob mismatch for {}: expected {} got {}"
+            .format(revision, OLD_ADAPTER_BLOB, actual_blob))
+    try:
+        source = subprocess.check_output(
+            ["git", "cat-file", "blob", OLD_ADAPTER_BLOB],
+            cwd=root, encoding="utf-8", stderr=subprocess.STDOUT,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise AssertionError(
+            "legacy association oracle unavailable: git cat-file blob {} failed: {}"
+            .format(OLD_ADAPTER_BLOB, error))
+    if _source_digest(source) == _source_digest(ADAPTER.read_text(encoding="utf-8")):
+        raise AssertionError(
+            "legacy oracle unexpectedly matches current adapter: {} == {}"
+            .format(revision, ADAPTER))
+    return source
+
+
 DILATION_RADIUS = 20
 MAXIMUM_DISTANCE = 80.0
 REAL_FIELDS = (
@@ -47,14 +102,9 @@ ADAPTER_AB_FIELDS = (
 
 
 def _old_module(name):
-    """Load the pre-G1 adapter (HEAD) for old-versus-new comparison."""
-    source = subprocess.check_output(
-        ["git", "show", "HEAD:tools/analysis_v2/c18b_tail_editor_adapter.py"],
-        cwd=str(PROJECT_ROOT),
-        encoding="utf-8",
-    )
+    """Load the pinned pre-G1 adapter for old-versus-new comparison."""
     module = types.ModuleType(name)
-    exec(compile(source, str(ADAPTER), "exec"), module.__dict__)
+    exec(compile(_legacy_adapter_source(), str(ADAPTER), "exec"), module.__dict__)
     return module
 
 
@@ -423,13 +473,7 @@ class AdapterLocalityAbTest(unittest.TestCase):
 
     def _write_old_script(self, temp):
         old_script = temp / "old_c18b_tail_editor_adapter.py"
-        old_script.write_text(
-            subprocess.check_output(
-                ["git", "show", "HEAD:tools/analysis_v2/c18b_tail_editor_adapter.py"],
-                cwd=str(PROJECT_ROOT), encoding="utf-8",
-            ),
-            encoding="utf-8",
-        )
+        old_script.write_text(_legacy_adapter_source(), encoding="utf-8")
         return old_script
 
     def _run_adapter(self, script, inputs, output_dir):

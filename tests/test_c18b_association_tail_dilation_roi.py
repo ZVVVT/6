@@ -1,5 +1,10 @@
-"""Tail dilation ROI preserves the full-frame overlap contract exactly."""
+"""Tail dilation ROI preserves the full-frame overlap contract exactly.
 
+The OLD oracle of this suite is pinned to the adapter revision *before* the
+ROI dilation optimisation (``25e40f5``).  See ``_legacy_adapter_source``.
+"""
+
+import hashlib
 import importlib.util
 import json
 import os
@@ -23,6 +28,63 @@ ADAPTER = (
 SPEC = importlib.util.spec_from_file_location("c18b_tail_dilation_roi_test", ADAPTER)
 adapter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(adapter)
+
+ADAPTER_REPO_PATH = "tools/analysis_v2/c18b_tail_editor_adapter.py"
+OLD_ADAPTER_COMMIT = "25e40f5"
+OLD_ADAPTER_BLOB = "e400399c41d54b085d6ef49de69f23bdde16f1ee"
+
+
+def _source_digest(source):
+    """SHA256 of adapter source text with normalised line endings."""
+    return hashlib.sha256(source.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
+def _legacy_adapter_source():
+    """Return the pinned pre-A2 adapter source used as the OLD oracle.
+
+    The oracle must stay on a fixed revision: an oracle read from ``HEAD``
+    turns the comparison into NEW-vs-NEW as soon as the optimisation lands,
+    which both hides regressions and can produce stale false failures.  Any
+    git failure (missing executable, unreachable commit, missing blob, blob
+    that no longer matches ``commit:path``) is a hard failure - never a skip
+    and never a fallback to workspace or ``HEAD`` source.
+    """
+    root = str(ADAPTER.parents[2])
+    revision = "{}:{}".format(OLD_ADAPTER_COMMIT, ADAPTER_REPO_PATH)
+    try:
+        actual_blob = subprocess.check_output(
+            ["git", "rev-parse", revision],
+            cwd=root, encoding="utf-8", stderr=subprocess.STDOUT,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise AssertionError(
+            "legacy association oracle unavailable: git rev-parse {} failed: {}"
+            .format(revision, error))
+    if actual_blob != OLD_ADAPTER_BLOB:
+        raise AssertionError(
+            "legacy association oracle blob mismatch for {}: expected {} got {}"
+            .format(revision, OLD_ADAPTER_BLOB, actual_blob))
+    try:
+        source = subprocess.check_output(
+            ["git", "cat-file", "blob", OLD_ADAPTER_BLOB],
+            cwd=root, encoding="utf-8", stderr=subprocess.STDOUT,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise AssertionError(
+            "legacy association oracle unavailable: git cat-file blob {} failed: {}"
+            .format(OLD_ADAPTER_BLOB, error))
+    if _source_digest(source) == _source_digest(ADAPTER.read_text(encoding="utf-8")):
+        raise AssertionError(
+            "legacy oracle unexpectedly matches current adapter: {} == {}"
+            .format(revision, ADAPTER))
+    return source
+
+
+def _legacy_module(name):
+    """Execute the pinned pre-A2 adapter source as a standalone module."""
+    module = types.ModuleType(name)
+    exec(compile(_legacy_adapter_source(), str(ADAPTER), "exec"), module.__dict__)
+    return module
 
 
 def _old_result(instances, heads, tail_id, radius=20):
@@ -139,12 +201,7 @@ class TailDilationRoiTest(unittest.TestCase):
     )
     def test_real_fields_geometry_candidates_and_assignment_exact(self):
         root = ADAPTER.parents[2]
-        source = subprocess.check_output(
-            ["git", "show", "HEAD:tools/analysis_v2/c18b_tail_editor_adapter.py"],
-            cwd=str(root), encoding="utf-8",
-        )
-        old = types.ModuleType("old_c18b_tail_dilation_adapter")
-        exec(compile(source, str(ADAPTER), "exec"), old.__dict__)
+        old = _legacy_module("old_c18b_tail_dilation_adapter")
         fields = (
             ("023", "CASE20260908102941", "20260908_103450_acad3c", 7546),
             ("016", "CASE20260908104300", "20260908_104320_f4c8fc", 7104),
@@ -243,12 +300,7 @@ class TailDilationRoiTest(unittest.TestCase):
     )
     def test_option1_adapter_ab(self):
         root = ADAPTER.parents[2]
-        source = subprocess.check_output(
-            ["git", "show", "HEAD:tools/analysis_v2/c18b_tail_editor_adapter.py"],
-            cwd=str(root), encoding="utf-8",
-        )
-        old = types.ModuleType("old_c18b_tail_dilation_ab")
-        exec(compile(source, str(ADAPTER), "exec"), old.__dict__)
+        old = _legacy_module("old_c18b_tail_dilation_ab")
         order = ("OLD", "NEW", "NEW", "OLD", "OLD", "NEW")
         fields = (
             ("023", "CASE20260908102941", "20260908_103450_acad3c"),
