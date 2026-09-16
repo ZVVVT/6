@@ -113,7 +113,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     temporary = None
     try:
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix=".{}.".format(path.name), suffix=".tmp", dir=str(path.parent)
+            prefix="t.", suffix=".tmp", dir=str(path.parent)
         )
         temporary = Path(temporary_name)
         with os.fdopen(descriptor, "wb") as handle:

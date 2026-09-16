@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from pathlib import PureWindowsPath
 
 import pytest
 
@@ -26,6 +27,79 @@ def complete(store, checkpoint_id="cp-1", attempt_id="attempt-1"):
     attempt.add_bytes("objects", "payload\\对象.bin", b"\x00hello")
     attempt.add_json("metadata", "payload/meta.json", {"b": 2, "a": 1})
     return attempt.commit()
+
+
+def test_atomic_write_uses_short_same_directory_temporary_name(tmp_path, monkeypatch):
+    target = tmp_path / "labels" / "tail_objects_revision_labels.tif"
+    original_mkstemp = checkpoint_module.tempfile.mkstemp
+    captured = {}
+
+    def capture_mkstemp(**kwargs):
+        descriptor, temporary_name = original_mkstemp(**kwargs)
+        captured.update(kwargs)
+        captured["temporary_name"] = temporary_name
+        return descriptor, temporary_name
+
+    monkeypatch.setattr(checkpoint_module.tempfile, "mkstemp", capture_mkstemp)
+    checkpoint_module._atomic_write_bytes(target, b"exact-bytes")
+
+    temporary = Path(captured["temporary_name"])
+    assert target.read_bytes() == b"exact-bytes"
+    assert captured["dir"] == str(target.parent)
+    assert temporary.parent == target.parent
+    assert captured["prefix"] == "t."
+    assert captured["suffix"] == ".tmp"
+    assert target.name not in temporary.name
+    assert temporary.name.startswith("t.")
+    assert temporary.name.endswith(".tmp")
+    assert len(temporary.name) == 14
+    assert not temporary.exists()
+
+
+def test_atomic_write_replaces_existing_target_bytes_exact(tmp_path):
+    target = tmp_path / "payload.bin"
+    target.write_bytes(b"old-value")
+    checkpoint_module._atomic_write_bytes(target, b"\x00new-value\xff")
+    assert target.read_bytes() == b"\x00new-value\xff"
+
+
+def test_atomic_write_failure_cleans_temporary_file_and_creates_parent(tmp_path, monkeypatch):
+    target = tmp_path / "missing-parent" / "payload.bin"
+    original_mkstemp = checkpoint_module.tempfile.mkstemp
+    captured = {}
+
+    def capture_mkstemp(**kwargs):
+        descriptor, temporary_name = original_mkstemp(**kwargs)
+        captured["temporary_name"] = temporary_name
+        return descriptor, temporary_name
+
+    monkeypatch.setattr(checkpoint_module.tempfile, "mkstemp", capture_mkstemp)
+    monkeypatch.setattr(checkpoint_module.os, "fsync", lambda descriptor: (_ for _ in ()).throw(OSError("fsync failed")))
+    with pytest.raises(OSError, match="fsync failed"):
+        checkpoint_module._atomic_write_bytes(target, b"bytes")
+    assert target.parent.is_dir()
+    assert not target.exists()
+    assert not Path(captured["temporary_name"]).exists()
+
+
+def test_client_path_budget_uses_short_temporary_basename_contract():
+    target_name = "tail_objects_revision_labels.tif"
+    target_text = (
+        "F:\\" + ("x" * (251 - 4 - len(target_name))) + "\\" + target_name
+    )
+    target = PureWindowsPath(target_text)
+    old_temporary_chars = len(str(target)) + 14
+    new_temporary_name_chars = len("t.") + 8 + len(".tmp")
+    new_temporary_chars = len(str(target.parent)) + 1 + new_temporary_name_chars
+
+    assert len(str(target)) == 251
+    assert old_temporary_chars == 265
+    assert target.name == target_name
+    assert target_name not in "t." + ("a" * 8) + ".tmp"
+    assert new_temporary_name_chars == 14
+    assert new_temporary_chars == 233
+    assert new_temporary_chars < 260
+    assert old_temporary_chars - new_temporary_chars == 32
 
 
 def test_create_staging_promote_marker_reader_and_unicode_payload(tmp_path):
