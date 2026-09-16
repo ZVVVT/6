@@ -192,16 +192,22 @@ def match_instances(
     head_labels: np.ndarray,
     dilation_radius: int,
     maximum_distance: float,
+    instance_raw_bboxes: Dict[int, Tuple[int, int, int, int]] = None,
+    head_raw_bboxes: Dict[int, Tuple[int, int, int, int]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     kernel_size = 2 * int(dilation_radius) + 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     instance_ids = positive_ids(instances)
-    instance_bboxes = _raw_label_bboxes(instances, instance_ids)
+    if instance_raw_bboxes is None:
+        instance_bboxes = _raw_label_bboxes(instances, instance_ids)
+    else:
+        instance_bboxes = instance_raw_bboxes
     head_ids = positive_ids(head_labels)
     if not head_ids:
         raise ValueError("HeadFinalLabels没有非零头部对象。")
     boundary_kernel = np.ones((3, 3), dtype=np.uint8)
-    head_raw_bboxes = _raw_label_bboxes(head_labels, head_ids)
+    if head_raw_bboxes is None:
+        head_raw_bboxes = _raw_label_bboxes(head_labels, head_ids)
     head_boundaries: Dict[int, np.ndarray] = {}
     head_bboxes: Dict[int, Tuple[int, int, int, int]] = {}
     head_pixel_counts: Dict[int, int] = {}
@@ -482,10 +488,26 @@ def skeletonize(mask: np.ndarray) -> np.ndarray:
     return working > 0
 
 
-def head_records(head_labels: np.ndarray) -> List[Dict[str, Any]]:
+def head_records(
+    head_labels: np.ndarray,
+    head_raw_bboxes: Dict[int, Tuple[int, int, int, int]] = None,
+) -> List[Dict[str, Any]]:
+    """Return one record per head ID.
+
+    ``head_raw_bboxes`` may reuse the shared raw bbox index of the same label
+    image.  The per-head pixel lookup then stays inside the head bbox instead
+    of scanning the full frame; the selected pixel set, its row-major order,
+    and therefore both means stay exactly the full-frame values.
+    """
+    head_ids = positive_ids(head_labels)
+    if head_raw_bboxes is None:
+        head_raw_bboxes = _raw_label_bboxes(head_labels, head_ids)
     records: List[Dict[str, Any]] = []
-    for head_id in positive_ids(head_labels):
-        y, x = np.nonzero(head_labels == head_id)
+    for head_id in head_ids:
+        y0, y1, x0, x1 = head_raw_bboxes[head_id]
+        y, x = np.nonzero(head_labels[y0:y1, x0:x1] == head_id)
+        y = y + y0
+        x = x + x0
         records.append({
             "head_id": int(head_id),
             "center_x": float(x.mean()),
@@ -521,28 +543,60 @@ def ordered_centerline(
     instance_mask: np.ndarray,
     head_mask: np.ndarray,
     timings: Dict[str, float] = None,
+    *,
+    instance_bbox: Tuple[int, int, int, int] = None,
+    head_bbox: Tuple[int, int, int, int] = None,
 ) -> List[List[float]]:
-    ordered_started = time.perf_counter()
-    instance_y, instance_x = np.nonzero(instance_mask)
-    if not len(instance_y):
-        if timings is not None:
-            timings["ordered_centerline_seconds"] += (
-                time.perf_counter() - ordered_started
-            )
-        return []
+    """Order the skeleton path of one instance mask from the nearest head.
 
+    ``instance_bbox`` and ``head_bbox`` are optional half-open raw label bounds
+    ``(y0, y1, x0, x1)`` of the very same masks.  When they are supplied, the
+    instance extent and the head pixels are resolved inside those bounds, which
+    is the exact full-frame result because a raw bbox covers every pixel of its
+    object.  Without them every lookup runs on the full frame as before, so the
+    legacy two-argument call keeps its original semantics byte for byte.
+    """
+    ordered_started = time.perf_counter()
     height, width = instance_mask.shape
+    if instance_bbox is None:
+        instance_y, instance_x = np.nonzero(instance_mask)
+        if not len(instance_y):
+            if timings is not None:
+                timings["ordered_centerline_seconds"] += (
+                    time.perf_counter() - ordered_started
+                )
+            return []
+        y_min = int(instance_y.min())
+        y_max = int(instance_y.max())
+        x_min = int(instance_x.min())
+        x_max = int(instance_x.max())
+    else:
+        bbox_y0, bbox_y1, bbox_x0, bbox_x1 = (
+            int(value) for value in instance_bbox
+        )
+        y_min, y_max = bbox_y0, bbox_y1 - 1
+        x_min, x_max = bbox_x0, bbox_x1 - 1
     margin = CENTERLINE_ROI_MARGIN_PX
-    y_offset = max(0, int(instance_y.min()) - margin)
-    y_limit = min(height, int(instance_y.max()) + margin + 1)
-    x_offset = max(0, int(instance_x.min()) - margin)
-    x_limit = min(width, int(instance_x.max()) + margin + 1)
+    y_offset = max(0, y_min - margin)
+    y_limit = min(height, y_max + margin + 1)
+    x_offset = max(0, x_min - margin)
+    x_limit = min(width, x_max + margin + 1)
     instance_roi = instance_mask[y_offset:y_limit, x_offset:x_limit]
 
     skeleton_started = time.perf_counter()
     skeleton = skeletonize(instance_roi)
     skeleton_elapsed = time.perf_counter() - skeleton_started
-    head_points = np.argwhere(head_mask).astype(np.int64, copy=False)
+    if head_bbox is None:
+        head_points = np.argwhere(head_mask).astype(np.int64, copy=False)
+    else:
+        head_y0, head_y1, head_x0, head_x1 = (
+            int(value) for value in head_bbox
+        )
+        head_points = np.argwhere(
+            head_mask[head_y0:head_y1, head_x0:head_x1]
+        ).astype(np.int64, copy=False)
+        head_points[:, 0] += head_y0
+        head_points[:, 1] += head_x0
     if len(head_points):
         head_points[:, 0] -= y_offset
         head_points[:, 1] -= x_offset
@@ -740,7 +794,12 @@ def run_adapter(
     instance_ids = positive_ids(instances)
     if not instance_ids:
         raise ValueError("C18B instances没有非零ID。")
-    entries = head_records(head_labels)
+    head_ids = positive_ids(head_labels)
+    if not head_ids:
+        raise ValueError("HeadFinalLabels没有非零Head ID。")
+    instance_raw_bboxes = _raw_label_bboxes(instances, instance_ids)
+    head_raw_bboxes = _raw_label_bboxes(head_labels, head_ids)
+    entries = head_records(head_labels, head_raw_bboxes)
     if not entries:
         raise ValueError("HeadFinalLabels没有非零Head ID。")
     matched, unmatched = match_instances(
@@ -748,6 +807,8 @@ def run_adapter(
         head_labels,
         dilation_radius=max(0, int(dilation_radius)),
         maximum_distance=max(0.1, float(maximum_distance)),
+        instance_raw_bboxes=instance_raw_bboxes,
+        head_raw_bboxes=head_raw_bboxes,
     )
 
     entry_by_head = {int(item["head_id"]): item for item in entries}
@@ -761,6 +822,8 @@ def run_adapter(
             instances == instance_id,
             head_labels == head_id,
             timings=timings,
+            instance_bbox=instance_raw_bboxes[instance_id],
+            head_bbox=head_raw_bboxes[head_id],
         )
         if len(points_xy) < 2:
             skipped = dict(match)
